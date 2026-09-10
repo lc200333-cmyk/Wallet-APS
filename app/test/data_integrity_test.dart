@@ -341,6 +341,70 @@ void main() {
     expect(fields.single.label, startsWith('Сохранённое поле'));
   });
 
+  test('empty orphan values do not create saved field placeholders', () {
+    const template = CardTemplate(
+      id: 'template',
+      name: 'Шаблон',
+      iconId: 'key',
+      colorId: 'neutral',
+      fields: [],
+    );
+    final item = SecretItem(
+      id: 'card',
+      templateId: template.id,
+      title: 'Карточка',
+      category: '',
+      colorId: 'neutral',
+      values: const {'DEADBEEF12345678': '   '},
+      modifiedAt: DateTime(2026),
+    );
+
+    expect(fieldsForItem(template, item), isEmpty);
+  });
+
+  testWidgets('card editor omits fields left empty when saving',
+      (tester) async {
+    const template = CardTemplate(
+      id: 'template',
+      name: 'Шаблон',
+      iconId: 'key',
+      colorId: 'neutral',
+      fields: [
+        FieldDefinition(id: 'filled', label: 'Заполнено', type: 'text'),
+        FieldDefinition(id: 'empty', label: 'Пусто', type: 'text'),
+      ],
+    );
+    SecretItem? saved;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => TextButton(
+            onPressed: () async {
+              saved = await showDialog<SecretItem>(
+                context: context,
+                builder: (_) => const ItemEditorDialog(
+                  templates: [template],
+                  categories: [],
+                ),
+              );
+            },
+            child: const Text('Открыть'),
+          ),
+        ),
+      ),
+    );
+    await tester.tap(find.text('Открыть'));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('cardField-filled')),
+      'Значение',
+    );
+    await tester.tap(find.byKey(const Key('cardSaveButton')));
+    await tester.pumpAndSettle();
+
+    expect(saved?.values, const {'filled': 'Значение'});
+  });
+
   testWidgets('selected category follows its ID after rename', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 1010));
     addTearDown(() => tester.binding.setSurfaceSize(null));

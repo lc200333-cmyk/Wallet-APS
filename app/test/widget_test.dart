@@ -216,6 +216,12 @@ void main() {
     expect(find.byKey(const Key('cardUndoButton')), findsOneWidget);
     expect(find.byKey(const Key('cardCloseButton')), findsOneWidget);
     expect(find.byKey(const Key('cardSaveButton')), findsOneWidget);
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('cardTitleField')))
+          .contextMenuBuilder,
+      isNotNull,
+    );
     final original = find.byKey(const Key('spbCardIconPicker'));
     final pictogram = find.byKey(const Key('cardPictogramPicker'));
     final thirdParty = find.byKey(const Key('cardThirdPartyPicker'));
@@ -249,6 +255,12 @@ void main() {
     expect(find.text('Папка / каталог'), findsOneWidget);
     final firstFieldId = builtInTemplates().first.fields.first.id;
     final secondFieldId = builtInTemplates().first.fields[1].id;
+    expect(
+      tester
+          .widget<TextField>(find.byKey(ValueKey('cardField-$firstFieldId')))
+          .contextMenuBuilder,
+      isNotNull,
+    );
     expect(
       find.byKey(ValueKey('cardFieldUp-$firstFieldId')),
       findsOneWidget,
@@ -435,6 +447,17 @@ void main() {
     expect(
       find.byKey(ValueKey('cardPreviewField-${template.fields[0].id}')),
       findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<EditableText>(find.descendant(
+            of: find.byKey(
+              ValueKey('cardPreviewField-${template.fields[0].id}'),
+            ),
+            matching: find.byType(EditableText),
+          ))
+          .contextMenuBuilder,
+      isNotNull,
     );
     expect(
       find.byKey(ValueKey('cardPreviewField-${template.fields[1].id}')),

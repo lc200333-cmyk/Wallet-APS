@@ -159,8 +159,6 @@ Future<void> copyCardFieldValue(String value) async {
     );
 }
 
-bool get usesDesktopCardTextControls => Platform.isWindows || Platform.isLinux;
-
 Widget desktopCardTextContextMenu(
   BuildContext context,
   EditableTextState editableTextState,
@@ -2446,7 +2444,10 @@ List<FieldDefinition> fieldsForItem(
   final byId = <String, FieldDefinition>{
     for (final field in template.fields) field.id: field,
   };
-  for (final id in item.values.keys) {
+  final populatedValueIds = item.values.entries
+      .where((entry) => entry.value.trim().isNotEmpty)
+      .map((entry) => entry.key);
+  for (final id in populatedValueIds) {
     byId.putIfAbsent(
       id,
       () => FieldDefinition(
@@ -2458,7 +2459,7 @@ List<FieldDefinition> fieldsForItem(
   }
   final visibleIds = projectVisibleFieldIds(
     definedIds: template.fields.map((field) => field.id),
-    valueIds: item.values.keys,
+    valueIds: populatedValueIds,
     preferredOrder: item.fieldOrder,
     hiddenIds: includeHidden ? const {} : item.hiddenFieldIds,
   );
@@ -14174,9 +14175,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                       currentItem.values[field.id] ?? '',
                                   readOnly: true,
                                   contextMenuBuilder:
-                                      usesDesktopCardTextControls
-                                          ? desktopCardTextContextMenu
-                                          : null,
+                                      desktopCardTextContextMenu,
                                   obscureText: fieldDefinitionIsSecret(field) &&
                                       !revealedFields.contains(field.id),
                                   minLines:
@@ -14503,7 +14502,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   List<FieldDefinition> get allCardFields {
     final result = <FieldDefinition>[...template.fields];
     final known = result.map((field) => field.id).toSet();
-    for (final id in widget.initial?.values.keys ?? const <String>[]) {
+    for (final entry in widget.initial?.values.entries ??
+        const <MapEntry<String, String>>[]) {
+      final id = entry.key;
+      if (entry.value.trim().isEmpty) continue;
       if (known.add(id)) {
         result.add(
           FieldDefinition(
@@ -14928,9 +14930,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
               key: const Key('cardTitleField'),
               controller: title,
               onTap: rememberCurrentAction,
-              contextMenuBuilder: usesDesktopCardTextControls
-                  ? desktopCardTextContextMenu
-                  : null,
+              contextMenuBuilder: desktopCardTextContextMenu,
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
                 labelText: 'Название карточки',
@@ -15061,8 +15061,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       key: ValueKey('cardField-${field.id}'),
       controller: controller,
       onTap: rememberCurrentAction,
-      contextMenuBuilder:
-          usesDesktopCardTextControls ? desktopCardTextContextMenu : null,
+      contextMenuBuilder: desktopCardTextContextMenu,
       obscureText: fieldDefinitionIsSecret(field) && !visible,
       keyboardType:
           multiline ? TextInputType.multiline : keyboardTypeForField(field),
@@ -15379,9 +15378,13 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         colorId: colorId,
         values: {
           for (final field in allCardFields)
-            field.id: field.type == 'url'
-                ? normalizeUrlInput(values[field.id]?.text ?? '')
-                : (values[field.id]?.text.trim() ?? ''),
+            if ((field.type == 'url'
+                    ? normalizeUrlInput(values[field.id]?.text ?? '')
+                    : (values[field.id]?.text.trim() ?? ''))
+                .isNotEmpty)
+              field.id: field.type == 'url'
+                  ? normalizeUrlInput(values[field.id]?.text ?? '')
+                  : (values[field.id]?.text.trim() ?? ''),
         },
         attachments: attachments,
         modifiedAt: DateTime.now().toUtc(),
@@ -15451,9 +15454,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
             child: TextField(
               controller: category,
               onTap: rememberCurrentAction,
-              contextMenuBuilder: usesDesktopCardTextControls
-                  ? desktopCardTextContextMenu
-                  : null,
+              contextMenuBuilder: desktopCardTextContextMenu,
               decoration: const InputDecoration(
                 labelText: 'Новая папка / каталог',
                 hintText: 'Например: Финансы / Банк',
