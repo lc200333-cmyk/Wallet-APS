@@ -8,6 +8,6 @@ resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "0.4.2"
+version = "0.4.3"
 license = "UNLICENSED"
 authors = ["Wallet APS"]
