@@ -5,8 +5,32 @@ import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+Offset textOffsetPosition(
+  WidgetTester tester,
+  Finder editableText,
+  int offset,
+) {
+  final root = tester.renderObject<RenderObject>(editableText);
+  RenderEditable? editable;
+  void findEditable(RenderObject child) {
+    if (child is RenderEditable) {
+      editable = child;
+      return;
+    }
+    child.visitChildren(findEditable);
+  }
+
+  root.visitChildren(findEditable);
+  final renderEditable = editable!;
+  final endpoint = renderEditable
+      .getEndpointsForSelection(TextSelection.collapsed(offset: offset))
+      .single;
+  return renderEditable.localToGlobal(endpoint.point) - const Offset(0, 2);
+}
 
 void main() {
   testWidgets('replacement third-party icon bundle is available',
@@ -534,11 +558,82 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
     expect(find.text('Cut'), findsOneWidget);
     expect(find.text('Copy'), findsOneWidget);
     expect(find.text('Paste'), findsOneWidget);
     expect(find.text('Share'), findsOneWidget);
   });
+
+  testWidgets('android long press opens text menu in editor and preview',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    await tester.binding.setSurfaceSize(const Size(480, 900));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
+    const field = FieldDefinition(
+      id: 'value',
+      label: 'Поле',
+      type: 'text',
+    );
+    const template = CardTemplate(
+      id: 'android-context-template',
+      name: 'Android menu',
+      iconId: 'key',
+      colorId: 'blue',
+      fields: [field],
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: ItemEditorDialog(templates: [template], categories: []),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final editorField = find.byKey(const ValueKey('cardField-value'));
+    await tester.enterText(editorField, 'Alpha Beta');
+    await tester.pumpAndSettle();
+    final editorText = find.descendant(
+      of: editorField,
+      matching: find.byType(EditableText),
+    );
+    await tester.longPressAt(textOffsetPosition(tester, editorText, 2));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(AdaptiveTextSelectionToolbar), findsOneWidget);
+    expect(find.text('Cut'), findsOneWidget);
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.text('Paste'), findsOneWidget);
+
+    final item = SecretItem(
+      id: 'android-context-card',
+      templateId: template.id,
+      title: 'Карточка',
+      category: '',
+      colorId: template.colorId,
+      values: const {'value': 'Alpha Beta'},
+      modifiedAt: DateTime(2026),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: CardPreviewDialog(item: item, template: template)),
+    );
+    await tester.pumpAndSettle();
+    final previewField = find.byKey(const ValueKey('cardPreviewField-value'));
+    final previewText = find.descendant(
+      of: previewField,
+      matching: find.byType(EditableText),
+    );
+    await tester.longPressAt(textOffsetPosition(tester, previewText, 2));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Copy'), findsOneWidget);
+    expect(find.byKey(const Key('copyAllCardFieldsAction')), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
+  });
+
   testWidgets('preview selected field keeps its desktop text menu',
       (tester) async {
     const field = FieldDefinition(

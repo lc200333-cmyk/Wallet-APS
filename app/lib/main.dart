@@ -172,41 +172,47 @@ Widget desktopCardTextContextMenu(
     for (final item in editableTextState.contextMenuButtonItems)
       item.type: item,
   };
-  final items = selectedText.isEmpty
-      ? editableTextState.contextMenuButtonItems
-      : <ContextMenuButtonItem>[
-          ContextMenuButtonItem(
-            type: ContextMenuButtonType.cut,
-            label: 'Cut',
-            onPressed: defaultItems[ContextMenuButtonType.cut]?.onPressed,
-          ),
-          ContextMenuButtonItem(
-            type: ContextMenuButtonType.copy,
-            label: 'Copy',
-            onPressed: () async {
+  final items = <ContextMenuButtonItem>[
+    ContextMenuButtonItem(
+      type: ContextMenuButtonType.cut,
+      label: 'Cut',
+      onPressed: defaultItems[ContextMenuButtonType.cut]?.onPressed,
+    ),
+    ContextMenuButtonItem(
+      type: ContextMenuButtonType.copy,
+      label: 'Copy',
+      onPressed: selectedText.isEmpty
+          ? defaultItems[ContextMenuButtonType.copy]?.onPressed
+          : () async {
               editableTextState.hideToolbar();
               await copyCardFieldValue(selectedText);
             },
-          ),
-          ContextMenuButtonItem(
-            type: ContextMenuButtonType.paste,
-            label: 'Paste',
-            onPressed: defaultItems[ContextMenuButtonType.paste]?.onPressed,
-          ),
-          ContextMenuButtonItem(
-            type: ContextMenuButtonType.share,
-            label: 'Share',
-            onPressed: () async {
+    ),
+    ContextMenuButtonItem(
+      type: ContextMenuButtonType.paste,
+      label: 'Paste',
+      onPressed: defaultItems[ContextMenuButtonType.paste]?.onPressed,
+    ),
+    ContextMenuButtonItem(
+      type: ContextMenuButtonType.share,
+      label: 'Share',
+      onPressed: selectedText.isEmpty
+          ? null
+          : () async {
               editableTextState.hideToolbar();
               await copyCardFieldValue(selectedText);
             },
-          ),
-        ];
+    ),
+  ];
   return AdaptiveTextSelectionToolbar.buttonItems(
     anchors: editableTextState.contextMenuAnchors,
     buttonItems: items,
   );
 }
+
+bool get usesTouchTextSelection =>
+    defaultTargetPlatform == TargetPlatform.android ||
+    defaultTargetPlatform == TargetPlatform.iOS;
 
 class WalletApsApp extends StatelessWidget {
   const WalletApsApp({this.initialVaultPath, super.key});
@@ -2430,10 +2436,16 @@ Map<String, String> spbCardValuesForUi(
 ) {
   final values = Map<String, String>.from(card.fieldValues);
   values.remove(spbDescriptionFieldId);
+  values.removeWhere((_, value) => !cardFieldValueIsPopulated(value));
   if (card.description.trim().isNotEmpty) {
     values[spbDescriptionFieldId] = card.description;
   }
   return values;
+}
+
+bool cardFieldValueIsPopulated(String value) {
+  final normalized = value.trim().toLowerCase();
+  return normalized.isNotEmpty && normalized != 'http://www';
 }
 
 List<FieldDefinition> fieldsForItem(
@@ -2445,7 +2457,7 @@ List<FieldDefinition> fieldsForItem(
     for (final field in template.fields) field.id: field,
   };
   final populatedValueIds = item.values.entries
-      .where((entry) => entry.value.trim().isNotEmpty)
+      .where((entry) => cardFieldValueIsPopulated(entry.value))
       .map((entry) => entry.key);
   for (final id in populatedValueIds) {
     byId.putIfAbsent(
@@ -14060,7 +14072,9 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
     final visibleFields = fieldsForItem(
       widget.template,
       currentItem,
-    ).where((field) => (currentItem.values[field.id] ?? '').trim().isNotEmpty);
+    ).where(
+      (field) => cardFieldValueIsPopulated(currentItem.values[field.id] ?? ''),
+    );
     final orderedVisibleFields = [
       ...visibleFields.where((field) => field.type != 'multiline_note'),
       ...visibleFields.where((field) => field.type == 'multiline_note'),
@@ -14084,8 +14098,13 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
             onPointerDown: handlePreviewPointerDown,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onLongPressStart: (details) =>
-                  showCopyAllMenu(details.globalPosition),
+              // A parent long-press recognizer wins the gesture arena over
+              // EditableText on Android, so the selection toolbar never gets
+              // a chance to open. Desktop keeps this gesture for Copy all;
+              // touch platforms reserve long press for their text fields.
+              onLongPressStart: usesTouchTextSelection
+                  ? null
+                  : (details) => showCopyAllMenu(details.globalPosition),
               child: Column(
                 children: [
                   Container(
@@ -14138,30 +14157,39 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Center(
-                              child: Container(
-                                key: const Key('cardPreviewIcon'),
-                                width: 112,
-                                height: 112,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  border: Border.all(
-                                    color: const Color(0xff82929d),
-                                    width: 2,
-                                  ),
-                                  borderRadius: BorderRadius.circular(5),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Color(0x26000000),
-                                      offset: Offset(1, 2),
-                                      blurRadius: 5,
+                              child: GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onLongPressStart: usesTouchTextSelection
+                                    ? (details) => showCopyAllMenu(
+                                          details.globalPosition,
+                                        )
+                                    : null,
+                                child: Container(
+                                  key: const Key('cardPreviewIcon'),
+                                  width: 112,
+                                  height: 112,
+                                  alignment: Alignment.center,
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    border: Border.all(
+                                      color: const Color(0xff82929d),
+                                      width: 2,
                                     ),
-                                  ],
-                                ),
-                                child: templateIconWidget(
-                                  itemIconId(currentItem, widget.template),
-                                  size: 88,
-                                  color: pictogramColorForBackground(color.bg),
+                                    borderRadius: BorderRadius.circular(5),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Color(0x26000000),
+                                        offset: Offset(1, 2),
+                                        blurRadius: 5,
+                                      ),
+                                    ],
+                                  ),
+                                  child: templateIconWidget(
+                                    itemIconId(currentItem, widget.template),
+                                    size: 88,
+                                    color:
+                                        pictogramColorForBackground(color.bg),
+                                  ),
                                 ),
                               ),
                             ),
@@ -14505,7 +14533,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     for (final entry in widget.initial?.values.entries ??
         const <MapEntry<String, String>>[]) {
       final id = entry.key;
-      if (entry.value.trim().isEmpty) continue;
+      if (!cardFieldValueIsPopulated(entry.value)) continue;
       if (known.add(id)) {
         result.add(
           FieldDefinition(
@@ -14539,8 +14567,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     values = {
       for (final field in allCardFields)
         field.id: TextEditingController(
-          text: widget.initial?.values[field.id] ??
-              (field.type == 'url' ? 'http://www' : ''),
+          text: widget.initial?.values[field.id] ?? '',
         ),
     };
     hiddenFieldIds = {...?widget.initial?.hiddenFieldIds};
@@ -15378,10 +15405,11 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         colorId: colorId,
         values: {
           for (final field in allCardFields)
-            if ((field.type == 'url'
-                    ? normalizeUrlInput(values[field.id]?.text ?? '')
-                    : (values[field.id]?.text.trim() ?? ''))
-                .isNotEmpty)
+            if (cardFieldValueIsPopulated(
+              field.type == 'url'
+                  ? normalizeUrlInput(values[field.id]?.text ?? '')
+                  : (values[field.id]?.text.trim() ?? ''),
+            ))
               field.id: field.type == 'url'
                   ? normalizeUrlInput(values[field.id]?.text ?? '')
                   : (values[field.id]?.text.trim() ?? ''),

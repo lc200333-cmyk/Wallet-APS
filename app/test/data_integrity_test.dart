@@ -355,7 +355,10 @@ void main() {
       title: 'Карточка',
       category: '',
       colorId: 'neutral',
-      values: const {'DEADBEEF12345678': '   '},
+      values: const {
+        'DEADBEEF12345678': '   ',
+        'LEGACYURL1234567': 'http://www',
+      },
       modifiedAt: DateTime(2026),
     );
 
@@ -372,6 +375,7 @@ void main() {
       fields: [
         FieldDefinition(id: 'filled', label: 'Заполнено', type: 'text'),
         FieldDefinition(id: 'empty', label: 'Пусто', type: 'text'),
+        FieldDefinition(id: 'url', label: 'Сайт', type: 'url'),
       ],
     );
     SecretItem? saved;
@@ -395,6 +399,13 @@ void main() {
     );
     await tester.tap(find.text('Открыть'));
     await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const ValueKey('cardField-url')))
+          .controller
+          ?.text,
+      isEmpty,
+    );
     await tester.enterText(
       find.byKey(const ValueKey('cardField-filled')),
       'Значение',
@@ -403,6 +414,49 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(saved?.values, const {'filled': 'Значение'});
+  });
+
+  testWidgets('legacy empty orphan fields stay hidden while editing',
+      (tester) async {
+    const template = CardTemplate(
+      id: 'template',
+      name: 'Шаблон',
+      iconId: 'key',
+      colorId: 'neutral',
+      fields: [
+        FieldDefinition(id: 'known', label: 'Обычное поле', type: 'text'),
+      ],
+    );
+    final item = SecretItem(
+      id: 'card',
+      templateId: template.id,
+      title: 'Карточка',
+      category: '',
+      colorId: 'neutral',
+      values: const {
+        'EMPTY1234567890': '',
+        'LEGACYURL1234567': 'http://www',
+      },
+      modifiedAt: DateTime(2026),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ItemEditorDialog(
+          templates: const [template],
+          categories: const [],
+          initial: item,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('cardField-known')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('cardField-EMPTY1234567890')), findsNothing);
+    expect(
+        find.byKey(const ValueKey('cardField-LEGACYURL1234567')), findsNothing);
+    expect(find.textContaining('Сохранённое поле'), findsNothing);
   });
 
   testWidgets('selected category follows its ID after rename', (tester) async {
