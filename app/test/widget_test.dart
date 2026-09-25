@@ -1137,6 +1137,310 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
+  testWidgets('mobile center pane shows a persistent folder grid scrollbar',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    await tester.binding.setSurfaceSize(const Size(360, 640));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final CardTemplate template = state.templates.first as CardTemplate;
+    state.setState(() {
+      state.mobilePane = 1;
+      state.items = List<SecretItem>.generate(
+        40,
+        (index) => SecretItem(
+          id: 'scroll-card-$index',
+          templateId: template.id,
+          title: 'Scroll card $index',
+          category: '',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+      );
+    });
+    await tester.pumpAndSettle();
+
+    final scrollbarFinder = find.byKey(const Key('spbFolderGridScrollbar'));
+    expect(scrollbarFinder, findsOneWidget);
+    final scrollbar = tester.widget<Scrollbar>(scrollbarFinder);
+    expect(scrollbar.thumbVisibility, isTrue);
+    expect(scrollbar.interactive, isTrue);
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('spbCentralCard-scroll-card-0')),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Draggable<SecretItem>,
+        ),
+      ),
+      findsNothing,
+    );
+    expect(state.spbFolderGridScrollController.hasClients, isTrue);
+    expect(
+      state.spbFolderGridScrollController.position.maxScrollExtent,
+      greaterThan(0),
+    );
+
+    await tester.drag(
+      find.descendant(
+        of: find.byKey(const Key('spbCentralWorkspace')),
+        matching: find.byType(GridView),
+      ),
+      const Offset(0, -250),
+    );
+    await tester.pumpAndSettle();
+    expect(state.spbFolderGridScrollController.offset, greaterThan(0));
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
+  });
+
+  testWidgets('desktop center pane keeps card dragging', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final CardTemplate template = state.templates.first as CardTemplate;
+    state.setState(() {
+      state.items = <SecretItem>[
+        SecretItem(
+          id: 'desktop-draggable-card',
+          templateId: template.id,
+          title: 'Desktop draggable card',
+          category: '',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+      ];
+    });
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(
+          const ValueKey('spbCentralCard-desktop-draggable-card'),
+        ),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Draggable<SecretItem>,
+        ),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('central card reacts only on its icon and label', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final CardTemplate template = state.templates.first as CardTemplate;
+    state.setState(() {
+      state.selectedItemId = 'card-hit-area';
+      state.items = <SecretItem>[
+        SecretItem(
+          id: 'card-hit-area',
+          templateId: template.id,
+          title: 'Card hit area',
+          category: '',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+      ];
+    });
+    await tester.pumpAndSettle();
+
+    final card = find.byKey(const ValueKey('spbCentralCard-card-hit-area'));
+    final activeRegions = find.descendant(
+      of: card,
+      matching: find.byWidgetPredicate(
+        (widget) => widget is GestureDetector && widget.onTap != null,
+      ),
+    );
+    expect(activeRegions, findsNWidgets(2));
+    expect(tester.getSize(activeRegions.at(0)), const Size(68, 67));
+    expect(tester.getSize(activeRegions.at(1)).width, 73.3125);
+    final selectedBackgrounds = find.descendant(
+      of: card,
+      matching: find.byWidgetPredicate(
+        (widget) =>
+            widget is DecoratedBox &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration as BoxDecoration).gradient != null,
+      ),
+    );
+    expect(selectedBackgrounds, findsNWidgets(2));
+    expect(
+      tester.getSize(selectedBackgrounds.at(0)),
+      const Size(50.25, 50.25),
+    );
+    expect(
+      tester.getSize(selectedBackgrounds.at(1)).width,
+      lessThanOrEqualTo(73.3125),
+    );
+
+    final cardRect = tester.getRect(card);
+    await tester.tapAt(Offset(cardRect.left + 1, cardRect.top + 1));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cardPreviewSurface')), findsNothing);
+
+    await tester.tap(activeRegions.at(0));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cardPreviewSurface')), findsOneWidget);
+  });
+
+  testWidgets('desktop folder tree uses thirty percent tighter rows',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final CardTemplate template = state.templates.first as CardTemplate;
+    state.setState(() {
+      state.items = <SecretItem>[
+        SecretItem(
+          id: 'folder-spacing-card-a',
+          templateId: template.id,
+          title: 'Card A',
+          category: 'Folder spacing A',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+        SecretItem(
+          id: 'folder-spacing-card-b',
+          templateId: template.id,
+          title: 'Card B',
+          category: 'Folder spacing B',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+        SecretItem(
+          id: 'nested-folder-spacing-card-a',
+          templateId: template.id,
+          title: 'Nested card A',
+          category: 'Expanded folder / Nested folder A',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+        SecretItem(
+          id: 'nested-folder-spacing-card-b',
+          templateId: template.id,
+          title: 'Nested card B',
+          category: 'Expanded folder / Nested folder B',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+      ];
+      state.expandedCategoryPaths.add('Expanded folder');
+    });
+    await tester.pumpAndSettle();
+
+    final firstFolderFinder =
+        find.byKey(const ValueKey('spbTreeFolder-Folder spacing A'));
+    final secondFolderFinder =
+        find.byKey(const ValueKey('spbTreeFolder-Folder spacing B'));
+    final firstFolderTile = tester.widget<ExpansionTile>(
+      find.descendant(
+        of: firstFolderFinder,
+        matching: find.byType(ExpansionTile),
+      ),
+    );
+    expect(firstFolderTile.minTileHeight, 30.2);
+    expect(
+      tester.getCenter(secondFolderFinder).dy -
+          tester.getCenter(firstFolderFinder).dy,
+      closeTo(32.2, 0.5),
+    );
+    final firstNestedFolder = find.byKey(
+        const ValueKey('spbTreeFolder-Expanded folder / Nested folder A'));
+    final secondNestedFolder = find.byKey(
+        const ValueKey('spbTreeFolder-Expanded folder / Nested folder B'));
+    expect(firstNestedFolder, findsOneWidget);
+    expect(secondNestedFolder, findsOneWidget);
+    expect(
+      tester.getCenter(secondNestedFolder).dy -
+          tester.getCenter(firstNestedFolder).dy,
+      greaterThanOrEqualTo(40),
+    );
+  });
+
+  testWidgets('narrow Windows center pane disables card dragging',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    await tester.binding.setSurfaceSize(const Size(600, 900));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final CardTemplate template = state.templates.first as CardTemplate;
+    state.setState(() {
+      state.mobilePane = 1;
+      state.items = <SecretItem>[
+        SecretItem(
+          id: 'narrow-windows-card',
+          templateId: template.id,
+          title: 'Narrow Windows card',
+          category: '',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+      ];
+    });
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('spbNavigatorSplitter')), findsNothing);
+    expect(find.byKey(const Key('spbFolderGridScrollbar')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(
+          const ValueKey('spbCentralCard-narrow-windows-card'),
+        ),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Draggable<SecretItem>,
+        ),
+      ),
+      findsNothing,
+    );
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
+  });
+
   testWidgets('mobile search opens the center pane and shows matching cards',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -1770,6 +2074,45 @@ void main() {
     expect(find.byKey(const Key('passwordInput')), findsOneWidget);
     expect(find.byType(VaultShell), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('activity inside an overlay restarts the inactivity timer',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(720, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const AppUserActivityRegion(
+        child: MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final initialTimer = state.inactivityTimer;
+    await tester.pump(const Duration(minutes: 2, seconds: 44));
+
+    unawaited(
+      showDialog<void>(
+        context: tester.element(find.byType(VaultShell)),
+        builder: (context) => AlertDialog(
+          content: TextButton(
+            key: const Key('overlayActivityButton'),
+            onPressed: () {},
+            child: const Text('Работа в диалоге'),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('overlayActivityButton')));
+    await tester.pump();
+
+    expect(state.inactivityTimer, isNot(same(initialTimer)));
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.byKey(const Key('inactivityContinueButton')), findsNothing);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
   });
 
   testWidgets('password window has no warning before five minute exit',
