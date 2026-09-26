@@ -13333,136 +13333,65 @@ class _IconPickerScrollbarState extends State<_IconPickerScrollbar> {
   }
 }
 
-bool useFullScreenIconPicker(BuildContext context) {
-  return Platform.isAndroid || MediaQuery.sizeOf(context).width < 700;
-}
-
-Widget iconPickerDialogTitle(BuildContext context, String title) {
-  return FittedBox(
-    fit: BoxFit.scaleDown,
-    alignment: Alignment.centerLeft,
-    child: Text(
-      title,
-      maxLines: 1,
-      softWrap: false,
-      style: Theme.of(context).dialogTheme.titleTextStyle ??
-          Theme.of(context).textTheme.headlineSmall,
-    ),
-  );
-}
-
-Widget adaptiveIconPickerDialog(
-  BuildContext context, {
-  required Key key,
-  required String title,
-  required Widget content,
-  required bool fullScreen,
-}) {
-  final titleWidget = iconPickerDialogTitle(context, title);
-  final cancelButton = TextButton(
-    onPressed: () => Navigator.pop(context),
-    child: const Text('Отмена'),
-  );
-  if (!fullScreen) {
-    return AlertDialog(
-      key: key,
-      title: titleWidget,
-      content: content,
-      actions: [cancelButton],
-    );
-  }
-  return Dialog.fullscreen(
-    key: key,
-    child: SafeArea(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 12),
-            child: titleWidget,
-          ),
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: content,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-            child: Align(
-              alignment: Alignment.centerRight,
-              child: cancelButton,
-            ),
-          ),
-        ],
-      ),
-    ),
-  );
-}
-
 Future<String?> showIconPickerDialog(
   BuildContext context,
   String selectedIconId,
 ) {
-  final fullScreen = useFullScreenIconPicker(context);
   return showDialog<String>(
     context: context,
-    builder: (context) {
-      return adaptiveIconPickerDialog(
-        context,
-        key: const Key('pictogramPickerDialog'),
-        title: 'Все пиктограммы',
-        fullScreen: fullScreen,
-        content: SizedBox(
-          width: fullScreen
-              ? double.infinity
-              : min(MediaQuery.of(context).size.width - 48, 560),
-          height: fullScreen
-              ? double.infinity
-              : min(MediaQuery.of(context).size.height - 180, 420),
-          child: _IconPickerScrollbar(
-            scrollbarKey: const Key('pictogramPickerScrollbar'),
-            builder: (controller) => GridView.builder(
-              controller: controller,
-              padding: const EdgeInsets.only(right: 12),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 52,
-                mainAxisSpacing: 6,
-                crossAxisSpacing: 6,
-              ),
-              itemCount: templateIcons.length,
-              itemBuilder: (context, index) {
-                final icon = templateIcons[index];
-                final selected = icon.id == selectedIconId;
-                return Tooltip(
-                  message: icon.label,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(8),
-                    onTap: () => Navigator.pop(context, icon.id),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
+    builder: (context) => AlertDialog(
+      title: const Text('Все пиктограммы'),
+      content: SizedBox(
+        width: min(MediaQuery.of(context).size.width - 48, 560),
+        height: min(MediaQuery.of(context).size.height - 180, 420),
+        child: _IconPickerScrollbar(
+          scrollbarKey: const Key('pictogramPickerScrollbar'),
+          builder: (controller) => GridView.builder(
+            controller: controller,
+            padding: const EdgeInsets.only(right: 12),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 52,
+              mainAxisSpacing: 6,
+              crossAxisSpacing: 6,
+            ),
+            itemCount: templateIcons.length,
+            itemBuilder: (context, index) {
+              final icon = templateIcons[index];
+              final selected = icon.id == selectedIconId;
+              return Tooltip(
+                message: icon.label,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: () => Navigator.pop(context, icon.id),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Theme.of(context).colorScheme.surface,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
                         color: selected
-                            ? Theme.of(context).colorScheme.primaryContainer
-                            : Theme.of(context).colorScheme.surface,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(
-                          color: selected
-                              ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context).dividerColor,
-                        ),
-                      ),
-                      child: Center(
-                        child: Icon(templateIconGlyph(icon.id), size: 24),
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).dividerColor,
                       ),
                     ),
+                    child: Center(
+                      child: Icon(templateIconGlyph(icon.id), size: 24),
+                    ),
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
         ),
-      );
-    },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+      ],
+    ),
   );
 }
 
@@ -13472,156 +13401,171 @@ Future<String?> showSpbOriginalIconPickerDialog(
 ) async {
   final iconAssets = await loadSpb64PngIconAssets();
   if (!context.mounted) return null;
-  final fullScreen = useFullScreenIconPicker(context);
   return showDialog<String>(
     context: context,
-    builder: (context) {
-      return adaptiveIconPickerDialog(
-        context,
-        key: const Key('spbIconPickerDialog'),
-        title: 'Иконки SPB Wallet',
-        fullScreen: fullScreen,
-        content: SizedBox(
-          width: fullScreen
-              ? double.infinity
-              : min(MediaQuery.of(context).size.width - 48, 620),
-          height: fullScreen
-              ? double.infinity
-              : min(MediaQuery.of(context).size.height - 180, 460),
-          child: _IconPickerScrollbar(
-            scrollbarKey: const Key('spbIconPickerScrollbar'),
-            builder: (controller) => GridView.builder(
-              controller: controller,
-              padding: const EdgeInsets.only(right: 12),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 82,
-                childAspectRatio: 1,
-                mainAxisSpacing: 7,
-                crossAxisSpacing: 7,
-              ),
-              itemCount: iconAssets.length,
-              itemBuilder: (context, index) {
-                final iconId = iconAssets[index];
-                final asset = iconId;
-                final selected = iconId == selectedIconId;
-                final fileName =
-                    iconId.startsWith('spb://') ? iconId.substring(6) : iconId;
-                return Tooltip(
-                  message: fileName,
-                  child: InkWell(
-                    onTap: () => Navigator.pop(context, iconId),
-                    child: DecoratedBox(
-                      decoration: BoxDecoration(
+    builder: (context) => AlertDialog(
+      title: const Text('Иконки SPB Wallet'),
+      content: SizedBox(
+        width: min(MediaQuery.of(context).size.width - 48, 620),
+        height: min(MediaQuery.of(context).size.height - 180, 460),
+        child: _IconPickerScrollbar(
+          scrollbarKey: const Key('spbIconPickerScrollbar'),
+          builder: (controller) => GridView.builder(
+            controller: controller,
+            padding: const EdgeInsets.only(right: 12),
+            gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+              maxCrossAxisExtent: 82,
+              childAspectRatio: 1,
+              mainAxisSpacing: 7,
+              crossAxisSpacing: 7,
+            ),
+            itemCount: iconAssets.length,
+            itemBuilder: (context, index) {
+              final iconId = iconAssets[index];
+              final asset = iconId;
+              final selected = iconId == selectedIconId;
+              final fileName =
+                  iconId.startsWith('spb://') ? iconId.substring(6) : iconId;
+              return Tooltip(
+                message: fileName,
+                child: InkWell(
+                  onTap: () => Navigator.pop(context, iconId),
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: selected
+                          ? Theme.of(context).colorScheme.primaryContainer
+                          : Theme.of(context).colorScheme.surface,
+                      border: Border.all(
                         color: selected
-                            ? Theme.of(context).colorScheme.primaryContainer
-                            : Theme.of(context).colorScheme.surface,
-                        border: Border.all(
-                          color: selected
-                              ? Theme.of(context).colorScheme.primary
-                              : Theme.of(context).dividerColor,
-                        ),
-                        borderRadius: BorderRadius.circular(7),
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).dividerColor,
                       ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(8),
-                        child: spbPackedImage(
-                          asset,
-                          width: 56,
-                          height: 56,
-                          fit: BoxFit.contain,
-                          fallback: const Icon(Icons.image_outlined, size: 40),
-                        ),
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: spbPackedImage(
+                        asset,
+                        width: 56,
+                        height: 56,
+                        fit: BoxFit.contain,
+                        fallback: const Icon(Icons.image_outlined, size: 40),
                       ),
                     ),
                   ),
-                );
-              },
-            ),
+                ),
+              );
+            },
           ),
         ),
-      );
-    },
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Отмена'),
+        ),
+      ],
+    ),
   );
 }
 
 Future<String?> showThirdPartyIconPickerDialog(BuildContext context) async {
   final iconAssets = await loadThirdPartyIconAssets();
   if (!context.mounted) return null;
-  final fullScreen = useFullScreenIconPicker(context);
   var visible = iconAssets;
   return showDialog<String>(
     context: context,
     builder: (context) => StatefulBuilder(
-      builder: (context, setDialogState) {
-        return adaptiveIconPickerDialog(
-          context,
-          key: const Key('thirdPartyIconPickerDialog'),
-          title: 'Сторонние иконки',
-          fullScreen: fullScreen,
-          content: SizedBox(
-            width: fullScreen
-                ? double.infinity
-                : min(MediaQuery.of(context).size.width - 48, 660),
-            height: fullScreen
-                ? double.infinity
-                : min(MediaQuery.of(context).size.height - 180, 520),
-            child: Column(
-              children: [
-                Expanded(
-                  child: _IconPickerScrollbar(
-                    scrollbarKey: const Key('thirdPartyIconPickerScrollbar'),
-                    builder: (controller) => GridView.builder(
-                      controller: controller,
-                      padding: const EdgeInsets.only(right: 12),
-                      gridDelegate:
-                          const SliverGridDelegateWithMaxCrossAxisExtent(
-                        maxCrossAxisExtent: 82,
-                        childAspectRatio: 1,
-                        mainAxisSpacing: 7,
-                        crossAxisSpacing: 7,
-                      ),
-                      itemCount: visible.length,
-                      itemBuilder: (context, index) {
-                        final iconId = visible[index];
-                        final bytes = thirdPartyIconPngs[iconId];
-                        final fileName = iconId.split('/').last;
-                        return Tooltip(
-                          message: fileName,
-                          child: InkWell(
-                            onTap: () => Navigator.pop(context, iconId),
-                            borderRadius: BorderRadius.circular(7),
-                            child: DecoratedBox(
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                border: Border.all(
-                                  color: Theme.of(context).dividerColor,
-                                ),
-                                borderRadius: BorderRadius.circular(7),
+      builder: (context, setDialogState) => AlertDialog(
+        title: const Text('Сторонние иконки'),
+        content: SizedBox(
+          width: min(MediaQuery.of(context).size.width - 48, 660),
+          height: min(MediaQuery.of(context).size.height - 180, 520),
+          child: Column(
+            children: [
+              TextField(
+                key: const Key('thirdPartyIconSearch'),
+                decoration: const InputDecoration(
+                  hintText: 'Поиск по имени файла',
+                  prefixIcon: Icon(Icons.search),
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                onChanged: (query) {
+                  final normalized = query.trim().toLowerCase();
+                  setDialogState(() {
+                    visible = normalized.isEmpty
+                        ? iconAssets
+                        : iconAssets
+                            .where(
+                              (entry) =>
+                                  entry.toLowerCase().contains(normalized),
+                            )
+                            .toList(growable: false);
+                  });
+                },
+              ),
+              const SizedBox(height: 10),
+              Expanded(
+                child: _IconPickerScrollbar(
+                  scrollbarKey: const Key('thirdPartyIconPickerScrollbar'),
+                  builder: (controller) => GridView.builder(
+                    controller: controller,
+                    padding: const EdgeInsets.only(right: 12),
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 82,
+                      childAspectRatio: 1,
+                      mainAxisSpacing: 7,
+                      crossAxisSpacing: 7,
+                    ),
+                    itemCount: visible.length,
+                    itemBuilder: (context, index) {
+                      final iconId = visible[index];
+                      final bytes = thirdPartyIconPngs[iconId];
+                      final fileName = iconId.split('/').last;
+                      return Tooltip(
+                        message: fileName,
+                        child: InkWell(
+                          onTap: () => Navigator.pop(context, iconId),
+                          borderRadius: BorderRadius.circular(7),
+                          child: DecoratedBox(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              border: Border.all(
+                                color: Theme.of(context).dividerColor,
                               ),
-                              child: Padding(
-                                padding: const EdgeInsets.all(8),
-                                child: bytes == null
-                                    ? const Icon(Icons.broken_image_outlined)
-                                    : Image.memory(
-                                        bytes,
-                                        width: 56,
-                                        height: 56,
-                                        fit: BoxFit.contain,
-                                        filterQuality: FilterQuality.medium,
-                                      ),
-                              ),
+                              borderRadius: BorderRadius.circular(7),
+                            ),
+                            child: Padding(
+                              padding: const EdgeInsets.all(8),
+                              child: bytes == null
+                                  ? const Icon(Icons.broken_image_outlined)
+                                  : Image.memory(
+                                      bytes,
+                                      width: 56,
+                                      height: 56,
+                                      fit: BoxFit.contain,
+                                      filterQuality: FilterQuality.medium,
+                                    ),
                             ),
                           ),
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
                   ),
                 ),
-              ],
-            ),
+              ),
+            ],
           ),
-        );
-      },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Отмена'),
+          ),
+        ],
+      ),
     ),
   );
 }
@@ -13633,7 +13577,6 @@ class SpbGrayPickerButton extends StatelessWidget {
     required this.tooltip,
     required this.onTap,
     this.compact = false,
-    this.height = 48,
     super.key,
   });
 
@@ -13642,7 +13585,6 @@ class SpbGrayPickerButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback? onTap;
   final bool compact;
-  final double height;
 
   @override
   Widget build(BuildContext context) {
@@ -13656,7 +13598,7 @@ class SpbGrayPickerButton extends StatelessWidget {
             onTap: onTap,
             borderRadius: BorderRadius.circular(5),
             child: Ink(
-              height: height,
+              height: 48,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   begin: Alignment.topCenter,
@@ -13683,7 +13625,7 @@ class SpbGrayPickerButton extends StatelessWidget {
                 children: [
                   Icon(
                     icon,
-                    size: compact ? 28 : 18,
+                    size: compact ? 14 : 18,
                     color: const Color(0xff303030),
                   ),
                   Padding(
@@ -13695,7 +13637,7 @@ class SpbGrayPickerButton extends StatelessWidget {
                               label,
                               maxLines: 1,
                               style: const TextStyle(
-                                fontSize: 10,
+                                fontSize: 8,
                                 color: Color(0xff303030),
                               ),
                             ),
@@ -14450,8 +14392,8 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                     : null,
                                 child: Container(
                                   key: const Key('cardPreviewIcon'),
-                                  width: 88,
-                                  height: 88,
+                                  width: 112,
+                                  height: 112,
                                   alignment: Alignment.center,
                                   decoration: BoxDecoration(
                                     color: Colors.white,
@@ -14470,7 +14412,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                   ),
                                   child: templateIconWidget(
                                     itemIconId(currentItem, widget.template),
-                                    size: 80,
+                                    size: 88,
                                     color:
                                         pictogramColorForBackground(color.bg),
                                   ),
@@ -14940,7 +14882,6 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   Widget cardIconPickers({
     bool singleRow = false,
     bool compactButtons = false,
-    double buttonHeight = 48,
   }) {
     final buttons = [
       SpbGrayPickerButton(
@@ -14950,7 +14891,6 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         tooltip: 'Иконки из базы SPB',
         onTap: pickSpbCardIcon,
         compact: compactButtons,
-        height: buttonHeight,
       ),
       SpbGrayPickerButton(
         key: const Key('cardPictogramPicker'),
@@ -14959,7 +14899,6 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         tooltip: 'Выбрать пиктограмму',
         onTap: pickCardPictogram,
         compact: compactButtons,
-        height: buttonHeight,
       ),
       SpbGrayPickerButton(
         key: const Key('cardThirdPartyPicker'),
@@ -14968,7 +14907,6 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         tooltip: 'Иконки Visual Studio',
         onTap: pickCardThirdPartyIcon,
         compact: compactButtons,
-        height: buttonHeight,
       ),
       SpbGrayPickerButton(
         key: const Key('cardUploadIconButton'),
@@ -14977,7 +14915,6 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         tooltip: 'Загрузить файл PNG или ICO',
         onTap: pickCardCustomIconFile,
         compact: compactButtons,
-        height: buttonHeight,
       ),
     ];
     return LayoutBuilder(
@@ -15295,24 +15232,28 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
 
   List<Widget> buildNarrowCardEditorHeader() {
     return [
-      cardTitleEditor(boldValue: true, adaptiveHeight: true),
-      const SizedBox(height: 14),
       SizedBox(
-        height: 88,
+        height: 110,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             cardBoundIcon(
-              dimension: 88,
-              iconSize: 80,
+              dimension: 110,
+              iconSize: 64,
               scaleOriginalToFit: true,
             ),
             const SizedBox(width: 14),
             Expanded(
-              child: cardIconPickers(
-                singleRow: true,
-                compactButtons: true,
-                buttonHeight: 88,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  cardTitleEditor(boldValue: true),
+                  const Spacer(),
+                  cardIconPickers(
+                    singleRow: true,
+                    compactButtons: true,
+                  ),
+                ],
               ),
             ),
           ],
@@ -15335,7 +15276,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
           includeSelectedIcon: false,
         ),
       ),
-      const SizedBox(height: 9),
+      const SizedBox(height: 15),
       narrowEditorSelectionRow(
         previewKey: const Key('cardCategoryPreviewIcon'),
         contentKey: const Key('cardCategoryPreviewContent'),
@@ -15403,35 +15344,27 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     );
   }
 
-  Widget cardTitleEditor({
-    bool boldValue = false,
-    bool adaptiveHeight = false,
-  }) {
-    final field = TextField(
-      key: const Key('cardTitleField'),
-      controller: title,
-      onTap: rememberCurrentAction,
-      contextMenuBuilder: desktopCardTextContextMenu,
-      onChanged: (_) => setState(() {}),
-      minLines: 1,
-      maxLines: adaptiveHeight ? null : 1,
-      style: TextStyle(
-        fontWeight: boldValue ? FontWeight.bold : FontWeight.normal,
-      ),
-      decoration: const InputDecoration(
-        labelText: 'Название карточки',
-        border: OutlineInputBorder(),
-        isDense: true,
-        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      ),
-    );
+  Widget cardTitleEditor({bool boldValue = false}) {
     return EnsureVisibleWhenFocused(
-      child: adaptiveHeight
-          ? ConstrainedBox(
-              constraints: const BoxConstraints(minHeight: 45),
-              child: field,
-            )
-          : SizedBox(height: 45, child: field),
+      child: SizedBox(
+        height: 45,
+        child: TextField(
+          key: const Key('cardTitleField'),
+          controller: title,
+          onTap: rememberCurrentAction,
+          contextMenuBuilder: desktopCardTextContextMenu,
+          onChanged: (_) => setState(() {}),
+          style: TextStyle(
+            fontWeight: boldValue ? FontWeight.bold : FontWeight.normal,
+          ),
+          decoration: const InputDecoration(
+            labelText: 'Название карточки',
+            border: OutlineInputBorder(),
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          ),
+        ),
+      ),
     );
   }
 
@@ -15637,7 +15570,65 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     );
 
     if (multiline) {
-      return SizedBox(height: 180, child: textField);
+      return SizedBox(
+        height: 180,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(child: textField),
+            const SizedBox(width: 5),
+            SizedBox(
+              key: ValueKey('cardFieldControls-${field.id}'),
+              width: 78,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      SizedBox(
+                        width: 37,
+                        height: 34,
+                        child: fieldOrderButton(
+                          key: ValueKey('cardFieldUp-${field.id}'),
+                          icon: Icons.keyboard_arrow_up,
+                          tooltip: 'Переместить поле вверх',
+                          onTap: index > 0
+                              ? () => moveCardField(field.id, -1)
+                              : null,
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      SizedBox(
+                        width: 37,
+                        height: 34,
+                        child: fieldOrderButton(
+                          key: ValueKey('cardFieldDelete-${field.id}'),
+                          icon: Icons.delete_outline,
+                          tooltip: 'Удалить поле из списка',
+                          onTap: () => removeCardField(field.id),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Spacer(),
+                  SizedBox(
+                    width: 37,
+                    height: 34,
+                    child: fieldOrderButton(
+                      key: ValueKey('cardFieldDown-${field.id}'),
+                      icon: Icons.keyboard_arrow_down,
+                      tooltip: 'Переместить поле вниз',
+                      onTap: index >= 0 && index < fieldOrder.length - 1
+                          ? () => moveCardField(field.id, 1)
+                          : null,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
     }
 
     return IntrinsicHeight(
