@@ -442,6 +442,7 @@ void main() {
     final notesDown = find.byKey(ValueKey('cardFieldDown-$notesId'));
     final notesDelete = find.byKey(ValueKey('cardFieldDelete-$notesId'));
     final notesControls = find.byKey(ValueKey('cardFieldControls-$notesId'));
+    final firstDelete = find.byKey(ValueKey('cardFieldDelete-$firstFieldId'));
     await tester.ensureVisible(notesField);
     await tester.pumpAndSettle();
     final longNote =
@@ -455,22 +456,17 @@ void main() {
     expect(notesWidget.keyboardType, TextInputType.multiline);
     expect(notesWidget.textInputAction, TextInputAction.newline);
     expect(tester.getSize(notesField).height, 180);
-    expect(tester.getSize(notesControls).width, 78);
-    expect(tester.getSize(notesUp), const Size(37, 34));
-    expect(tester.getSize(notesDown), const Size(37, 34));
-    expect(tester.getSize(notesDelete), const Size(37, 34));
+    expect(notesControls, findsNothing);
+    expect(notesUp, findsNothing);
+    expect(notesDown, findsNothing);
+    expect(notesDelete, findsNothing);
     expect(
       tester.getTopLeft(notesField).dx,
       closeTo(tester.getTopLeft(firstField).dx, 0.01),
     );
     expect(
-      tester.getTopLeft(notesControls).dx - tester.getTopRight(notesField).dx,
-      closeTo(5, 0.01),
-    );
-    expect(tester.getTopLeft(notesDelete).dy, tester.getTopLeft(notesUp).dy);
-    expect(
-      tester.getBottomLeft(notesDown).dy,
-      tester.getBottomLeft(notesField).dy,
+      tester.getTopRight(notesField).dx,
+      closeTo(tester.getTopRight(firstDelete).dx, 0.01),
     );
     expect(tester.takeException(), isNull);
 
@@ -479,6 +475,11 @@ void main() {
     await tester.tap(original);
     await tester.pumpAndSettle();
     expect(find.text('Иконки SPB Wallet'), findsOneWidget);
+    await tester.tap(find.widgetWithText(TextButton, 'Отмена'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('cardThirdPartyPicker')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('thirdPartyIconSearch')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -525,7 +526,7 @@ void main() {
     final templateTop = tester.getTopLeft(templateField).dy;
     final categoryTop = tester.getTopLeft(categoryField).dy;
 
-    expect(tester.getSize(boundIcon), const Size(110, 110));
+    expect(tester.getSize(boundIcon), const Size(88, 88));
     expect(templatePreview, findsOneWidget);
     expect(categoryPreview, findsOneWidget);
     expect(tester.getSize(templatePreview), const Size(41, 41));
@@ -535,11 +536,22 @@ void main() {
       FontWeight.bold,
     );
     expect(tester.widget<SpbGrayPickerButton>(original).compact, isTrue);
-    expect(titleTop, closeTo(iconTop, 0.01));
+    expect(titleTop, lessThan(iconTop));
+    expect(
+      tester.getTopLeft(titleField).dx,
+      closeTo(tester.getTopLeft(boundIcon).dx, 0.01),
+    );
+    expect(
+      tester.getTopRight(titleField).dx,
+      closeTo(tester.getTopRight(categoryField).dx, 0.01),
+    );
+    expect(tester.getSize(original).height, 88);
+    expect(tester.getSize(upload).height, 88);
+    expect(tester.getTopLeft(original).dy, closeTo(iconTop, 0.01));
     expect(tester.getBottomLeft(upload).dy, closeTo(iconBottom, 0.01));
     expect(
-      tester.getTopLeft(upload).dy - tester.getBottomLeft(titleField).dy,
-      closeTo(17, 0.01),
+      iconTop - tester.getBottomLeft(titleField).dy,
+      closeTo(14, 0.01),
     );
     expect(colorTop - iconBottom, closeTo(10, 0.01));
     expect(tester.getSize(firstColor).height, 27);
@@ -558,7 +570,7 @@ void main() {
     expect(tester.getTopLeft(templatePreview).dy, closeTo(templateTop, 0.01));
     expect(
       categoryTop - tester.getBottomLeft(templateField).dy,
-      closeTo(15, 0.01),
+      closeTo(9, 0.01),
     );
     expect(tester.getTopLeft(categoryPreview).dy, closeTo(categoryTop, 0.01));
     final narrowFirstField = find.byKey(
@@ -573,15 +585,43 @@ void main() {
     final narrowNotesControls = find.byKey(
       ValueKey('cardFieldControls-$narrowNotesId'),
     );
-    expect(tester.getSize(narrowNotesControls).width, 78);
+    final narrowFirstDelete = find.byKey(
+      ValueKey(
+        'cardFieldDelete-${builtInTemplates().first.fields.first.id}',
+      ),
+    );
+    expect(narrowNotesControls, findsNothing);
+    expect(
+      find.byKey(ValueKey('cardFieldUp-$narrowNotesId')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(ValueKey('cardFieldDown-$narrowNotesId')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(ValueKey('cardFieldDelete-$narrowNotesId')),
+      findsNothing,
+    );
     expect(
       tester.getTopLeft(narrowNotesField).dx,
       closeTo(tester.getTopLeft(narrowFirstField).dx, 0.01),
     );
     expect(
-      tester.getTopLeft(narrowNotesControls).dx -
-          tester.getTopRight(narrowNotesField).dx,
-      closeTo(5, 0.01),
+      tester.getTopRight(narrowNotesField).dx,
+      closeTo(tester.getTopRight(narrowFirstDelete).dx, 0.01),
+    );
+    final singleLineTitleHeight = tester.getSize(titleField).height;
+    await tester.enterText(
+      titleField,
+      'Очень длинное название карточки, которое не помещается в одну строку '
+      'и должно автоматически переноситься на следующие строки',
+    );
+    await tester.pump();
+    expect(singleLineTitleHeight, closeTo(45, 0.01));
+    expect(
+      tester.getSize(titleField).height,
+      greaterThan(singleLineTitleHeight),
     );
     expect(tester.takeException(), isNull);
   });
@@ -699,6 +739,21 @@ void main() {
     expect(find.byKey(const Key('cardPreviewModifiedAt')), findsOneWidget);
     expect(find.text('01.01.2026 00:00'), findsOneWidget);
     expect(find.byKey(const Key('cardPreviewIcon')), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const Key('cardPreviewIcon'))),
+      const Size(88, 88),
+    );
+    expect(
+      tester
+          .widget<Icon>(
+            find.descendant(
+              of: find.byKey(const Key('cardPreviewIcon')),
+              matching: find.byType(Icon),
+            ),
+          )
+          .size,
+      80,
+    );
     expect(
       find.byKey(ValueKey('cardPreviewField-${template.fields[0].id}')),
       findsOneWidget,
