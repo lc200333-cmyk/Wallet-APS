@@ -221,15 +221,19 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('card editor offers original SPB icons before pictograms',
+  testWidgets('wide card editor matches the compact reference header layout',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(720, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
       MaterialApp(
-        home: ItemEditorDialog(
-          templates: builtInTemplates(),
-          categories: const [],
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(720, 900)),
+          child: ItemEditorDialog(
+            templates: builtInTemplates(),
+            categories: const ['Finance'],
+            categoryIcons: const {'Finance': 'bank'},
+          ),
         ),
       ),
     );
@@ -246,6 +250,13 @@ void main() {
           .widget<TextField>(find.byKey(const Key('cardTitleField')))
           .contextMenuBuilder,
       isNotNull,
+    );
+    expect(
+      tester
+          .widget<TextField>(find.byKey(const Key('cardTitleField')))
+          .style
+          ?.fontWeight,
+      FontWeight.bold,
     );
     final original = find.byKey(const Key('spbCardIconPicker'));
     final pictogram = find.byKey(const Key('cardPictogramPicker'));
@@ -265,6 +276,12 @@ void main() {
           find.byKey(const Key('cardBoundIcon')),
         )
         .dy;
+    final iconTop =
+        tester.getTopLeft(find.byKey(const Key('cardBoundIcon'))).dy;
+    final iconLeft =
+        tester.getTopLeft(find.byKey(const Key('cardBoundIcon'))).dx;
+    final pickerBottom = tester.getBottomLeft(upload).dy;
+    final pickerTop = tester.getTopLeft(upload).dy;
     final colorTop = tester
         .getTopLeft(
           find.byKey(ValueKey('cardColor-${templateColorPalette.first.id}')),
@@ -274,9 +291,108 @@ void main() {
         tester.getTopLeft(find.byKey(const Key('cardTitleField'))).dy;
     final templateTop =
         tester.getTopLeft(find.byKey(const Key('cardTemplateField'))).dy;
+    final templatePreview = find.byKey(
+      const Key('cardTemplatePreviewIcon'),
+    );
+    final categoryField = find.byKey(const Key('cardCategoryField'));
+    final categoryPreview = find.byKey(
+      const Key('cardCategoryPreviewIcon'),
+    );
+    expect(templatePreview, findsOneWidget);
+    expect(categoryField, findsOneWidget);
+    expect(categoryPreview, findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const Key('cardBoundIcon'))),
+      const Size(100, 100),
+    );
+    expect(titleTop, closeTo(iconTop, 0.01));
+    expect(
+      pickerTop -
+          tester.getBottomLeft(find.byKey(const Key('cardTitleField'))).dy,
+      closeTo(7, 0.01),
+    );
+    expect(pickerBottom, closeTo(iconBottom, 0.01));
     expect(colorTop, greaterThan(iconBottom));
-    expect(titleTop, greaterThan(colorTop));
-    expect(templateTop, greaterThan(titleTop));
+    expect(templateTop, greaterThan(colorTop));
+    expect(tester.getSize(templatePreview), const Size(41, 41));
+    expect(tester.getSize(categoryPreview), const Size(41, 41));
+    expect(
+      tester.getSize(find.byKey(const Key('cardTemplatePreviewContent'))),
+      const Size(33, 33),
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('cardCategoryPreviewContent'))),
+      const Size(33, 33),
+    );
+    expect(
+      tester.getTopLeft(templatePreview).dy,
+      closeTo(templateTop, 0.01),
+    );
+    expect(
+      tester.getTopLeft(categoryPreview).dy,
+      closeTo(templateTop, 0.01),
+    );
+    expect(
+      tester.getBottomLeft(find.byKey(const Key('cardTemplateField'))).dy -
+          tester.getBottomLeft(templatePreview).dy,
+      closeTo(4, 0.01),
+    );
+    expect(
+      tester.getBottomLeft(categoryField).dy -
+          tester.getBottomLeft(categoryPreview).dy,
+      closeTo(4, 0.01),
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const Key('cardTemplateField'))).dx -
+          tester.getTopRight(templatePreview).dx,
+      closeTo(5, 0.01),
+    );
+    expect(
+      tester.getTopLeft(categoryPreview).dx -
+          tester.getTopRight(categoryField).dx,
+      closeTo(5, 0.01),
+    );
+    expect(
+      tester.getSize(find.byKey(const Key('cardTemplateField'))).width,
+      closeTo(tester.getSize(categoryField).width, 0.01),
+    );
+    expect(
+      tester
+          .getTopLeft(
+            find.byKey(
+              ValueKey('cardColor-${templateColorPalette.first.id}'),
+            ),
+          )
+          .dx,
+      closeTo(iconLeft, 0.01),
+    );
+    expect(
+      tester
+          .getTopRight(
+            find.byKey(
+              ValueKey('cardColor-${templateColorPalette.last.id}'),
+            ),
+          )
+          .dx,
+      closeTo(tester.getTopRight(categoryPreview).dx, 0.01),
+    );
+    await tester.tap(find.byKey(const Key('cardTemplateField')));
+    await tester.pumpAndSettle();
+    final templateMenuIcon = find.byKey(
+      ValueKey('cardTemplateIcon-${builtInTemplates().first.id}'),
+    );
+    expect(templateMenuIcon, findsOneWidget);
+    await tester.tap(templateMenuIcon);
+    await tester.pumpAndSettle();
+
+    await tester.tap(categoryField);
+    await tester.pumpAndSettle();
+    final categoryMenuIcon = find.byKey(
+      const ValueKey('cardCategoryMenuIcon-Finance'),
+    );
+    expect(categoryMenuIcon, findsOneWidget);
+    await tester.tap(categoryMenuIcon);
+    await tester.pumpAndSettle();
     expect(find.text('Папка / каталог'), findsOneWidget);
     final firstFieldId = builtInTemplates().first.fields.first.id;
     final secondFieldId = builtInTemplates().first.fields[1].id;
@@ -325,6 +441,7 @@ void main() {
     final notesUp = find.byKey(ValueKey('cardFieldUp-$notesId'));
     final notesDown = find.byKey(ValueKey('cardFieldDown-$notesId'));
     final notesDelete = find.byKey(ValueKey('cardFieldDelete-$notesId'));
+    final notesControls = find.byKey(ValueKey('cardFieldControls-$notesId'));
     await tester.ensureVisible(notesField);
     await tester.pumpAndSettle();
     final longNote =
@@ -338,9 +455,18 @@ void main() {
     expect(notesWidget.keyboardType, TextInputType.multiline);
     expect(notesWidget.textInputAction, TextInputAction.newline);
     expect(tester.getSize(notesField).height, 180);
-    expect(tester.getSize(notesUp), const Size(34, 34));
-    expect(tester.getSize(notesDown), const Size(34, 34));
-    expect(tester.getSize(notesDelete), const Size(34, 34));
+    expect(tester.getSize(notesControls).width, 78);
+    expect(tester.getSize(notesUp), const Size(37, 34));
+    expect(tester.getSize(notesDown), const Size(37, 34));
+    expect(tester.getSize(notesDelete), const Size(37, 34));
+    expect(
+      tester.getTopLeft(notesField).dx,
+      closeTo(tester.getTopLeft(firstField).dx, 0.01),
+    );
+    expect(
+      tester.getTopLeft(notesControls).dx - tester.getTopRight(notesField).dx,
+      closeTo(5, 0.01),
+    );
     expect(tester.getTopLeft(notesDelete).dy, tester.getTopLeft(notesUp).dy);
     expect(
       tester.getBottomLeft(notesDown).dy,
@@ -353,6 +479,110 @@ void main() {
     await tester.tap(original);
     await tester.pumpAndSettle();
     expect(find.text('Иконки SPB Wallet'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('narrow card editor matches the adaptive reference layout',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(500, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(size: Size(500, 900)),
+          child: ItemEditorDialog(
+            templates: builtInTemplates(),
+            categories: const [],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final boundIcon = find.byKey(const Key('cardBoundIcon'));
+    final titleField = find.byKey(const Key('cardTitleField'));
+    final original = find.byKey(const Key('spbCardIconPicker'));
+    final upload = find.byKey(const Key('cardUploadIconButton'));
+    final firstColor = find.byKey(
+      ValueKey('cardColor-${templateColorPalette.first.id}'),
+    );
+    final lastColor = find.byKey(
+      ValueKey('cardColor-${templateColorPalette.last.id}'),
+    );
+    final templateField = find.byKey(const Key('cardTemplateField'));
+    final categoryField = find.byKey(const Key('cardCategoryField'));
+    final templatePreview = find.byKey(
+      const Key('cardTemplatePreviewIcon'),
+    );
+    final categoryPreview = find.byKey(
+      const Key('cardCategoryPreviewIcon'),
+    );
+    final iconTop = tester.getTopLeft(boundIcon).dy;
+    final iconBottom = tester.getBottomLeft(boundIcon).dy;
+    final colorTop = tester.getTopLeft(firstColor).dy;
+    final titleTop =
+        tester.getTopLeft(find.byKey(const Key('cardTitleField'))).dy;
+    final templateTop = tester.getTopLeft(templateField).dy;
+    final categoryTop = tester.getTopLeft(categoryField).dy;
+
+    expect(tester.getSize(boundIcon), const Size(110, 110));
+    expect(templatePreview, findsOneWidget);
+    expect(categoryPreview, findsOneWidget);
+    expect(tester.getSize(templatePreview), const Size(41, 41));
+    expect(tester.getSize(categoryPreview), const Size(41, 41));
+    expect(
+      tester.widget<TextField>(titleField).style?.fontWeight,
+      FontWeight.bold,
+    );
+    expect(tester.widget<SpbGrayPickerButton>(original).compact, isTrue);
+    expect(titleTop, closeTo(iconTop, 0.01));
+    expect(tester.getBottomLeft(upload).dy, closeTo(iconBottom, 0.01));
+    expect(
+      tester.getTopLeft(upload).dy - tester.getBottomLeft(titleField).dy,
+      closeTo(17, 0.01),
+    );
+    expect(colorTop - iconBottom, closeTo(10, 0.01));
+    expect(tester.getSize(firstColor).height, 27);
+    expect(
+      tester.getSize(firstColor).width,
+      closeTo(tester.getSize(lastColor).width, 0.01),
+    );
+    expect(
+      tester.getTopLeft(firstColor).dx,
+      closeTo(tester.getTopLeft(boundIcon).dx, 0.01),
+    );
+    expect(
+      tester.getTopRight(lastColor).dx,
+      closeTo(tester.getTopRight(templateField).dx, 0.01),
+    );
+    expect(tester.getTopLeft(templatePreview).dy, closeTo(templateTop, 0.01));
+    expect(
+      categoryTop - tester.getBottomLeft(templateField).dy,
+      closeTo(15, 0.01),
+    );
+    expect(tester.getTopLeft(categoryPreview).dy, closeTo(categoryTop, 0.01));
+    final narrowFirstField = find.byKey(
+      ValueKey('cardField-${builtInTemplates().first.fields.first.id}'),
+    );
+    final narrowNotesId = builtInTemplates()
+        .first
+        .fields
+        .firstWhere((field) => field.type == 'multiline_note')
+        .id;
+    final narrowNotesField = find.byKey(ValueKey('cardField-$narrowNotesId'));
+    final narrowNotesControls = find.byKey(
+      ValueKey('cardFieldControls-$narrowNotesId'),
+    );
+    expect(tester.getSize(narrowNotesControls).width, 78);
+    expect(
+      tester.getTopLeft(narrowNotesField).dx,
+      closeTo(tester.getTopLeft(narrowFirstField).dx, 0.01),
+    );
+    expect(
+      tester.getTopLeft(narrowNotesControls).dx -
+          tester.getTopRight(narrowNotesField).dx,
+      closeTo(5, 0.01),
+    );
     expect(tester.takeException(), isNull);
   });
 
@@ -1075,6 +1305,10 @@ void main() {
     final desktopSubmit = find.byKey(const Key('spbSubmitSearchButton'));
     expect(tester.getSize(desktopSearch).width, closeTo(250.445, 0.1));
     expect(
+      tester.getTopLeft(desktopSearch).dy - tester.getTopLeft(desktopSubmit).dy,
+      closeTo(1.1, 0.1),
+    );
+    expect(
       tester.getTopLeft(desktopSubmit).dx,
       greaterThan(tester.getTopRight(desktopSearch).dx + 5),
     );
@@ -1677,6 +1911,10 @@ void main() {
 
     final tabletSearch = find.byKey(const Key('spbSearchInput'));
     final tabletSubmit = find.byKey(const Key('spbSubmitSearchButton'));
+    expect(
+      tester.getTopLeft(tabletSearch).dy - tester.getTopLeft(tabletSubmit).dy,
+      closeTo(1.1, 0.1),
+    );
     expect(
       tester.getTopLeft(tabletSubmit).dx,
       closeTo(tester.getTopRight(tabletSearch).dx + 5, 0.1),

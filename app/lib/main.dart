@@ -1746,7 +1746,12 @@ Color templateDisplayBackground(CardTemplate template) =>
 Color templateDisplayPictogramColor(CardTemplate template) =>
     pictogramColorForBackground(templateDisplayBackground(template));
 
-Widget templateIconWidget(String id, {double size = 20, Color? color}) {
+Widget templateIconWidget(
+  String id, {
+  double size = 20,
+  Color? color,
+  bool scaleOriginalToFit = false,
+}) {
   final embeddedBytes = spbEmbeddedIconPngs[id.toUpperCase()];
   if (embeddedBytes != null) {
     return Image.memory(
@@ -1761,6 +1766,16 @@ Widget templateIconWidget(String id, {double size = 20, Color? color}) {
   }
   final originalAsset = spbPngIconAsset(id);
   if (originalAsset != null) {
+    if (scaleOriginalToFit) {
+      return spbPackedImage(
+        originalAsset,
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        fallback: Icon(Icons.vpn_key_outlined, size: size, color: color),
+      );
+    }
     // Original SPB Wallet icons are 64x64. Do not scale them down to the
     // Material icon size requested by compact callers.
     return SizedBox(
@@ -5465,7 +5480,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       maxHeight: 68,
       alignment: Alignment.centerLeft,
       child: Transform.translate(
-        offset: const Offset(0, 21),
+        offset: const Offset(0, 19),
         child: SizedBox(
           width: mobile ? double.infinity : 250.445,
           height: 68,
@@ -12179,6 +12194,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       builder: (context) => ItemEditorDialog(
         templates: templates,
         categories: existingCategories(),
+        categoryIcons: {
+          for (final category in existingCategories())
+            category: categoryIconsByPath[category] ??
+                defaultIconForCategoryPath(category),
+        },
         initial: item,
         initialCategory: initialCategory,
         supportsAttachments: spbWallet != null,
@@ -13556,6 +13576,7 @@ class SpbGrayPickerButton extends StatelessWidget {
     required this.icon,
     required this.tooltip,
     required this.onTap,
+    this.compact = false,
     super.key,
   });
 
@@ -13563,6 +13584,7 @@ class SpbGrayPickerButton extends StatelessWidget {
   final IconData icon;
   final String tooltip;
   final VoidCallback? onTap;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
@@ -13601,18 +13623,34 @@ class SpbGrayPickerButton extends StatelessWidget {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon, size: 18, color: const Color(0xff303030)),
+                  Icon(
+                    icon,
+                    size: compact ? 14 : 18,
+                    color: const Color(0xff303030),
+                  ),
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xff303030),
-                      ),
-                    ),
+                    padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 4),
+                    child: compact
+                        ? FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              label,
+                              maxLines: 1,
+                              style: const TextStyle(
+                                fontSize: 8,
+                                color: Color(0xff303030),
+                              ),
+                            ),
+                          )
+                        : Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: Color(0xff303030),
+                            ),
+                          ),
                   ),
                 ],
               ),
@@ -14660,6 +14698,7 @@ class ItemEditorDialog extends StatefulWidget {
   const ItemEditorDialog({
     required this.templates,
     required this.categories,
+    this.categoryIcons = const {},
     this.initial,
     this.initialCategory,
     this.supportsAttachments = false,
@@ -14669,6 +14708,7 @@ class ItemEditorDialog extends StatefulWidget {
 
   final List<CardTemplate> templates;
   final List<String> categories;
+  final Map<String, String> categoryIcons;
   final SecretItem? initial;
   final String? initialCategory;
   final bool supportsAttachments;
@@ -14839,7 +14879,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     });
   }
 
-  Widget cardIconPickers() {
+  Widget cardIconPickers({
+    bool singleRow = false,
+    bool compactButtons = false,
+  }) {
     final buttons = [
       SpbGrayPickerButton(
         key: const Key('spbCardIconPicker'),
@@ -14847,6 +14890,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         icon: Icons.photo_library_outlined,
         tooltip: 'Иконки из базы SPB',
         onTap: pickSpbCardIcon,
+        compact: compactButtons,
       ),
       SpbGrayPickerButton(
         key: const Key('cardPictogramPicker'),
@@ -14854,6 +14898,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         icon: Icons.category_outlined,
         tooltip: 'Выбрать пиктограмму',
         onTap: pickCardPictogram,
+        compact: compactButtons,
       ),
       SpbGrayPickerButton(
         key: const Key('cardThirdPartyPicker'),
@@ -14861,6 +14906,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         icon: Icons.public_outlined,
         tooltip: 'Иконки Visual Studio',
         onTap: pickCardThirdPartyIcon,
+        compact: compactButtons,
       ),
       SpbGrayPickerButton(
         key: const Key('cardUploadIconButton'),
@@ -14868,11 +14914,12 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         icon: Icons.upload_file_outlined,
         tooltip: 'Загрузить файл PNG или ICO',
         onTap: pickCardCustomIconFile,
+        compact: compactButtons,
       ),
     ];
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (constraints.maxWidth >= 420) {
+        if (singleRow || constraints.maxWidth >= 420) {
           return Row(
             children: [
               for (var index = 0; index < buttons.length; index++) ...[
@@ -15005,7 +15052,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                         14,
                         18 + mediaQuery.viewInsets.bottom,
                       ),
-                      child: buildCardEditorContent(),
+                      child: buildCardEditorContent(wideLayout: !fullScreen),
                     ),
                   ),
                 ),
@@ -15091,119 +15138,14 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     );
   }
 
-  Widget buildCardEditorContent() {
+  Widget buildCardEditorContent({required bool wideLayout}) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Container(
-              key: const Key('cardBoundIcon'),
-              width: 112,
-              height: 112,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                border: Border.all(color: const Color(0xff82929d), width: 2),
-                borderRadius: BorderRadius.circular(5),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Color(0x26000000),
-                    offset: Offset(1, 2),
-                    blurRadius: 5,
-                  ),
-                ],
-              ),
-              child: templateIconWidget(
-                iconId,
-                size: 88,
-                color: pictogramColorForBackground(editorBackgroundColor),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(child: cardIconPickers()),
-          ],
-        ),
-        const SizedBox(height: 12),
-        ColorPicker(
-          value: colorId,
-          onChanged: (value) {
-            if (value == colorId) return;
-            rememberCurrentAction();
-            setState(() {
-              colorId = value;
-              spbColor = paletteColorToSpb(value);
-            });
-          },
-        ),
-        const SizedBox(height: 10),
-        EnsureVisibleWhenFocused(
-          child: SizedBox(
-            height: 45,
-            child: TextField(
-              key: const Key('cardTitleField'),
-              controller: title,
-              onTap: rememberCurrentAction,
-              contextMenuBuilder: desktopCardTextContextMenu,
-              onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(
-                labelText: 'Название карточки',
-                border: OutlineInputBorder(),
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          height: 45,
-          child: DropdownButtonFormField<String>(
-            key: const Key('cardTemplateField'),
-            isExpanded: true,
-            initialValue: templateId,
-            decoration: const InputDecoration(
-              labelText: 'Название шаблона',
-              border: OutlineInputBorder(),
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            ),
-            items: widget.templates
-                .map(
-                  (entry) => DropdownMenuItem(
-                    value: entry.id,
-                    child: cardTemplateMenuLabel(entry),
-                  ),
-                )
-                .toList(),
-            onChanged: (value) {
-              if (value == null || value == templateId) return;
-              rememberCurrentAction();
-              setState(() {
-                templateId = value;
-                if (widget.initial == null || widget.initial?.iconId == null) {
-                  iconId = template.iconId;
-                }
-                for (final field in template.fields) {
-                  values.putIfAbsent(
-                    field.id,
-                    () => TextEditingController(
-                      text: widget.initial?.values[field.id] ?? '',
-                    ),
-                  );
-                }
-                hiddenFieldIds = {};
-                fieldOrder = [for (final field in template.fields) field.id];
-              });
-            },
-          ),
-        ),
-        const SizedBox(height: 10),
-        categoryEditor(),
+        if (wideLayout)
+          ...buildWideCardEditorHeader()
+        else
+          ...buildNarrowCardEditorHeader(),
         const SizedBox(height: 10),
         for (final field in orderedCardFields)
           EnsureVisibleWhenFocused(
@@ -15215,6 +15157,334 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         if (widget.supportsAttachments) buildCardAttachmentsEditor(),
       ],
     );
+  }
+
+  List<Widget> buildWideCardEditorHeader() {
+    return [
+      SizedBox(
+        height: 100,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            SizedBox(
+              width: 112,
+              child: Align(
+                alignment: Alignment.topLeft,
+                child: cardBoundIcon(dimension: 100, iconSize: 70),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  cardTitleEditor(boldValue: true),
+                  const Spacer(),
+                  cardIconPickers(singleRow: true),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 7),
+      ColorPicker(
+        value: colorId,
+        showLabel: false,
+        stretch: true,
+        onChanged: changeCardColor,
+      ),
+      const SizedBox(height: 10),
+      SizedBox(
+        height: 45,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            editorSelectionIcon(
+              key: const Key('cardTemplatePreviewIcon'),
+              contentKey: const Key('cardTemplatePreviewContent'),
+              iconId: template.iconId,
+            ),
+            const SizedBox(width: 5),
+            Expanded(
+              child: cardTemplateEditor(
+                includeMenuIcons: true,
+                includeSelectedIcon: false,
+              ),
+            ),
+            const SizedBox(width: 5),
+            Expanded(child: categoryDropdown(includeMenuIcons: true)),
+            const SizedBox(width: 5),
+            editorSelectionIcon(
+              key: const Key('cardCategoryPreviewIcon'),
+              contentKey: const Key('cardCategoryPreviewContent'),
+              iconId: selectedCategoryIconId,
+            ),
+          ],
+        ),
+      ),
+      if (selectedCategoryValue == newCategoryValue) ...[
+        const SizedBox(height: 10),
+        newCategoryEditor(),
+      ],
+    ];
+  }
+
+  List<Widget> buildNarrowCardEditorHeader() {
+    return [
+      SizedBox(
+        height: 110,
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            cardBoundIcon(
+              dimension: 110,
+              iconSize: 64,
+              scaleOriginalToFit: true,
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  cardTitleEditor(boldValue: true),
+                  const Spacer(),
+                  cardIconPickers(
+                    singleRow: true,
+                    compactButtons: true,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+      const SizedBox(height: 10),
+      ColorPicker(
+        value: colorId,
+        showLabel: false,
+        stretch: true,
+        onChanged: changeCardColor,
+      ),
+      const SizedBox(height: 10),
+      narrowEditorSelectionRow(
+        previewKey: const Key('cardTemplatePreviewIcon'),
+        contentKey: const Key('cardTemplatePreviewContent'),
+        iconId: template.iconId,
+        field: cardTemplateEditor(
+          includeMenuIcons: true,
+          includeSelectedIcon: false,
+        ),
+      ),
+      const SizedBox(height: 15),
+      narrowEditorSelectionRow(
+        previewKey: const Key('cardCategoryPreviewIcon'),
+        contentKey: const Key('cardCategoryPreviewContent'),
+        iconId: selectedCategoryIconId,
+        field: categoryDropdown(includeMenuIcons: true),
+      ),
+      if (selectedCategoryValue == newCategoryValue) ...[
+        const SizedBox(height: 10),
+        newCategoryEditor(),
+      ],
+    ];
+  }
+
+  Widget narrowEditorSelectionRow({
+    required Key previewKey,
+    required Key contentKey,
+    required String iconId,
+    required Widget field,
+  }) {
+    return SizedBox(
+      height: 45,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          editorSelectionIcon(
+            key: previewKey,
+            contentKey: contentKey,
+            iconId: iconId,
+          ),
+          const SizedBox(width: 5),
+          Expanded(child: field),
+        ],
+      ),
+    );
+  }
+
+  Widget cardBoundIcon({
+    double dimension = 112,
+    double iconSize = 88,
+    bool scaleOriginalToFit = false,
+  }) {
+    return Container(
+      key: const Key('cardBoundIcon'),
+      width: dimension,
+      height: dimension,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border.all(color: const Color(0xff82929d), width: 2),
+        borderRadius: BorderRadius.circular(5),
+        boxShadow: const [
+          BoxShadow(
+            color: Color(0x26000000),
+            offset: Offset(1, 2),
+            blurRadius: 5,
+          ),
+        ],
+      ),
+      child: templateIconWidget(
+        iconId,
+        size: iconSize,
+        color: pictogramColorForBackground(editorBackgroundColor),
+        scaleOriginalToFit: scaleOriginalToFit,
+      ),
+    );
+  }
+
+  Widget cardTitleEditor({bool boldValue = false}) {
+    return EnsureVisibleWhenFocused(
+      child: SizedBox(
+        height: 45,
+        child: TextField(
+          key: const Key('cardTitleField'),
+          controller: title,
+          onTap: rememberCurrentAction,
+          contextMenuBuilder: desktopCardTextContextMenu,
+          onChanged: (_) => setState(() {}),
+          style: TextStyle(
+            fontWeight: boldValue ? FontWeight.bold : FontWeight.normal,
+          ),
+          decoration: const InputDecoration(
+            labelText: 'Название карточки',
+            border: OutlineInputBorder(),
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget cardTemplateEditor({
+    required bool includeMenuIcons,
+    required bool includeSelectedIcon,
+  }) {
+    return SizedBox(
+      height: 45,
+      child: DropdownButtonFormField<String>(
+        key: const Key('cardTemplateField'),
+        isExpanded: true,
+        initialValue: templateId,
+        decoration: const InputDecoration(
+          labelText: 'Название шаблона',
+          border: OutlineInputBorder(),
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        ),
+        items: widget.templates
+            .map(
+              (entry) => DropdownMenuItem(
+                value: entry.id,
+                child: includeMenuIcons
+                    ? cardTemplateMenuLabel(entry)
+                    : Text(
+                        entry.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+              ),
+            )
+            .toList(),
+        selectedItemBuilder: includeMenuIcons && !includeSelectedIcon
+            ? (context) => [
+                  for (final entry in widget.templates)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        entry.name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ]
+            : null,
+        onChanged: (value) {
+          if (value == null || value == templateId) return;
+          rememberCurrentAction();
+          setState(() {
+            templateId = value;
+            if (widget.initial == null || widget.initial?.iconId == null) {
+              iconId = template.iconId;
+            }
+            for (final field in template.fields) {
+              values.putIfAbsent(
+                field.id,
+                () => TextEditingController(
+                  text: widget.initial?.values[field.id] ?? '',
+                ),
+              );
+            }
+            hiddenFieldIds = {};
+            fieldOrder = [for (final field in template.fields) field.id];
+          });
+        },
+      ),
+    );
+  }
+
+  void changeCardColor(String value) {
+    if (value == colorId) return;
+    rememberCurrentAction();
+    setState(() {
+      colorId = value;
+      spbColor = paletteColorToSpb(value);
+    });
+  }
+
+  Widget editorSelectionIcon({
+    required Key key,
+    required Key contentKey,
+    required String iconId,
+  }) {
+    return Align(
+      alignment: Alignment.topCenter,
+      child: Container(
+        key: key,
+        width: 41,
+        height: 41,
+        alignment: Alignment.center,
+        padding: const EdgeInsets.all(2),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xff82929d)),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: SizedBox(
+          key: contentKey,
+          width: 33,
+          height: 33,
+          child: Center(
+            child: templateIconWidget(
+              iconId,
+              size: 33,
+              color: pictogramColorForBackground(editorBackgroundColor),
+              scaleOriginalToFit: true,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String get selectedCategoryIconId {
+    final selected = selectedCategoryValue;
+    if (selected == emptyCategoryValue || selected == newCategoryValue) {
+      return 'folder';
+    }
+    return widget.categoryIcons[selected] ?? 'folder';
   }
 
   List<FieldDefinition> get orderedCardFields {
@@ -15308,14 +15578,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
             Expanded(child: textField),
             const SizedBox(width: 5),
             SizedBox(
-              width: 73,
+              key: ValueKey('cardFieldControls-${field.id}'),
+              width: 78,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Row(
                     children: [
                       SizedBox(
-                        width: 34,
+                        width: 37,
                         height: 34,
                         child: fieldOrderButton(
                           key: ValueKey('cardFieldUp-${field.id}'),
@@ -15326,9 +15597,9 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                               : null,
                         ),
                       ),
-                      const SizedBox(width: 5),
+                      const SizedBox(width: 4),
                       SizedBox(
-                        width: 34,
+                        width: 37,
                         height: 34,
                         child: fieldOrderButton(
                           key: ValueKey('cardFieldDelete-${field.id}'),
@@ -15341,7 +15612,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                   ),
                   const Spacer(),
                   SizedBox(
-                    width: 34,
+                    width: 37,
                     height: 34,
                     child: fieldOrderButton(
                       key: ValueKey('cardFieldDown-${field.id}'),
@@ -15614,75 +15885,149 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     );
   }
 
-  Widget categoryEditor() {
+  String get selectedCategoryValue {
     final dropdownValues = <String>{
       emptyCategoryValue,
       ...widget.categories,
       newCategoryValue,
     }.toList();
-    final selectedValue = dropdownValues.contains(categorySelection)
+    return dropdownValues.contains(categorySelection)
         ? categorySelection
         : newCategoryValue;
-    return Column(
-      children: [
-        SizedBox(
-          height: 45,
-          child: DropdownButtonFormField<String>(
-            isExpanded: true,
-            initialValue: selectedValue,
-            decoration: const InputDecoration(
-              labelText: 'Папка / каталог',
-              hintText: 'Место размещения карточки',
-              border: OutlineInputBorder(),
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            ),
-            items: [
-              const DropdownMenuItem(
-                value: emptyCategoryValue,
-                child: Text('Без категории'),
-              ),
-              ...widget.categories.map(
-                (entry) => DropdownMenuItem(value: entry, child: Text(entry)),
-              ),
-              const DropdownMenuItem(
-                value: newCategoryValue,
-                child: Text('Создать новую категорию'),
-              ),
-            ],
-            onChanged: (value) {
-              rememberCurrentAction();
-              setState(() {
-                categorySelection = value ?? emptyCategoryValue;
-                if (categorySelection == emptyCategoryValue) {
-                  category.clear();
-                } else if (categorySelection != newCategoryValue) {
-                  category.text = categorySelection;
-                }
-              });
-            },
-          ),
+  }
+
+  Widget categoryDropdown({required bool includeMenuIcons}) {
+    return SizedBox(
+      height: 45,
+      child: DropdownButtonFormField<String>(
+        key: const Key('cardCategoryField'),
+        isExpanded: true,
+        initialValue: selectedCategoryValue,
+        decoration: const InputDecoration(
+          labelText: 'Папка / каталог',
+          hintText: 'Место размещения карточки',
+          border: OutlineInputBorder(),
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         ),
-        if (selectedValue == newCategoryValue) ...[
-          const SizedBox(height: 10),
-          SizedBox(
-            height: 45,
-            child: TextField(
-              controller: category,
-              onTap: rememberCurrentAction,
-              contextMenuBuilder: desktopCardTextContextMenu,
-              decoration: const InputDecoration(
-                labelText: 'Новая папка / каталог',
-                hintText: 'Например: Финансы / Банк',
-                border: OutlineInputBorder(),
-                isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              ),
+        items: [
+          DropdownMenuItem(
+            value: emptyCategoryValue,
+            child: includeMenuIcons
+                ? cardCategoryMenuLabel(
+                    emptyCategoryValue,
+                    'Без категории',
+                    'folder',
+                  )
+                : const Text('Без категории'),
+          ),
+          ...widget.categories.map(
+            (entry) => DropdownMenuItem(
+              value: entry,
+              child: includeMenuIcons
+                  ? cardCategoryMenuLabel(
+                      entry,
+                      entry,
+                      widget.categoryIcons[entry] ?? 'folder',
+                    )
+                  : Text(entry),
             ),
+          ),
+          DropdownMenuItem(
+            value: newCategoryValue,
+            child: includeMenuIcons
+                ? cardCategoryMenuLabel(
+                    newCategoryValue,
+                    'Создать новую категорию',
+                    'folder',
+                  )
+                : const Text('Создать новую категорию'),
           ),
         ],
+        selectedItemBuilder: includeMenuIcons
+            ? (context) => [
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Без категории',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  for (final entry in widget.categories)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        entry,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  const Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Создать новую категорию',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ]
+            : null,
+        onChanged: (value) {
+          rememberCurrentAction();
+          setState(() {
+            categorySelection = value ?? emptyCategoryValue;
+            if (categorySelection == emptyCategoryValue) {
+              category.clear();
+            } else if (categorySelection != newCategoryValue) {
+              category.text = categorySelection;
+            }
+          });
+        },
+      ),
+    );
+  }
+
+  Widget cardCategoryMenuLabel(String value, String label, String iconId) {
+    return Row(
+      children: [
+        SizedBox(
+          key: ValueKey('cardCategoryMenuIcon-$value'),
+          width: 34,
+          height: 34,
+          child: Center(
+            child: templateIconWidget(
+              iconId,
+              size: 30,
+              color: pictogramColorForBackground(editorBackgroundColor),
+              scaleOriginalToFit: true,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+        ),
       ],
+    );
+  }
+
+  Widget newCategoryEditor() {
+    return SizedBox(
+      height: 45,
+      child: TextField(
+        key: const Key('cardNewCategoryField'),
+        controller: category,
+        onTap: rememberCurrentAction,
+        contextMenuBuilder: desktopCardTextContextMenu,
+        decoration: const InputDecoration(
+          labelText: 'Новая папка / каталог',
+          hintText: 'Например: Финансы / Банк',
+          border: OutlineInputBorder(),
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        ),
+      ),
     );
   }
 
@@ -17081,6 +17426,8 @@ class ColorPicker extends StatelessWidget {
     required this.onChanged,
     this.label = 'Цвет карточки',
     this.keyPrefix = 'cardColor',
+    this.showLabel = true,
+    this.stretch = false,
     super.key,
   });
 
@@ -17088,54 +17435,68 @@ class ColorPicker extends StatelessWidget {
   final ValueChanged<String> onChanged;
   final String label;
   final String keyPrefix;
+  final bool showLabel;
+  final bool stretch;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(label),
-        const SizedBox(height: 8),
-        Wrap(
-          spacing: 5,
-          runSpacing: 5,
-          children: [
-            for (final color in templateColorPalette)
-              Tooltip(
-                message: color.label,
-                child: InkWell(
-                  onTap: () => onChanged(color.id),
-                  borderRadius: BorderRadius.circular(4),
-                  child: Container(
-                    key: ValueKey('$keyPrefix-${color.id}'),
-                    width: 30,
-                    height: 27,
-                    decoration: BoxDecoration(
-                      color: color.bg,
-                      border: Border.all(
-                        color: color.id == value
-                            ? const Color(0xff253d4c)
-                            : const Color(0xff8b969d),
-                        width: color.id == value ? 2.5 : 1,
-                      ),
-                      borderRadius: BorderRadius.circular(4),
-                      boxShadow: const [
-                        BoxShadow(
-                          color: Color(0x1f000000),
-                          offset: Offset(1, 1),
-                          blurRadius: 2,
-                        ),
-                      ],
-                    ),
-                    child: color.id == value
-                        ? const Icon(Icons.check, size: 17)
-                        : null,
-                  ),
-                ),
-              ),
-          ],
-        ),
+        if (showLabel) ...[Text(label), const SizedBox(height: 8)],
+        if (stretch)
+          Row(
+            children: [
+              for (var index = 0;
+                  index < templateColorPalette.length;
+                  index++) ...[
+                if (index > 0) const SizedBox(width: 5),
+                Expanded(child: colorButton(templateColorPalette[index])),
+              ],
+            ],
+          )
+        else
+          Wrap(
+            spacing: 5,
+            runSpacing: 5,
+            children: [
+              for (final color in templateColorPalette)
+                SizedBox(width: 30, child: colorButton(color)),
+            ],
+          ),
       ],
+    );
+  }
+
+  Widget colorButton(PaletteColor color) {
+    return Tooltip(
+      message: color.label,
+      child: InkWell(
+        onTap: () => onChanged(color.id),
+        borderRadius: BorderRadius.circular(4),
+        child: Container(
+          key: ValueKey('$keyPrefix-${color.id}'),
+          height: 27,
+          decoration: BoxDecoration(
+            color: color.bg,
+            border: Border.all(
+              color: color.id == value
+                  ? const Color(0xff253d4c)
+                  : const Color(0xff8b969d),
+              width: color.id == value ? 2.5 : 1,
+            ),
+            borderRadius: BorderRadius.circular(4),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x1f000000),
+                offset: Offset(1, 1),
+                blurRadius: 2,
+              ),
+            ],
+          ),
+          child: color.id == value ? const Icon(Icons.check, size: 17) : null,
+        ),
+      ),
     );
   }
 }
