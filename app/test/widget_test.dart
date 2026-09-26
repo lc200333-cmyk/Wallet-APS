@@ -798,6 +798,17 @@ void main() {
       const Size(88, 88),
     );
     expect(
+      tester
+          .widget<Icon>(
+            find.descendant(
+              of: find.byKey(const Key('cardPreviewIcon')),
+              matching: find.byType(Icon),
+            ),
+          )
+          .size,
+      80,
+    );
+    expect(
       find.byKey(ValueKey('cardPreviewField-${template.fields[0].id}')),
       findsOneWidget,
     );
