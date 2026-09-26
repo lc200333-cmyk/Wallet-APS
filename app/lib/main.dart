@@ -34,6 +34,12 @@ void main(List<String> arguments) {
 }
 
 final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+final appUserActivityPulse = ValueNotifier<int>(0);
+
+void notifyAppUserActivity() {
+  appUserActivityPulse.value++;
+}
+
 const spbIconBundleAsset = 'assets/spb_icons.bundle';
 const thirdPartyIconBundleAsset = 'assets/third_party/NewIcons.zip';
 List<String> spb64PngIconAssets = [];
@@ -260,9 +266,36 @@ class WalletApsApp extends StatelessWidget {
       scaffoldMessengerKey: rootScaffoldMessengerKey,
       title: 'Wallet APS',
       debugShowCheckedModeBanner: false,
-      builder: (context, child) => child ?? const SizedBox.shrink(),
+      builder: (context, child) => AppUserActivityRegion(
+        child: child ?? const SizedBox.shrink(),
+      ),
       theme: baseTheme.copyWith(textTheme: enlargedText),
       home: VaultShell(initialVaultPath: initialVaultPath),
+    );
+  }
+}
+
+class AppUserActivityRegion extends StatelessWidget {
+  const AppUserActivityRegion({required this.child, super.key});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      behavior: HitTestBehavior.translucent,
+      onPointerDown: (_) => notifyAppUserActivity(),
+      onPointerMove: (_) => notifyAppUserActivity(),
+      onPointerHover: (_) => notifyAppUserActivity(),
+      onPointerSignal: (_) => notifyAppUserActivity(),
+      child: Focus(
+        canRequestFocus: false,
+        onKeyEvent: (_, __) {
+          notifyAppUserActivity();
+          return KeyEventResult.ignored;
+        },
+        child: child,
+      ),
     );
   }
 }
@@ -2819,6 +2852,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   bool spbContextMenuOpen = false;
   final GlobalKey spbSessionUndoButtonKey = GlobalKey();
   final GlobalKey spbSessionTrashButtonKey = GlobalKey();
+  final ScrollController spbFolderGridScrollController = ScrollController();
   final ScrollController spbFoundScrollController = ScrollController();
   final ScrollController spbFrequentScrollController = ScrollController();
   final ScrollController spbMobileActionsScrollController = ScrollController();
@@ -2923,6 +2957,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     templatesById = indexEntitiesById(templates, (template) => template.id);
     WidgetsBinding.instance.addObserver(this);
     unlocked = widget.initiallyUnlocked;
+    appUserActivityPulse.addListener(recordAppWideUserActivity);
     final initialVaultPath = widget.initialVaultPath;
     if (initialVaultPath != null && initialVaultPath.isNotEmpty) {
       spbWalletPath = initialVaultPath;
@@ -3050,6 +3085,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    appUserActivityPulse.removeListener(recordAppWideUserActivity);
     inactivityTimer?.cancel();
     inactivityCountdownTimer?.cancel();
     lockedExitTimer?.cancel();
@@ -3063,6 +3099,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     passwordController.dispose();
     confirmController.dispose();
     searchController.dispose();
+    spbFolderGridScrollController.dispose();
     spbFoundScrollController.dispose();
     spbFrequentScrollController.dispose();
     spbMobileActionsScrollController.dispose();
@@ -5295,6 +5332,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
+  Widget spbFolderGridScrollbar({
+    required bool enabled,
+    required Widget child,
+  }) {
+    if (!enabled) return child;
+    return Scrollbar(
+      key: const Key('spbFolderGridScrollbar'),
+      controller: spbFolderGridScrollController,
+      thumbVisibility: true,
+      interactive: true,
+      child: child,
+    );
+  }
+
   Widget spbResourceIcon(String fileName, double size) => spbPackedImage(
         'spb://apk_icons/res/drawable-hdpi/$fileName',
         width: size,
@@ -5348,6 +5399,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     Widget? trailing,
     double height = 34,
     bool bold = false,
+    bool alignTrailingToTitleBaseline = false,
   }) {
     return Container(
       height: height,
@@ -5364,18 +5416,41 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             leading,
             const SizedBox(width: 7),
           ],
-          Expanded(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 17,
-                fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+          if (alignTrailingToTitleBaseline && trailing != null)
+            Expanded(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Expanded(
+                    child: Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ),
+                  trailing,
+                ],
+              ),
+            )
+          else ...[
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 17,
+                  fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+                ),
               ),
             ),
-          ),
-          if (trailing != null) trailing,
+            if (trailing != null) trailing,
+          ],
         ],
       ),
     );
@@ -6090,6 +6165,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Widget buildSpbMobileShell() {
+    final modified = selectedVaultModifiedText;
     final paneTitle = mobileTemplatesOpen
         ? switch (mobilePane) {
             2 => 'Задачи',
@@ -6123,16 +6199,37 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   ),
                   const SizedBox(width: 7),
                   Expanded(
-                    child: Text(
-                      selectedVaultTitle,
-                      key: const Key('spbMobileWalletTitle'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.bold,
-                      ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.baseline,
+                      textBaseline: TextBaseline.alphabetic,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            selectedVaultTitle,
+                            key: const Key('spbMobileWalletTitle'),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        if (modified != null) ...[
+                          const SizedBox(width: 8),
+                          Text(
+                            modified,
+                            key: const Key('spbMobileVaultModified'),
+                            maxLines: 1,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 15.4,
+                              fontWeight: FontWeight.normal,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                 ],
@@ -6161,7 +6258,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         _ => buildSpbTemplateTree(),
                       }
                     : switch (mobilePane) {
-                        1 => buildSpbFolderGrid(),
+                        1 => buildSpbFolderGrid(
+                            showPersistentScrollbar: true,
+                            allowItemDragging: false,
+                          ),
                         2 => buildSpbActionsPanel(),
                         _ => buildSpbTreeBody(showWalletRoot: false),
                       },
@@ -6268,6 +6368,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Widget buildSpbNavigator() {
+    final modified = selectedVaultModifiedText;
     return Material(
       color: Colors.white,
       child: Column(
@@ -6294,6 +6395,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 fit: BoxFit.contain,
               ),
               bold: true,
+              alignTrailingToTitleBaseline: true,
+              trailing: modified == null
+                  ? null
+                  : Text(
+                      modified,
+                      key: const Key('spbDesktopVaultModified'),
+                      maxLines: 1,
+                      style: const TextStyle(
+                        fontSize: 13.6,
+                        fontWeight: FontWeight.normal,
+                      ),
+                    ),
             ),
           ),
           Expanded(
@@ -6459,6 +6572,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     int depth, {
     bool compactRows = false,
   }) {
+    // Only top-level folders in the wide navigator get a 42 px visual step:
+    // 40 px icon height plus an exact 2 px gap. Nested folders and the narrow
+    // layout keep their existing spacing.
+    final folderRowHeight =
+        compactRows && depth == 0 ? 40.0 : (depth == 0 ? 30.2 : 44.0);
     final result = <Widget>[];
     final folders = node.children.values.toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -6467,6 +6585,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         Padding(
           padding: EdgeInsets.only(left: depth * 15.0),
           child: GestureDetector(
+            key: ValueKey('spbTreeFolder-${folder.path}'),
             onSecondaryTapDown: (details) =>
                 showSpbFolderMenu(folder, details.globalPosition),
             onLongPressStart: (details) =>
@@ -6490,19 +6609,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   });
                 },
                 visualDensity: const VisualDensity(vertical: -3.25),
-                minTileHeight: compactRows ? 16.2 : 30,
+                minTileHeight: folderRowHeight,
                 tilePadding: const EdgeInsets.only(left: 6, right: 2),
                 childrenPadding: EdgeInsets.zero,
                 trailing: const SizedBox.shrink(),
                 leading: SizedBox(
                   width: 60,
-                  height: compactRows ? 18 : 30,
+                  height: folderRowHeight,
                   child: OverflowBox(
                     minWidth: 60,
                     maxWidth: 60,
                     minHeight: 40,
                     maxHeight: 40,
                     child: Row(
+                      key: ValueKey('spbTreeFolderIconRow-${folder.path}'),
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         spbExpansionMark(
@@ -6524,25 +6644,25 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTap: () => openSpbFolder(folder.path),
-                    child: Container(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 5,
-                        vertical: compactRows ? 0 : 3,
-                      ),
-                      decoration: selectedCategoryPath == folder.path
-                          ? const BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: [Color(0xffb9dcf5), Color(0xffedf7fe)],
-                              ),
-                            )
+                    child: CustomPaint(
+                      key: ValueKey('spbTreeFolderHighlight-${folder.path}'),
+                      painter: selectedCategoryPath == folder.path
+                          ? SpbFolderHighlightPainter(folderRowHeight)
                           : null,
-                      child: Text(
-                        folder.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 18.8,
-                          fontWeight: FontWeight.normal,
+                      child: Padding(
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: compactRows ? 0 : 3,
+                        ),
+                        child: Text(
+                          folder.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 18.8,
+                            height: depth == 0 ? 0.75 : null,
+                            fontWeight: FontWeight.normal,
+                          ),
                         ),
                       ),
                     ),
@@ -6959,7 +7079,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return current;
   }
 
-  Widget buildSpbFolderGrid() {
+  Widget buildSpbFolderGrid({
+    bool showPersistentScrollbar = false,
+    bool allowItemDragging = true,
+  }) {
     final searchQuery = spbSubmittedSearchQuery;
     final showingSearchResults = searchQuery.isNotEmpty;
     final root = buildCategoryTree(
@@ -7034,157 +7157,169 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   showSpbCreationMenu(details.globalPosition),
               onLongPressStart: (details) =>
                   showSpbCreationMenu(details.globalPosition),
-              child: GridView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                  maxCrossAxisExtent: 89.04,
-                  mainAxisExtent: 83.475,
-                  crossAxisSpacing: 3.975,
-                  mainAxisSpacing: 6.36,
-                ),
-                itemCount: folders.length + cards.length,
-                itemBuilder: (context, index) {
-                  if (index < folders.length) {
-                    final folder = folders[index];
-                    return buildSpbGridEntry(
-                      label: folder.name,
-                      icon: spbSizedDataIcon(
-                        folder.iconId ??
-                            defaultIconForCategoryPath(folder.path),
-                        50.25,
-                        fallbackColor: categoryPictogramColor(folder.colorId),
-                      ),
-                      onTap: () => openSpbFolder(folder.path),
-                      onContextMenu: (position) =>
-                          showSpbFolderMenu(folder, position),
-                    );
-                  }
-                  final item = cards[index - folders.length];
-                  final template = templateFor(item.templateId);
-                  final cardEntry = buildSpbGridEntry(
-                    label: item.title,
-                    labelWidth: 73.3125,
-                    selected: selectedItemId == item.id,
-                    icon: SizedBox(
-                      width: 50.25,
-                      height: 50.25,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        alignment: Alignment.center,
-                        children: [
-                          spbSizedDataIcon(
-                            itemIconId(item, template),
-                            50.25,
-                            fallbackColor: itemPictogramColor(item, template),
-                          ),
-                          if (item.attachments.any(
-                            (attachment) => !attachment.deleted,
-                          ))
-                            Positioned(
-                              key: ValueKey('cardAttachmentArrow-${item.id}'),
-                              right: 2,
-                              bottom: 2,
-                              width: 16.33125,
-                              height: 14.586,
-                              child: Stack(
-                                clipBehavior: Clip.none,
-                                children: [
-                                  for (final offset in const [
-                                    Offset(-2, 0),
-                                    Offset(2, 0),
-                                    Offset(0, -2),
-                                    Offset(0, 2),
-                                    Offset(-1.414, -1.414),
-                                    Offset(1.414, -1.414),
-                                    Offset(-1.414, 1.414),
-                                    Offset(1.414, 1.414),
-                                  ])
-                                    Transform.translate(
-                                      offset: offset,
-                                      child: Image.asset(
-                                        'assets/branding/attachment_arrow.png',
-                                        width: 16.33125,
-                                        height: 14.586,
-                                        fit: BoxFit.fill,
+              child: spbFolderGridScrollbar(
+                enabled: showPersistentScrollbar,
+                child: GridView.builder(
+                  controller: spbFolderGridScrollController,
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    10,
+                    showPersistentScrollbar ? 28 : 16,
+                    16,
+                  ),
+                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                    maxCrossAxisExtent: 89.04,
+                    mainAxisExtent: 83.475,
+                    crossAxisSpacing: 3.975,
+                    mainAxisSpacing: 6.36,
+                  ),
+                  itemCount: folders.length + cards.length,
+                  itemBuilder: (context, index) {
+                    if (index < folders.length) {
+                      final folder = folders[index];
+                      return buildSpbGridEntry(
+                        label: folder.name,
+                        icon: spbSizedDataIcon(
+                          folder.iconId ??
+                              defaultIconForCategoryPath(folder.path),
+                          50.25,
+                          fallbackColor: categoryPictogramColor(folder.colorId),
+                        ),
+                        onTap: () => openSpbFolder(folder.path),
+                        onContextMenu: (position) =>
+                            showSpbFolderMenu(folder, position),
+                      );
+                    }
+                    final item = cards[index - folders.length];
+                    final template = templateFor(item.templateId);
+                    final cardEntry = buildSpbGridEntry(
+                      label: item.title,
+                      labelWidth: 73.3125,
+                      selected: selectedItemId == item.id,
+                      icon: SizedBox(
+                        width: 50.25,
+                        height: 50.25,
+                        child: Stack(
+                          clipBehavior: Clip.none,
+                          alignment: Alignment.center,
+                          children: [
+                            spbSizedDataIcon(
+                              itemIconId(item, template),
+                              50.25,
+                              fallbackColor: itemPictogramColor(item, template),
+                            ),
+                            if (item.attachments.any(
+                              (attachment) => !attachment.deleted,
+                            ))
+                              Positioned(
+                                key: ValueKey('cardAttachmentArrow-${item.id}'),
+                                right: 2,
+                                bottom: 2,
+                                width: 16.33125,
+                                height: 14.586,
+                                child: Stack(
+                                  clipBehavior: Clip.none,
+                                  children: [
+                                    for (final offset in const [
+                                      Offset(-2, 0),
+                                      Offset(2, 0),
+                                      Offset(0, -2),
+                                      Offset(0, 2),
+                                      Offset(-1.414, -1.414),
+                                      Offset(1.414, -1.414),
+                                      Offset(-1.414, 1.414),
+                                      Offset(1.414, 1.414),
+                                    ])
+                                      Transform.translate(
+                                        offset: offset,
+                                        child: const Icon(
+                                          Icons.arrow_downward_rounded,
+                                          size: 16.33125,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ShaderMask(
+                                      blendMode: BlendMode.srcIn,
+                                      shaderCallback: (bounds) =>
+                                          const LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [
+                                          Color(0xffff4fa3),
+                                          Color(0xffe6007e),
+                                          Color(0xffa8005b),
+                                        ],
+                                      ).createShader(bounds),
+                                      child: const Icon(
+                                        Icons.arrow_downward_rounded,
+                                        size: 16.33125,
                                         color: Colors.white,
-                                        colorBlendMode: BlendMode.srcIn,
                                       ),
                                     ),
-                                  ShaderMask(
-                                    blendMode: BlendMode.srcIn,
-                                    shaderCallback: (bounds) =>
-                                        const LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: [
-                                        Color(0xffff4fa3),
-                                        Color(0xffe6007e),
-                                        Color(0xffa8005b),
-                                      ],
-                                    ).createShader(bounds),
-                                    child: Image.asset(
-                                      'assets/branding/attachment_arrow.png',
-                                      width: 16.33125,
-                                      height: 14.586,
-                                      fit: BoxFit.fill,
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
-                            ),
-                        ],
-                      ),
-                    ),
-                    onTap: () => openCardPreviewDialog(item),
-                    onContextMenu: (position) =>
-                        showSpbCardMenu(item, position),
-                  );
-                  return KeyedSubtree(
-                    key: ValueKey('spbCentralCard-${item.id}'),
-                    child: Draggable<SecretItem>(
-                      data: item,
-                      maxSimultaneousDrags: spbWallet == null ? 0 : 1,
-                      dragAnchorStrategy: pointerDragAnchorStrategy,
-                      feedback: Material(
-                        color: Colors.transparent,
-                        child: Container(
-                          width: 104,
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xffedf7fe),
-                            border: Border.all(color: const Color(0xff367ca8)),
-                            boxShadow: const [
-                              BoxShadow(color: Colors.black26, blurRadius: 6),
-                            ],
-                          ),
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              spbSizedDataIcon(
-                                itemIconId(item, template),
-                                42,
-                                fallbackColor:
-                                    itemPictogramColor(item, template),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                item.title,
-                                maxLines: 2,
-                                overflow: TextOverflow.ellipsis,
-                                textAlign: TextAlign.center,
-                              ),
-                            ],
-                          ),
+                          ],
                         ),
                       ),
-                      childWhenDragging: Opacity(
-                        opacity: 0.35,
-                        child: cardEntry,
-                      ),
-                      child: cardEntry,
-                    ),
-                  );
-                },
+                      onTap: () => openCardPreviewDialog(item),
+                      onContextMenu: (position) =>
+                          showSpbCardMenu(item, position),
+                    );
+                    return KeyedSubtree(
+                      key: ValueKey('spbCentralCard-${item.id}'),
+                      child: allowItemDragging
+                          ? Draggable<SecretItem>(
+                              data: item,
+                              maxSimultaneousDrags: spbWallet == null ? 0 : 1,
+                              dragAnchorStrategy: pointerDragAnchorStrategy,
+                              feedback: Material(
+                                color: Colors.transparent,
+                                child: Container(
+                                  width: 104,
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xffedf7fe),
+                                    border: Border.all(
+                                      color: const Color(0xff367ca8),
+                                    ),
+                                    boxShadow: const [
+                                      BoxShadow(
+                                        color: Colors.black26,
+                                        blurRadius: 6,
+                                      ),
+                                    ],
+                                  ),
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      spbSizedDataIcon(
+                                        itemIconId(item, template),
+                                        42,
+                                        fallbackColor:
+                                            itemPictogramColor(item, template),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        item.title,
+                                        maxLines: 2,
+                                        overflow: TextOverflow.ellipsis,
+                                        textAlign: TextAlign.center,
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                              childWhenDragging: Opacity(
+                                opacity: 0.35,
+                                child: cardEntry,
+                              ),
+                              child: cardEntry,
+                            )
+                          : cardEntry,
+                    );
+                  },
+                ),
               ),
             ),
           ),
@@ -7763,34 +7898,54 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool selected = false,
     double labelWidth = 63.75,
   }) {
-    return GestureDetector(
-      onSecondaryTapDown: (details) =>
-          openSpbObjectContextMenu(onContextMenu, details.globalPosition),
-      onLongPressStart: (details) =>
-          openSpbObjectContextMenu(onContextMenu, details.globalPosition),
-      child: InkWell(
-        onTap: onTap,
-        onDoubleTap: onDoubleTap,
-        child: Container(
-          decoration: selected
-              ? const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xffb9dcf5), Color(0xffedf7fe)],
-                  ),
-                )
-              : null,
-          child: OverflowBox(
-            alignment: Alignment.topCenter,
-            minWidth: 112,
-            maxWidth: 112,
-            minHeight: 105,
-            maxHeight: 105,
-            child: Column(
-              children: [
-                SizedBox(width: 68, height: 67, child: Center(child: icon)),
-                const SizedBox(height: 2),
-                SizedBox(
-                  width: labelWidth,
+    const selectedDecoration = BoxDecoration(
+      gradient: LinearGradient(
+        colors: [Color(0xffb9dcf5), Color(0xffedf7fe)],
+      ),
+    );
+    Widget interactiveRegion(Widget child) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onSecondaryTapDown: (details) => openSpbObjectContextMenu(
+            onContextMenu,
+            details.globalPosition,
+          ),
+          onLongPressStart: (details) => openSpbObjectContextMenu(
+            onContextMenu,
+            details.globalPosition,
+          ),
+          child: InkWell(
+            onTap: onTap,
+            onDoubleTap: onDoubleTap,
+            child: child,
+          ),
+        );
+    return OverflowBox(
+      alignment: Alignment.topCenter,
+      minWidth: 112,
+      maxWidth: 112,
+      minHeight: 105,
+      maxHeight: 105,
+      child: Column(
+        children: [
+          interactiveRegion(
+            SizedBox(
+              width: 68,
+              height: 67,
+              child: Center(
+                child: Container(
+                  decoration: selected ? selectedDecoration : null,
+                  child: icon,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 2),
+          interactiveRegion(
+            SizedBox(
+              width: labelWidth,
+              child: Center(
+                child: Container(
+                  decoration: selected ? selectedDecoration : null,
                   child: Text(
                     label,
                     maxLines: 2,
@@ -7799,10 +7954,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     style: const TextStyle(fontSize: 14.3, height: 1.05),
                   ),
                 ),
-              ],
+              ),
             ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -9251,6 +9406,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       const Duration(minutes: 5),
       () => unawaited(exitApplication()),
     );
+  }
+
+  void recordAppWideUserActivity() {
+    if (unlocked) {
+      recordUserActivity();
+    } else {
+      recordLockedUserActivity();
+    }
   }
 
   Future<void> showLockedExitWarning() async {
@@ -12543,6 +12706,31 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       showSpbOperationMessage('Не удалось сохранить базу: $error');
     }
   }
+}
+
+class SpbFolderHighlightPainter extends CustomPainter {
+  const SpbFolderHighlightPainter(this.highlightHeight);
+
+  final double highlightHeight;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Rect.fromLTWH(
+      0,
+      (size.height - highlightHeight) / 2,
+      size.width,
+      highlightHeight,
+    );
+    final paint = Paint()
+      ..shader = const LinearGradient(
+        colors: [Color(0xffb9dcf5), Color(0xffedf7fe)],
+      ).createShader(rect);
+    canvas.drawRect(rect, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant SpbFolderHighlightPainter oldDelegate) =>
+      oldDelegate.highlightHeight != highlightHeight;
 }
 
 class _Spb3dArrowButton extends StatelessWidget {
