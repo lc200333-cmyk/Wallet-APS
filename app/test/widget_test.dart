@@ -1809,6 +1809,33 @@ void main() {
           tester.getCenter(firstNestedFolder).dy,
       greaterThanOrEqualTo(40),
     );
+
+    final treeFolderTitle = tester.widget<Text>(
+      find.descendant(
+        of: firstFolderFinder,
+        matching: find.text('Folder spacing A'),
+      ),
+    );
+    expect(treeFolderTitle.style?.fontWeight, FontWeight.normal);
+
+    state.setState(() => state.selectedCategoryPath = '');
+    await tester.pumpAndSettle();
+    final centralFolderTitle = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(const Key('spbCentralWorkspace')),
+        matching: find.text('Folder spacing A'),
+      ),
+    );
+    expect(centralFolderTitle.style?.fontWeight, FontWeight.bold);
+
+    await tester.tap(firstFolderFinder, buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('deleteFolderContextAction')),
+      findsOneWidget,
+    );
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
   });
 
   testWidgets('narrow top-level folder spacing stays unchanged',
@@ -2693,6 +2720,34 @@ void main() {
     final cancel = find.byKey(const Key('cancelDeleteCardButton'));
     final confirm = find.byKey(const Key('confirmDeleteCardButton'));
     expect(find.text('Удалить карточку'), findsOneWidget);
+    expect(cancel, findsOneWidget);
+    expect(confirm, findsOneWidget);
+    expect(tester.getSize(cancel), const Size(124, 48));
+    expect(tester.getSize(confirm), const Size(124, 48));
+
+    await tester.tap(cancel);
+    await tester.pumpAndSettle();
+    expect(confirm, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('delete folder confirmation matches card delete design',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final folder = CategoryTreeNode('Удаляемая папка', path: 'Удаляемая папка');
+
+    unawaited(state.confirmDeleteCategory(folder));
+    await tester.pumpAndSettle();
+
+    final cancel = find.byKey(const Key('cancelDeleteFolderButton'));
+    final confirm = find.byKey(const Key('confirmDeleteFolderButton'));
+    expect(find.text('Удалить папку'), findsOneWidget);
     expect(cancel, findsOneWidget);
     expect(confirm, findsOneWidget);
     expect(tester.getSize(cancel), const Size(124, 48));

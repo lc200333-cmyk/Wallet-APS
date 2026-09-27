@@ -6250,6 +6250,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 ],
               ),
             ),
+            if (mobilePane == 0 && mobileTemplatesOpen)
+              buildSpbModeButton(
+                label: 'Мои карточки',
+                iconFile: 'icon_wallets.png',
+                selected: false,
+                onTap: showSpbCardsMode,
+              ),
             buildSpbSearchBar(mobile: true),
             if (mobilePane == 0)
               GestureDetector(
@@ -6283,12 +6290,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               ),
             ),
             if (mobilePane == 0) ...[
-              buildSpbModeButton(
-                label: 'Мои карточки',
-                iconFile: 'icon_wallets.png',
-                selected: !mobileTemplatesOpen,
-                onTap: showSpbCardsMode,
-              ),
+              if (!mobileTemplatesOpen)
+                buildSpbModeButton(
+                  label: 'Мои карточки',
+                  iconFile: 'icon_wallets.png',
+                  selected: true,
+                  onTap: showSpbCardsMode,
+                ),
               buildSpbModeButton(
                 label: 'Шаблоны',
                 iconFile: 'icon_templates.png',
@@ -6424,17 +6432,25 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     ),
             ),
           ),
+          if (mobileTemplatesOpen)
+            buildSpbModeButton(
+              label: 'Мои карточки',
+              iconFile: 'icon_wallets.png',
+              selected: false,
+              onTap: showSpbCardsMode,
+            ),
           Expanded(
             child: mobileTemplatesOpen
                 ? buildSpbTemplateTree(compactRows: true)
                 : buildSpbTreeBody(compactRows: true, showWalletRoot: false),
           ),
-          buildSpbModeButton(
-            label: 'Мои карточки',
-            iconFile: 'icon_wallets.png',
-            selected: !mobileTemplatesOpen,
-            onTap: showSpbCardsMode,
-          ),
+          if (!mobileTemplatesOpen)
+            buildSpbModeButton(
+              label: 'Мои карточки',
+              iconFile: 'icon_wallets.png',
+              selected: true,
+              onTap: showSpbCardsMode,
+            ),
           buildSpbModeButton(
             label: 'Шаблоны',
             iconFile: 'icon_templates.png',
@@ -7151,7 +7167,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             style: const TextStyle(
                               color: Color(0xff18364d),
                               fontSize: 18,
-                              fontWeight: FontWeight.normal,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
@@ -7203,6 +7219,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         onTap: () => openSpbFolder(folder.path),
                         onContextMenu: (position) =>
                             showSpbFolderMenu(folder, position),
+                        boldLabel: true,
                       );
                     }
                     final item = cards[index - folders.length];
@@ -7528,6 +7545,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             value: 'import',
             child: Text('Импортировать'),
           ),
+          PopupMenuItem(
+            key: Key('deleteFolderContextAction'),
+            value: 'delete',
+            child: Text('Удалить'),
+          ),
         ],
       );
     } finally {
@@ -7562,6 +7584,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         break;
       case 'import':
         await importSpbWalletCards();
+        break;
+      case 'delete':
+        await deleteCategoryWithConfirmation(folder);
         break;
     }
   }
@@ -7912,6 +7937,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required ValueChanged<Offset> onContextMenu,
     bool selected = false,
     double labelWidth = 63.75,
+    bool boldLabel = false,
   }) {
     const selectedDecoration = BoxDecoration(
       gradient: LinearGradient(
@@ -7966,7 +7992,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(fontSize: 14.3, height: 1.05),
+                    style: TextStyle(
+                      fontSize: 14.3,
+                      height: 1.05,
+                      fontWeight:
+                          boldLabel ? FontWeight.bold : FontWeight.normal,
+                    ),
                   ),
                 ),
               ),
@@ -11143,19 +11174,35 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Future<bool?> confirmDeleteCategory(CategoryTreeNode folder) {
     return showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Удалить папку?'),
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        title: const Text('Удалить папку'),
         content: Text(
           'Папка "${folder.name}", ее подпапки и все карточки внутри будут удалены.',
         ),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Отмена'),
+          SizedBox(
+            width: 124,
+            child: passwordKey(
+              key: const Key('cancelDeleteFolderButton'),
+              label: 'Отмена',
+              height: 40,
+              fontSize: 18,
+              onPressed: () => Navigator.pop(dialogContext, false),
+            ),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Удалить'),
+          SizedBox(
+            width: 124,
+            child: passwordKey(
+              key: const Key('confirmDeleteFolderButton'),
+              label: 'Удалить',
+              height: 40,
+              fontSize: 18,
+              top: const Color(0xffe04b3f),
+              bottom: const Color(0xff8f1515),
+              onPressed: () => Navigator.pop(dialogContext, true),
+            ),
           ),
         ],
       ),
