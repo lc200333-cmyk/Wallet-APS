@@ -107,7 +107,7 @@ void main() {
         const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
       );
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('spbMobilePaneHeader')), findsOneWidget);
+      expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
       expect(find.byKey(const Key('spbClearSearchButton')), findsNothing);
       expectInsideViewport(
         tester,
@@ -149,7 +149,7 @@ void main() {
         const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
       );
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('spbMobilePaneHeader')), findsOneWidget);
+      expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
       expect(find.byKey(const Key('spbClearSearchButton')), findsNothing);
       expect(find.byKey(const Key('spbSubmitSearchButton')), findsOneWidget);
       expect(tester.takeException(), isNull, reason: profile.name);

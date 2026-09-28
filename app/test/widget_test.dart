@@ -38,9 +38,9 @@ void main() {
       (tester) async {
     final icons = await loadThirdPartyIconAssets();
 
-    expect(icons, hasLength(957));
-    expect(icons, contains('third-party://NewIcons/Icons0001.png'));
-    expect(icons, contains('third-party://NewIcons/Icons0957.png'));
+    expect(icons, hasLength(1103));
+    expect(icons, contains('third-party://NewIcons/1.1-Bank-Account.png'));
+    expect(icons, contains('third-party://NewIcons/Ziraat_Bank_3.png'));
     expect(thirdPartyIconPngs[icons.first], isNotEmpty);
   });
   test('selected template icon survives the stored IconID round trip', () {
@@ -1840,8 +1840,12 @@ void main() {
 
   testWidgets('narrow top-level folder spacing stays unchanged',
       (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await tester.binding.setSurfaceSize(const Size(390, 800));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
 
     await tester.pumpWidget(
       const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
@@ -1882,6 +1886,16 @@ void main() {
       (highlight.painter as SpbFolderHighlightPainter).highlightHeight,
       30.2,
     );
+
+    await tester.longPress(folder);
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('deleteFolderContextAction')),
+      findsOneWidget,
+    );
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('narrow Windows center pane disables card dragging',
@@ -2002,7 +2016,7 @@ void main() {
       closeTo(tester.getTopRight(tabletSearch).dx + 5, 0.1),
     );
 
-    expect(find.text('Мои карточки'), findsNWidgets(2));
+    expect(find.text('Мои карточки'), findsOneWidget);
     expect(find.text('Шаблоны'), findsOneWidget);
     expect(find.text('Задачи'), findsNothing);
     expect(find.text('−'), findsNothing);
@@ -2017,8 +2031,10 @@ void main() {
     expect(find.byKey(const Key('mobilePaneBack')), findsOneWidget);
     expect(find.byKey(const Key('mobileFolderUp')), findsOneWidget);
     expect(find.byKey(const Key('mobilePaneForward')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('spbMobilePaneHeader')));
+    expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
+    await tester.tap(find.byKey(const Key('mobilePaneForward')));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('spbCentralWorkspace')), findsOneWidget);
     expect(find.byKey(const Key('mobilePaneBack')), findsOneWidget);
     expect(find.byKey(const Key('mobilePaneForward')), findsOneWidget);
     await tester.tap(find.byKey(const Key('mobilePaneForward')));
@@ -2036,7 +2052,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('mobilePaneBack')));
     await tester.pumpAndSettle();
-    expect(find.text('Мои карточки'), findsNWidgets(2));
+    expect(find.text('Мои карточки'), findsOneWidget);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
     await tester.binding.setSurfaceSize(null);
@@ -2233,8 +2249,7 @@ void main() {
         const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
       );
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('spbMobilePaneHeader')), findsOneWidget,
-          reason: 'Размер $size должен использовать мобильную компоновку.');
+      expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
       expect(find.byKey(const Key('spbMobileWalletTitle')), findsOneWidget);
       expect(find.byKey(const Key('spbMobileAppIcon')), findsOneWidget);
       expect(tester.takeException(), isNull, reason: 'Размер $size');
@@ -2246,7 +2261,7 @@ void main() {
       const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
     );
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('spbMobilePaneHeader')), findsOneWidget);
+    expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
     expect(find.byKey(const Key('spbNavigatorSplitter')), findsNothing);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
@@ -2269,7 +2284,15 @@ void main() {
     await tester.tap(find.text('Шаблоны'));
     await tester.pumpAndSettle();
     // Первая панель содержит список шаблонов.
-    expect(find.text('Шаблоны'), findsNWidgets(2));
+    expect(find.text('Шаблоны'), findsOneWidget);
+    expect(find.text('Мои карточки'), findsOneWidget);
+    expect(
+      tester.getCenter(find.text('Мои карточки')).dy,
+      greaterThan(
+        tester.getCenter(find.byKey(const Key('spbSearchInput'))).dy,
+      ),
+    );
+    expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
     final templateTreeEntries = find.byWidgetPredicate(
       (widget) =>
           widget.key is ValueKey<String> &&
@@ -2731,7 +2754,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('delete folder confirmation matches card delete design',
+  testWidgets('delete folder confirmation uses green and red standard buttons',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2750,13 +2773,100 @@ void main() {
     expect(find.text('Удалить папку'), findsOneWidget);
     expect(cancel, findsOneWidget);
     expect(confirm, findsOneWidget);
-    expect(tester.getSize(cancel), const Size(124, 48));
-    expect(tester.getSize(confirm), const Size(124, 48));
+    expect(tester.getSize(cancel), const Size(48, 48));
+    expect(tester.getSize(confirm), const Size(48, 48));
+    expect(
+      tester.widget<SpbGradientActionButton>(confirm).colors,
+      const [Color(0xff43a047), Color(0xff1b5e20)],
+    );
+    expect(
+      tester.widget<SpbGradientActionButton>(cancel).colors,
+      const [Color(0xffd32b31), Color(0xff7f0609)],
+    );
+    expect(tester.getCenter(confirm).dx, lessThan(tester.getCenter(cancel).dx));
 
     await tester.tap(cancel);
     await tester.pumpAndSettle();
     expect(confirm, findsNothing);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('SWL export uses green confirm and red cancel buttons',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+
+    final Future<String?> result = state.askSpbExportPassword();
+    await tester.pumpAndSettle();
+
+    final confirm = find.byKey(const Key('confirmExportSwlButton'));
+    final cancel = find.byKey(const Key('cancelExportSwlButton'));
+    expect(confirm, findsOneWidget);
+    expect(cancel, findsOneWidget);
+    expect(tester.getSize(confirm), const Size(48, 48));
+    expect(tester.getSize(cancel), const Size(48, 48));
+    expect(
+      tester.widget<SpbGradientActionButton>(confirm).colors,
+      const [Color(0xff43a047), Color(0xff1b5e20)],
+    );
+    expect(
+      tester.widget<SpbGradientActionButton>(cancel).colors,
+      const [Color(0xffd32b31), Color(0xff7f0609)],
+    );
+
+    await tester.tap(cancel);
+    await tester.pumpAndSettle();
+    expect(await result, isNull);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('icon upload confirmation uses standard actions on narrow Android',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    await tester.binding.setSurfaceSize(const Size(390, 800));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    await loadThirdPartyIconAssets();
+    final bytes = thirdPartyIconPngs.values.first;
+    final dialogResult = showUserIconUploadConfirmation(
+      tester.element(find.byType(VaultShell)),
+      bytes: bytes,
+      fileName: 'uploaded-icon.png',
+    );
+    await tester.pumpAndSettle();
+
+    final confirm = find.byKey(const Key('confirmIconUploadButton'));
+    final cancel = find.byKey(const Key('cancelIconUploadButton'));
+    expect(find.byKey(const Key('iconUploadConfirmationDialog')), findsOneWidget);
+    expect(confirm, findsOneWidget);
+    expect(cancel, findsOneWidget);
+    expect(tester.getSize(confirm), const Size(48, 48));
+    expect(tester.getSize(cancel), const Size(48, 48));
+    expect(
+      tester.widget<SpbGradientActionButton>(confirm).colors,
+      const [Color(0xff43a047), Color(0xff1b5e20)],
+    );
+    expect(
+      tester.widget<SpbGradientActionButton>(cancel).colors,
+      const [Color(0xffd32b31), Color(0xff7f0609)],
+    );
+
+    await tester.tap(cancel);
+    await tester.pumpAndSettle();
+    expect(await dialogResult, isFalse);
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('login error is shown below all action buttons', (tester) async {

@@ -1892,9 +1892,17 @@ Future<({Uint8List bytes, String fileName})?> pickUserIconFile(
     }
     final pngBytes = normalizeUserIconPng(decoded);
     final baseName = file.name.replaceFirst(RegExp(r'\.[^.]+$'), '');
+    final fileName = '${baseName.isEmpty ? 'icon' : baseName}.png';
+    if (!context.mounted) return null;
+    final confirmed = await showUserIconUploadConfirmation(
+      context,
+      bytes: pngBytes,
+      fileName: fileName,
+    );
+    if (!confirmed) return null;
     return (
       bytes: pngBytes,
-      fileName: '${baseName.isEmpty ? 'icon' : baseName}.png',
+      fileName: fileName,
     );
   } catch (error) {
     if (context.mounted) {
@@ -1904,6 +1912,63 @@ Future<({Uint8List bytes, String fileName})?> pickUserIconFile(
     }
     return null;
   }
+}
+
+Future<bool> showUserIconUploadConfirmation(
+  BuildContext context, {
+  required Uint8List bytes,
+  required String fileName,
+}) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      key: const Key('iconUploadConfirmationDialog'),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      title: const Text('Загрузить иконку'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 136,
+            height: 136,
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: const Color(0xff82929d)),
+              borderRadius: BorderRadius.circular(5),
+            ),
+            child: Image.memory(bytes, fit: BoxFit.contain),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            fileName,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+      actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+      actions: [
+        SpbGradientActionButton(
+          key: const Key('confirmIconUploadButton'),
+          icon: Icons.check,
+          tooltip: 'Загрузить иконку',
+          colors: const [Color(0xff43a047), Color(0xff1b5e20)],
+          onTap: () => Navigator.pop(dialogContext, true),
+        ),
+        const SizedBox(width: 8),
+        SpbGradientActionButton(
+          key: const Key('cancelIconUploadButton'),
+          icon: Icons.close,
+          tooltip: 'Отмена',
+          colors: const [Color(0xffd32b31), Color(0xff7f0609)],
+          onTap: () => Navigator.pop(dialogContext, false),
+        ),
+      ],
+    ),
+  );
+  return confirmed == true;
 }
 
 String attachmentMimeType(String fileName) {
@@ -6181,18 +6246,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget buildSpbMobileShell() {
     final modified = selectedVaultModifiedText;
-    final paneTitle = mobileTemplatesOpen
-        ? switch (mobilePane) {
-            2 => 'Задачи',
-            _ => 'Шаблоны',
-          }
-        : switch (mobilePane) {
-            1 => selectedCategoryPath.isEmpty
-                ? selectedVaultTitle
-                : categoryParts(selectedCategoryPath).last,
-            2 => 'Задачи',
-            _ => 'Мои карточки',
-          };
     return Scaffold(
       backgroundColor: Colors.white,
       body: SafeArea(
@@ -6250,26 +6303,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 ],
               ),
             ),
+            buildSpbSearchBar(mobile: true),
             if (mobilePane == 0 && mobileTemplatesOpen)
               buildSpbModeButton(
                 label: 'Мои карточки',
                 iconFile: 'icon_wallets.png',
                 selected: false,
                 onTap: showSpbCardsMode,
-              ),
-            buildSpbSearchBar(mobile: true),
-            if (mobilePane == 0)
-              GestureDetector(
-                key: const Key('spbMobilePaneHeader'),
-                behavior: HitTestBehavior.opaque,
-                onTap: mobileTemplatesOpen
-                    ? null
-                    : () => setState(() {
-                          selectedCategoryPath = '';
-                          selectedCategoryId = null;
-                          mobilePane = 1;
-                        }),
-                child: spbSectionHeader(paneTitle, height: 42),
               ),
             Expanded(
               child: spbWorkspaceScrollbarTheme(
@@ -8018,13 +8058,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Future<String?> askSpbExportPassword() async {
-    final controller = TextEditingController();
+    var password = '';
     final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
         title: const Text('Экспорт в SWL'),
-        content: TextField(
-          controller: controller,
+        content: TextFormField(
           autofocus: true,
           obscureText: true,
           enableSuggestions: false,
@@ -8034,22 +8074,29 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             helperText: 'Оставьте поле пустым для экспорта без пароля',
             border: OutlineInputBorder(),
           ),
-          onSubmitted: (_) => Navigator.pop(dialogContext, controller.text),
+          onChanged: (value) => password = value,
+          onFieldSubmitted: (value) => Navigator.pop(dialogContext, value),
         ),
+        actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Отмена'),
+          SpbGradientActionButton(
+            key: const Key('confirmExportSwlButton'),
+            icon: Icons.check,
+            tooltip: 'Экспортировать',
+            colors: const [Color(0xff43a047), Color(0xff1b5e20)],
+            onTap: () => Navigator.pop(dialogContext, password),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(dialogContext, controller.text),
-            child: const Text('Экспорт'),
+          const SizedBox(width: 8),
+          SpbGradientActionButton(
+            key: const Key('cancelExportSwlButton'),
+            icon: Icons.close,
+            tooltip: 'Отмена',
+            colors: const [Color(0xffd32b31), Color(0xff7f0609)],
+            onTap: () => Navigator.pop(dialogContext),
           ),
         ],
       ),
     );
-    controller.clear();
-    controller.dispose();
     return result;
   }
 
@@ -11182,27 +11229,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ),
         actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
         actions: [
-          SizedBox(
-            width: 124,
-            child: passwordKey(
-              key: const Key('cancelDeleteFolderButton'),
-              label: 'Отмена',
-              height: 40,
-              fontSize: 18,
-              onPressed: () => Navigator.pop(dialogContext, false),
-            ),
+          SpbGradientActionButton(
+            key: const Key('confirmDeleteFolderButton'),
+            icon: Icons.check,
+            tooltip: 'Удалить папку',
+            colors: const [Color(0xff43a047), Color(0xff1b5e20)],
+            onTap: () => Navigator.pop(dialogContext, true),
           ),
-          SizedBox(
-            width: 124,
-            child: passwordKey(
-              key: const Key('confirmDeleteFolderButton'),
-              label: 'Удалить',
-              height: 40,
-              fontSize: 18,
-              top: const Color(0xffe04b3f),
-              bottom: const Color(0xff8f1515),
-              onPressed: () => Navigator.pop(dialogContext, true),
-            ),
+          const SizedBox(width: 8),
+          SpbGradientActionButton(
+            key: const Key('cancelDeleteFolderButton'),
+            icon: Icons.close,
+            tooltip: 'Отмена',
+            colors: const [Color(0xffd32b31), Color(0xff7f0609)],
+            onTap: () => Navigator.pop(dialogContext, false),
           ),
         ],
       ),
