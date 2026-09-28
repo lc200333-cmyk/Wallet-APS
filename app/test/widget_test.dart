@@ -36,6 +36,11 @@ Offset textOffsetPosition(
 void main() {
   testWidgets('replacement third-party icon bundle is available',
       (tester) async {
+    addTearDown(() {
+      thirdPartyIconAssetsFuture = null;
+      thirdPartyIconAssets = [];
+      thirdPartyIconPngs = {};
+    });
     final icons = await loadThirdPartyIconAssets();
 
     expect(icons, hasLength(1103));
@@ -223,6 +228,11 @@ void main() {
 
   testWidgets('wide card editor matches the compact reference header layout',
       (tester) async {
+    addTearDown(() {
+      thirdPartyIconAssetsFuture = null;
+      thirdPartyIconAssets = [];
+      thirdPartyIconPngs = {};
+    });
     await tester.binding.setSurfaceSize(const Size(720, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -481,6 +491,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('thirdPartyIconSearch')), findsNothing);
     expect(tester.takeException(), isNull);
+    final thirdPartyDialog = find.byKey(
+      const Key('thirdPartyIconPickerDialog'),
+    );
+    await tester.tap(
+      find.descendant(
+        of: thirdPartyDialog,
+        matching: find.byType(TextButton),
+      ),
+    );
+    await tester.pumpAndSettle();
   });
 
   testWidgets('narrow card editor matches the adaptive reference layout',
@@ -2866,6 +2886,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(await dialogResult, isFalse);
     expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
     debugDefaultTargetPlatformOverride = null;
   });
 
