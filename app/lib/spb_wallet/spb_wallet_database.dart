@@ -895,6 +895,25 @@ class SpbWalletDatabase {
     );
   }
 
+  String loadExportedFolderPath() {
+    _ensureLegacyStateTable();
+    final rows = _db.select(
+      'SELECT StateValue FROM actitpass_State WHERE StateKey = ? LIMIT 1',
+      ['wallet_aps_exported_folder_path'],
+    );
+    return rows.isEmpty ? '' : _string(rows.first['StateValue']);
+  }
+
+  void saveExportedFolderPath(String path) {
+    _ensureLegacyStateTable();
+    final value = path.trim();
+    if (value.isEmpty) return;
+    _db.execute(
+      'INSERT OR REPLACE INTO actitpass_State (StateKey, StateValue) VALUES (?, ?)',
+      ['wallet_aps_exported_folder_path', value],
+    );
+  }
+
   void _ensureLegacyStateTable() {
     _db.execute('''
 CREATE TABLE IF NOT EXISTS actitpass_State (

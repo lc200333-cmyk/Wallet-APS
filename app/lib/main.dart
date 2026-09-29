@@ -2770,6 +2770,32 @@ String? normalizeNewVaultDirectorySelection(
   return entityType == FileSystemEntityType.directory ? path : null;
 }
 
+Map<String, String> parseWindowsSubstMappings(String output) {
+  final result = <String, String>{};
+  final pattern = RegExp(r'^([A-Za-z]):\\:\s*=>\s*(.+)$');
+  for (final line in output.split(RegExp(r'\r?\n'))) {
+    final match = pattern.firstMatch(line.trim());
+    if (match == null) continue;
+    result[match.group(1)!.toUpperCase()] = match.group(2)!.trim();
+  }
+  return result;
+}
+
+String? resolveWindowsSubstPath(
+  String path,
+  Map<String, String> mappings,
+) {
+  if (path.length < 3 || path[1] != ':' || !r'\/'.contains(path[2])) {
+    return null;
+  }
+  final target = mappings[path[0].toUpperCase()];
+  if (target == null || target.isEmpty) return null;
+  final root =
+      target.endsWith('\\') ? target.substring(0, target.length - 1) : target;
+  final relative = path.substring(3).replaceAll('/', '\\');
+  return relative.isEmpty ? root : '$root\\$relative';
+}
+
 int passwordStrengthScore(String password) {
   if (password.isEmpty) {
     return 0;
@@ -2913,11 +2939,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   String templateSearchQuery = '';
   String sortMode = 'modified_desc';
   String? selectedItemId;
+  final Set<String> selectedItemIds = {};
   final List<String> recentlyOpenedItemIds = [];
   String selectedCategoryPath = '';
   String? selectedCategoryId;
   bool mobileTemplatesOpen = false;
   String? selectedTemplateId;
+  final Set<String> selectedTemplateIds = {};
   int mobilePane = 0;
   bool rootTreeExpanded = true;
   final Set<String> expandedCategoryPaths = {};
@@ -2933,6 +2961,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   final GlobalKey spbSessionUndoButtonKey = GlobalKey();
   final GlobalKey spbSessionTrashButtonKey = GlobalKey();
   final ScrollController spbFolderGridScrollController = ScrollController();
+  final GlobalKey spbCardMarqueeWorkspaceKey = GlobalKey();
+  final Map<String, GlobalKey> spbGridEntryKeys = {};
+  Offset? spbCardMarqueeStartGlobal;
+  Offset? spbCardMarqueeCurrentGlobal;
+  final Set<String> spbCardMarqueeBaseSelection = {};
   final ScrollController spbFoundScrollController = ScrollController();
   final ScrollController spbFrequentScrollController = ScrollController();
   final ScrollController spbMobileActionsScrollController = ScrollController();
@@ -5086,6 +5119,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         .toList();
     templatesById = indexEntitiesById(templates, (template) => template.id);
     itemsById = indexEntitiesById(items, (item) => item.id);
+    selectedItemIds.removeWhere((id) => !itemsById.containsKey(id));
+    selectedTemplateIds.removeWhere((id) => !templatesById.containsKey(id));
     categoryIconsByPath = spbCategoryIconsToUi(snapshot.categories)
       ..removeWhere((path, _) => isPathInSessionTrash(path));
     categoryColorsByPath = spbCategoryColorsToUi(snapshot.categories)
@@ -6764,7 +6799,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             onLongPressStart: (details) =>
                 showSpbCardMenu(item, details.globalPosition),
             child: ListTile(
-              selected: selectedItemId == item.id,
+              selected: selectedItemIds.contains(item.id) ||
+                  selectedItemId == item.id,
               selectedTileColor: const Color(0xffcfe9fb),
               dense: true,
               visualDensity: const VisualDensity(vertical: -3.25),
@@ -6791,13 +6827,188 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(fontSize: 17),
               ),
-              onTap: () => openCardPreviewDialog(item),
+              onTap: () => selectSpbCardFromPrimaryClick(item),
             ),
           ),
         ),
       );
     }
     return result;
+  }
+
+  bool get spbWideMultiSelectEnabled => MediaQuery.sizeOf(context).width >= 700;
+
+  GlobalKey spbGridEntryKey(String id) =>
+      spbGridEntryKeys.putIfAbsent(id, GlobalKey.new);
+
+  Rect? spbGlobalRectForKey(GlobalKey key) {
+    final renderObject = key.currentContext?.findRenderObject();
+    if (renderObject is! RenderBox || !renderObject.hasSize) return null;
+    return renderObject.localToGlobal(Offset.zero) & renderObject.size;
+  }
+
+  void beginSpbCardMarquee(PointerDownEvent event) {
+    if (!spbWideMultiSelectEnabled ||
+        event.kind != PointerDeviceKind.mouse ||
+        event.buttons != kPrimaryMouseButton) {
+      return;
+    }
+    final startedOnEntry = spbGridEntryKeys.values.any(
+      (key) => spbGlobalRectForKey(key)?.contains(event.position) ?? false,
+    );
+    if (startedOnEntry) return;
+    setState(() {
+      spbCardMarqueeStartGlobal = event.position;
+      spbCardMarqueeCurrentGlobal = event.position;
+      spbCardMarqueeBaseSelection
+        ..clear()
+        ..addAll(HardwareKeyboard.instance.isControlPressed
+            ? selectedItemIds
+            : const <String>{});
+      selectedItemIds
+        ..clear()
+        ..addAll(spbCardMarqueeBaseSelection);
+      selectedItemId = selectedItemIds.firstOrNull;
+    });
+  }
+
+  void updateSpbCardMarquee(PointerMoveEvent event, List<SecretItem> cards) {
+    final start = spbCardMarqueeStartGlobal;
+    if (start == null || event.buttons & kPrimaryMouseButton == 0) return;
+    final selectionRect = Rect.fromPoints(start, event.position);
+    final selectedByMarquee = <String>{
+      for (final card in cards)
+        if (spbGlobalRectForKey(spbGridEntryKey('card:${card.id}'))
+                ?.overlaps(selectionRect) ??
+            false)
+          card.id,
+    };
+    setState(() {
+      spbCardMarqueeCurrentGlobal = event.position;
+      selectedItemIds
+        ..clear()
+        ..addAll(spbCardMarqueeBaseSelection)
+        ..addAll(selectedByMarquee);
+      selectedItemId = selectedItemIds.firstOrNull;
+    });
+  }
+
+  void endSpbCardMarquee(PointerEvent event) {
+    if (spbCardMarqueeStartGlobal == null) return;
+    setState(() {
+      spbCardMarqueeStartGlobal = null;
+      spbCardMarqueeCurrentGlobal = null;
+      spbCardMarqueeBaseSelection.clear();
+    });
+  }
+
+  Widget buildSpbCardMarqueeWorkspace({
+    required List<SecretItem> cards,
+    required Widget child,
+  }) {
+    final start = spbCardMarqueeStartGlobal;
+    final current = spbCardMarqueeCurrentGlobal;
+    Rect? localRect;
+    final workspace =
+        spbCardMarqueeWorkspaceKey.currentContext?.findRenderObject();
+    if (start != null && current != null && workspace is RenderBox) {
+      localRect = Rect.fromPoints(
+        workspace.globalToLocal(start),
+        workspace.globalToLocal(current),
+      );
+    }
+    return Listener(
+      onPointerDown: beginSpbCardMarquee,
+      onPointerMove: (event) => updateSpbCardMarquee(event, cards),
+      onPointerUp: endSpbCardMarquee,
+      onPointerCancel: endSpbCardMarquee,
+      child: Stack(
+        key: spbCardMarqueeWorkspaceKey,
+        fit: StackFit.expand,
+        children: [
+          child,
+          if (localRect != null)
+            Positioned.fromRect(
+              rect: localRect,
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  key: const Key('spbCardMarquee'),
+                  decoration: BoxDecoration(
+                    color: const Color(0x33367ca8),
+                    border: Border.all(color: const Color(0xff367ca8)),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  void selectSpbCardFromPrimaryClick(
+    SecretItem item, {
+    bool? controlPressed,
+  }) {
+    if (spbWideMultiSelectEnabled &&
+        (controlPressed ?? HardwareKeyboard.instance.isControlPressed)) {
+      setState(() {
+        if (!selectedItemIds.add(item.id)) selectedItemIds.remove(item.id);
+        selectedItemId = selectedItemIds.contains(item.id)
+            ? item.id
+            : selectedItemIds.firstOrNull;
+      });
+      return;
+    }
+    setState(() {
+      selectedItemIds
+        ..clear()
+        ..add(item.id);
+      selectedItemId = item.id;
+    });
+    unawaited(openCardPreviewDialog(item));
+  }
+
+  void selectSpbTemplateFromPrimaryClick(
+    CardTemplate template, {
+    bool? controlPressed,
+  }) {
+    setState(() {
+      if (spbWideMultiSelectEnabled &&
+          (controlPressed ?? HardwareKeyboard.instance.isControlPressed)) {
+        if (!selectedTemplateIds.add(template.id)) {
+          selectedTemplateIds.remove(template.id);
+        }
+        selectedTemplateId = selectedTemplateIds.contains(template.id)
+            ? template.id
+            : selectedTemplateIds.firstOrNull;
+      } else {
+        selectedTemplateIds
+          ..clear()
+          ..add(template.id);
+        selectedTemplateId = template.id;
+      }
+    });
+  }
+
+  List<SecretItem> selectedSpbCardsForAction(SecretItem anchor) {
+    if (!spbWideMultiSelectEnabled || !selectedItemIds.contains(anchor.id)) {
+      return [anchor];
+    }
+    return [
+      for (final item in items)
+        if (selectedItemIds.contains(item.id)) item,
+    ];
+  }
+
+  List<CardTemplate> selectedSpbTemplatesForAction(CardTemplate anchor) {
+    if (!spbWideMultiSelectEnabled ||
+        !selectedTemplateIds.contains(anchor.id)) {
+      return [anchor];
+    }
+    return [
+      for (final template in templates)
+        if (selectedTemplateIds.contains(template.id)) template,
+    ];
   }
 
   Widget buildSpbTemplateTree({bool compactRows = false}) {
@@ -6825,7 +7036,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           child: ListTile(
             dense: true,
             minTileHeight: compactRows ? 36 : null,
-            selected: selectedTemplateId == template.id,
+            selected: selectedTemplateIds.contains(template.id) ||
+                selectedTemplateId == template.id,
             selectedTileColor: const Color(0xffdbeaf5),
             leading: spbSizedDataIcon(
               template.iconId,
@@ -6838,7 +7050,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-            onTap: () => setState(() => selectedTemplateId = template.id),
+            onTap: () => selectSpbTemplateFromPrimaryClick(template),
           ),
         );
       },
@@ -6849,7 +7061,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     CardTemplate template,
     Offset globalPosition,
   ) async {
-    setState(() => selectedTemplateId = template.id);
+    if (!selectedTemplateIds.contains(template.id)) {
+      setState(() {
+        selectedTemplateIds
+          ..clear()
+          ..add(template.id);
+        selectedTemplateId = template.id;
+      });
+    }
+    final actionTemplates = selectedSpbTemplatesForAction(template);
+    final multiple = actionTemplates.length > 1;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final selected = await showMenu<String>(
       context: context,
@@ -6857,41 +7078,51 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
         Offset.zero & overlay.size,
       ),
-      items: const [
+      items: [
+        if (!multiple)
+          const PopupMenuItem(
+            key: Key('createTemplateFromIconContextAction'),
+            value: 'create',
+            child: Text('Создать'),
+          ),
+        if (!multiple)
+          const PopupMenuItem(
+            key: Key('viewTemplateContextAction'),
+            value: 'view',
+            child: Text('Просмотр'),
+          ),
+        if (!multiple)
+          const PopupMenuItem(
+            key: Key('editTemplateContextAction'),
+            value: 'edit',
+            child: Text('Редактировать'),
+          ),
+        if (!multiple)
+          const PopupMenuItem(
+            key: Key('copyTemplateContextAction'),
+            value: 'copy',
+            child: Text('Копировать'),
+          ),
+        if (!multiple)
+          const PopupMenuItem(
+            key: Key('exportTemplateContextAction'),
+            value: 'export',
+            child: Text('Экспортировать'),
+          ),
+        if (!multiple)
+          const PopupMenuItem(
+            key: Key('importTemplateFromIconContextAction'),
+            value: 'import',
+            child: Text('Импортировать'),
+          ),
         PopupMenuItem(
-          key: Key('createTemplateFromIconContextAction'),
-          value: 'create',
-          child: Text('Создать'),
-        ),
-        PopupMenuItem(
-          key: Key('viewTemplateContextAction'),
-          value: 'view',
-          child: Text('Просмотр'),
-        ),
-        PopupMenuItem(
-          key: Key('editTemplateContextAction'),
-          value: 'edit',
-          child: Text('Редактировать'),
-        ),
-        PopupMenuItem(
-          key: Key('copyTemplateContextAction'),
-          value: 'copy',
-          child: Text('Копировать'),
-        ),
-        PopupMenuItem(
-          key: Key('exportTemplateContextAction'),
-          value: 'export',
-          child: Text('Экспортировать'),
-        ),
-        PopupMenuItem(
-          key: Key('importTemplateFromIconContextAction'),
-          value: 'import',
-          child: Text('Импортировать'),
-        ),
-        PopupMenuItem(
-          key: Key('deleteTemplateContextAction'),
+          key: const Key('deleteTemplateContextAction'),
           value: 'delete',
-          child: Text('Удалить'),
+          child: Text(
+            multiple
+                ? 'Удалить шаблоны (${actionTemplates.length})'
+                : 'Удалить',
+          ),
         ),
       ],
     );
@@ -6909,7 +7140,83 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     } else if (selected == 'import') {
       await importSpbTemplate();
     } else if (selected == 'delete') {
-      await deleteTemplateWithConfirmation(template);
+      if (multiple) {
+        await deleteSpbTemplatesWithConfirmation(actionTemplates);
+      } else {
+        await deleteTemplateWithConfirmation(template);
+      }
+    }
+  }
+
+  Future<void> deleteSpbTemplatesWithConfirmation(
+    List<CardTemplate> selectedTemplates,
+  ) async {
+    if (!ensureSpbWalletWritable() || selectedTemplates.isEmpty) return;
+    final selectedIds = selectedTemplates.map((entry) => entry.id).toSet();
+    final linkedCount =
+        items.where((item) => selectedIds.contains(item.templateId)).length;
+    if (linkedCount > 0) {
+      showTemplateActionMessage(
+        'Нельзя массово удалить выбранные шаблоны: '
+        'с ними связано карточек: $linkedCount. Удалите их по одному, '
+        'чтобы выбрать замену.',
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        title: const Text('Удалить шаблоны'),
+        content: Text(
+          'Выбранные шаблоны (${selectedTemplates.length}) будут перемещены '
+          'во внутреннюю корзину.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('confirmDeleteSelectedTemplatesButton'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Удалить'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Отмена'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final wallet = spbWallet;
+    if (wallet == null) return;
+    SessionUndoEntry? undoEntry;
+    try {
+      undoEntry = await captureSessionUndo(
+        'Удаление шаблонов: ${selectedTemplates.length}',
+        selectedTemplates.first.iconId,
+      );
+      for (final template in selectedTemplates) {
+        sessionTrashTemplateIds.add(template.id);
+        sessionTrash.add(
+          SessionTrashEntry(
+            kind: SessionTrashKind.template,
+            id: template.id,
+            title: template.name,
+            iconId: template.iconId,
+          ),
+        );
+      }
+      setState(() {
+        templates = templates
+            .where((entry) => !selectedIds.contains(entry.id))
+            .toList();
+        templatesById.removeWhere((id, _) => selectedIds.contains(id));
+        selectedTemplateIds.clear();
+        selectedTemplateId = templates.firstOrNull?.id;
+      });
+      commitSessionUndo(undoEntry);
+    } catch (error) {
+      discardSessionUndo(undoEntry);
+      showTemplateActionMessage('Не удалось удалить шаблоны: $error');
     }
   }
 
@@ -6992,12 +7299,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       50.25,
                       fallbackColor: templateDisplayPictogramColor(template),
                     ),
-                    onTap: () =>
-                        setState(() => selectedTemplateId = template.id),
+                    onTap: () => selectSpbTemplateFromPrimaryClick(template),
                     onDoubleTap: () => openTemplatePreview(template),
                     onContextMenu: (position) =>
                         showSpbTemplateMenu(template, position),
-                    selected: selectedTemplateId == template.id,
+                    selected: selectedTemplateIds.contains(template.id) ||
+                        selectedTemplateId == template.id,
                   ),
                 );
               },
@@ -7038,51 +7345,222 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
+  bool templatesAreIdenticalForReplacement(
+    CardTemplate source,
+    CardTemplate candidate,
+  ) {
+    if (source.id == candidate.id ||
+        normalizedSpbTemplateName(source.name) !=
+            normalizedSpbTemplateName(candidate.name) ||
+        source.fields.length != candidate.fields.length) {
+      return false;
+    }
+    for (var index = 0; index < source.fields.length; index++) {
+      final sourceField = source.fields[index];
+      final candidateField = candidate.fields[index];
+      if (sourceField.label.trim().toLowerCase() !=
+              candidateField.label.trim().toLowerCase() ||
+          sourceField.type != candidateField.type ||
+          sourceField.required != candidateField.required ||
+          sourceField.secret != candidateField.secret) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  CardTemplate? identicalTemplateReplacement(CardTemplate source) {
+    for (final candidate in templates) {
+      if (templatesAreIdenticalForReplacement(source, candidate)) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  Map<String, String> replacementTemplateFieldIds(
+    CardTemplate source,
+    CardTemplate destination,
+  ) {
+    final result = <String, String>{};
+    final usedDestinationIds = <String>{};
+    for (var index = 0; index < source.fields.length; index++) {
+      final sourceField = source.fields[index];
+      FieldDefinition? match;
+      for (final candidate in destination.fields) {
+        if (!usedDestinationIds.contains(candidate.id) &&
+            candidate.id == sourceField.id) {
+          match = candidate;
+          break;
+        }
+      }
+      for (final candidate in destination.fields) {
+        if (match != null) break;
+        if (!usedDestinationIds.contains(candidate.id) &&
+            candidate.type == sourceField.type &&
+            candidate.label.trim().toLowerCase() ==
+                sourceField.label.trim().toLowerCase()) {
+          match = candidate;
+          break;
+        }
+      }
+      if (match == null && index < destination.fields.length) {
+        final candidate = destination.fields[index];
+        if (!usedDestinationIds.contains(candidate.id)) match = candidate;
+      }
+      if (match != null) {
+        result[sourceField.id] = match.id;
+        usedDestinationIds.add(match.id);
+      }
+    }
+    return result;
+  }
+
+  SecretItem itemWithReplacementTemplate(
+    SecretItem item,
+    CardTemplate source,
+    CardTemplate destination,
+  ) {
+    final fieldIds = replacementTemplateFieldIds(source, destination);
+    final values = <String, String>{};
+    for (final entry in item.values.entries) {
+      if (entry.key == spbDescriptionFieldId) {
+        values[entry.key] = entry.value;
+        continue;
+      }
+      final destinationFieldId = fieldIds[entry.key];
+      if (destinationFieldId != null) {
+        values[destinationFieldId] = entry.value;
+      }
+    }
+    return SecretItem(
+      id: item.id,
+      templateId: destination.id,
+      title: item.title,
+      category: item.category,
+      colorId: item.colorId,
+      values: values,
+      modifiedAt: DateTime.now().toUtc(),
+      attachments: item.attachments,
+      hitCount: item.hitCount,
+      iconId: item.iconId,
+      backgroundImageBase64: item.backgroundImageBase64,
+      spbColor: item.spbColor,
+      fieldOrder: [
+        for (final fieldId in item.fieldOrder)
+          if (fieldIds[fieldId] case final replacementId?) replacementId,
+      ],
+      hiddenFieldIds: {
+        for (final fieldId in item.hiddenFieldIds)
+          if (fieldIds[fieldId] case final replacementId?) replacementId,
+      },
+    );
+  }
+
   Future<bool> deleteTemplateWithConfirmation(CardTemplate template) async {
     if (!ensureSpbWalletWritable()) return false;
-    final linkedCards =
-        items.where((item) => item.templateId == template.id).length;
-    final confirmed = await showDialog<bool>(
+    final linkedItems = items
+        .where((item) => item.templateId == template.id)
+        .toList(growable: false);
+    final replacementOptions = templates
+        .where((entry) => entry.id != template.id)
+        .toList(growable: false)
+      ..sort(
+        (first, second) =>
+            first.name.toLowerCase().compareTo(second.name.toLowerCase()),
+      );
+    final automaticReplacement = identicalTemplateReplacement(template);
+    if (linkedItems.isNotEmpty && replacementOptions.isEmpty) {
+      showTemplateActionMessage(
+        'Шаблон используется карточками. Сначала создайте или импортируйте '
+        'другой шаблон для переноса карточек.',
+      );
+      return false;
+    }
+    var selectedReplacementId =
+        automaticReplacement?.id ?? replacementOptions.firstOrNull?.id;
+    final replacementId = await showDialog<String>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: const Color(0xffececec),
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-        title: const Text('Удалить шаблон'),
-        content: Text(
-          linkedCards == 0
-              ? 'Шаблон "${template.name}" будет перемещён во внутреннюю корзину.'
-              : 'Шаблон "${template.name}" и связанные с ним карточки '
-                  '($linkedCards) будут перемещены во внутреннюю корзину.',
-        ),
-        actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
-        actions: [
-          SizedBox(
-            width: 124,
-            child: passwordKey(
-              key: const Key('cancelDeleteTemplateButton'),
-              label: 'Отмена',
-              height: 40,
-              fontSize: 18,
-              onPressed: () => Navigator.pop(dialogContext, false),
-            ),
-          ),
-          SizedBox(
-            width: 124,
-            child: passwordKey(
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: const Color(0xffececec),
+          surfaceTintColor: Colors.transparent,
+          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          title: const Text('Удалить шаблон'),
+          content: linkedItems.isEmpty
+              ? Text(
+                  'Шаблон «${template.name}» будет перемещён во внутреннюю корзину.',
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'К шаблону привязано карточек: ${linkedItems.length}. '
+                      'Они будут перенесены на другой шаблон.',
+                    ),
+                    const SizedBox(height: 16),
+                    if (automaticReplacement != null)
+                      Text(
+                        'Найден идентичный шаблон: '
+                        '«${automaticReplacement.name}».',
+                        key: const Key('automaticTemplateReplacementText'),
+                      )
+                    else
+                      DropdownButtonFormField<String>(
+                        key: const Key('replacementTemplateDropdown'),
+                        isExpanded: true,
+                        initialValue: selectedReplacementId,
+                        decoration: const InputDecoration(
+                          labelText: 'Шаблон для карточек',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: [
+                          for (final option in replacementOptions)
+                            DropdownMenuItem(
+                              value: option.id,
+                              child: Text(
+                                option.name,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: (value) => setDialogState(
+                          () => selectedReplacementId = value,
+                        ),
+                      ),
+                  ],
+                ),
+          actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
+          actions: [
+            SpbGradientActionButton(
               key: const Key('confirmDeleteTemplateButton'),
-              label: 'Удалить',
-              height: 40,
-              fontSize: 18,
-              top: const Color(0xffe04b3f),
-              bottom: const Color(0xff8f1515),
-              onPressed: () => Navigator.pop(dialogContext, true),
+              icon: Icons.check,
+              tooltip: 'Удалить шаблон',
+              colors: const [Color(0xff43a047), Color(0xff1b5e20)],
+              onTap: () => Navigator.pop(
+                dialogContext,
+                linkedItems.isEmpty ? '' : selectedReplacementId,
+              ),
             ),
-          ),
-        ],
+            const SizedBox(width: 8),
+            SpbGradientActionButton(
+              key: const Key('cancelDeleteTemplateButton'),
+              icon: Icons.close,
+              tooltip: 'Отмена',
+              colors: const [Color(0xffd32b31), Color(0xff7f0609)],
+              onTap: () => Navigator.pop(dialogContext),
+            ),
+          ],
+        ),
       ),
     );
-    if (confirmed != true || !mounted) return false;
+    if (replacementId == null || !mounted) return false;
+    final replacement = linkedItems.isEmpty
+        ? null
+        : replacementOptions.firstWhere(
+            (entry) => entry.id == replacementId,
+          );
     final wallet = spbWallet;
     if (wallet == null) {
       showTemplateActionMessage(
@@ -7096,6 +7574,37 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         'Удаление шаблона: ${template.name}',
         template.iconId,
       );
+      final reassignedItems = replacement == null
+          ? const <SecretItem>[]
+          : [
+              for (final item in linkedItems)
+                itemWithReplacementTemplate(item, template, replacement),
+            ];
+      for (final item in reassignedItems) {
+        wallet.saveCard(
+          SpbWalletCardDraft(
+            id: item.id,
+            title: item.title,
+            description: item.values[spbDescriptionFieldId] ?? '',
+            categoryPath: item.category,
+            templateId: item.templateId,
+            fieldValues: {
+              for (final entry in item.values.entries)
+                if (entry.key != spbDescriptionFieldId) entry.key: entry.value,
+            },
+            cardColor: item.spbColor ?? paletteColorToSpb(item.colorId),
+            iconId: spbIconIdForUi(
+              itemIconId(item, replacement!),
+              replacement.iconId,
+            ),
+            backgroundImageBase64: item.backgroundImageBase64,
+            fieldOrder: item.fieldOrder,
+            hiddenFieldIds: item.hiddenFieldIds,
+            modifiedAt: item.modifiedAt,
+          ),
+        );
+      }
+      if (reassignedItems.isNotEmpty) markVaultDirty();
       sessionTrashTemplateIds.add(template.id);
       sessionTrash.add(
         SessionTrashEntry(
@@ -7110,21 +7619,21 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             .where((entry) => entry.id != template.id)
             .toList(growable: false);
         templatesById.remove(template.id);
-        final removedCardIds = items
-            .where((item) => item.templateId == template.id)
-            .map((item) => item.id)
-            .toSet();
-        items = items
-            .where((item) => item.templateId != template.id)
-            .toList(growable: false);
-        itemsById.removeWhere((id, _) => removedCardIds.contains(id));
+        final reassignedById = {
+          for (final item in reassignedItems) item.id: item,
+        };
+        items = [
+          for (final item in items) reassignedById[item.id] ?? item,
+        ];
+        itemsById.addAll(reassignedById);
         if (selectedTemplateId == template.id) {
-          selectedTemplateId = templates.isEmpty ? null : templates.first.id;
+          selectedTemplateId = replacement?.id ??
+              (templates.isEmpty ? null : templates.first.id);
         }
-        if (selectedItemId != null && !itemsById.containsKey(selectedItemId)) {
-          selectedItemId = null;
-        }
-        message = null;
+        message = reassignedItems.isEmpty
+            ? null
+            : 'Карточки (${reassignedItems.length}) перенесены в шаблон '
+                '«${replacement!.name}».';
       });
       commitSessionUndo(undoEntry);
       return true;
@@ -7221,176 +7730,191 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     categoryColorsByPath[selectedCategoryPath] == null
                 ? Colors.transparent
                 : colorById(categoryColorsByPath[selectedCategoryPath]!).bg,
-            child: GestureDetector(
-              key: const Key('spbCentralWorkspace'),
-              behavior: HitTestBehavior.translucent,
-              onSecondaryTapDown: (details) =>
-                  showSpbCreationMenu(details.globalPosition),
-              onLongPressStart: (details) =>
-                  showSpbCreationMenu(details.globalPosition),
-              child: spbFolderGridScrollbar(
-                enabled: showPersistentScrollbar,
-                child: GridView.builder(
-                  controller: spbFolderGridScrollController,
-                  padding: EdgeInsets.fromLTRB(
-                    16,
-                    10,
-                    showPersistentScrollbar ? 28 : 16,
-                    16,
-                  ),
-                  gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                    maxCrossAxisExtent: 89.04,
-                    mainAxisExtent: 83.475,
-                    crossAxisSpacing: 3.975,
-                    mainAxisSpacing: 6.36,
-                  ),
-                  itemCount: folders.length + cards.length,
-                  itemBuilder: (context, index) {
-                    if (index < folders.length) {
-                      final folder = folders[index];
-                      return buildSpbGridEntry(
-                        label: folder.name,
-                        icon: spbSizedDataIcon(
-                          folder.iconId ??
-                              defaultIconForCategoryPath(folder.path),
-                          50.25,
-                          fallbackColor: categoryPictogramColor(folder.colorId),
-                        ),
-                        onTap: () => openSpbFolder(folder.path),
-                        onContextMenu: (position) =>
-                            showSpbFolderMenu(folder, position),
-                        boldLabel: true,
-                      );
-                    }
-                    final item = cards[index - folders.length];
-                    final template = templateFor(item.templateId);
-                    final cardEntry = buildSpbGridEntry(
-                      label: item.title,
-                      labelWidth: 73.3125,
-                      selected: selectedItemId == item.id,
-                      icon: SizedBox(
-                        width: 50.25,
-                        height: 50.25,
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          alignment: Alignment.center,
-                          children: [
-                            spbSizedDataIcon(
-                              itemIconId(item, template),
+            child: buildSpbCardMarqueeWorkspace(
+              cards: cards,
+              child: GestureDetector(
+                key: const Key('spbCentralWorkspace'),
+                behavior: HitTestBehavior.translucent,
+                onSecondaryTapDown: (details) =>
+                    showSpbCreationMenu(details.globalPosition),
+                onLongPressStart: (details) =>
+                    showSpbCreationMenu(details.globalPosition),
+                child: spbFolderGridScrollbar(
+                  enabled: showPersistentScrollbar,
+                  child: GridView.builder(
+                    controller: spbFolderGridScrollController,
+                    padding: EdgeInsets.fromLTRB(
+                      16,
+                      10,
+                      showPersistentScrollbar ? 28 : 16,
+                      16,
+                    ),
+                    gridDelegate:
+                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                      maxCrossAxisExtent: 89.04,
+                      mainAxisExtent: 83.475,
+                      crossAxisSpacing: 3.975,
+                      mainAxisSpacing: 6.36,
+                    ),
+                    itemCount: folders.length + cards.length,
+                    itemBuilder: (context, index) {
+                      if (index < folders.length) {
+                        final folder = folders[index];
+                        return Container(
+                          key: spbGridEntryKey('folder:${folder.path}'),
+                          child: buildSpbGridEntry(
+                            label: folder.name,
+                            icon: spbSizedDataIcon(
+                              folder.iconId ??
+                                  defaultIconForCategoryPath(folder.path),
                               50.25,
-                              fallbackColor: itemPictogramColor(item, template),
+                              fallbackColor:
+                                  categoryPictogramColor(folder.colorId),
                             ),
-                            if (item.attachments.any(
-                              (attachment) => !attachment.deleted,
-                            ))
-                              Positioned(
-                                key: ValueKey('cardAttachmentArrow-${item.id}'),
-                                right: 2,
-                                bottom: 2,
-                                width: 16.33125,
-                                height: 14.586,
-                                child: Stack(
-                                  clipBehavior: Clip.none,
-                                  children: [
-                                    for (final offset in const [
-                                      Offset(-2, 0),
-                                      Offset(2, 0),
-                                      Offset(0, -2),
-                                      Offset(0, 2),
-                                      Offset(-1.414, -1.414),
-                                      Offset(1.414, -1.414),
-                                      Offset(-1.414, 1.414),
-                                      Offset(1.414, 1.414),
-                                    ])
-                                      Transform.translate(
-                                        offset: offset,
+                            onTap: () => openSpbFolder(folder.path),
+                            onContextMenu: (position) =>
+                                showSpbFolderMenu(folder, position),
+                            boldLabel: true,
+                          ),
+                        );
+                      }
+                      final item = cards[index - folders.length];
+                      final template = templateFor(item.templateId);
+                      final cardEntry = buildSpbGridEntry(
+                        label: item.title,
+                        labelWidth: 73.3125,
+                        selected: selectedItemIds.contains(item.id) ||
+                            selectedItemId == item.id,
+                        icon: SizedBox(
+                          width: 50.25,
+                          height: 50.25,
+                          child: Stack(
+                            clipBehavior: Clip.none,
+                            alignment: Alignment.center,
+                            children: [
+                              spbSizedDataIcon(
+                                itemIconId(item, template),
+                                50.25,
+                                fallbackColor:
+                                    itemPictogramColor(item, template),
+                              ),
+                              if (item.attachments.any(
+                                (attachment) => !attachment.deleted,
+                              ))
+                                Positioned(
+                                  key: ValueKey(
+                                      'cardAttachmentArrow-${item.id}'),
+                                  right: 2,
+                                  bottom: 2,
+                                  width: 16.33125,
+                                  height: 14.586,
+                                  child: Stack(
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      for (final offset in const [
+                                        Offset(-2, 0),
+                                        Offset(2, 0),
+                                        Offset(0, -2),
+                                        Offset(0, 2),
+                                        Offset(-1.414, -1.414),
+                                        Offset(1.414, -1.414),
+                                        Offset(-1.414, 1.414),
+                                        Offset(1.414, 1.414),
+                                      ])
+                                        Transform.translate(
+                                          offset: offset,
+                                          child: const Icon(
+                                            Icons.arrow_downward_rounded,
+                                            size: 16.33125,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ShaderMask(
+                                        blendMode: BlendMode.srcIn,
+                                        shaderCallback: (bounds) =>
+                                            const LinearGradient(
+                                          begin: Alignment.topCenter,
+                                          end: Alignment.bottomCenter,
+                                          colors: [
+                                            Color(0xffff4fa3),
+                                            Color(0xffe6007e),
+                                            Color(0xffa8005b),
+                                          ],
+                                        ).createShader(bounds),
                                         child: const Icon(
                                           Icons.arrow_downward_rounded,
                                           size: 16.33125,
                                           color: Colors.white,
                                         ),
                                       ),
-                                    ShaderMask(
-                                      blendMode: BlendMode.srcIn,
-                                      shaderCallback: (bounds) =>
-                                          const LinearGradient(
-                                        begin: Alignment.topCenter,
-                                        end: Alignment.bottomCenter,
-                                        colors: [
-                                          Color(0xffff4fa3),
-                                          Color(0xffe6007e),
-                                          Color(0xffa8005b),
-                                        ],
-                                      ).createShader(bounds),
-                                      child: const Icon(
-                                        Icons.arrow_downward_rounded,
-                                        size: 16.33125,
-                                        color: Colors.white,
-                                      ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
-                              ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      onTap: () => openCardPreviewDialog(item),
-                      onContextMenu: (position) =>
-                          showSpbCardMenu(item, position),
-                    );
-                    return KeyedSubtree(
-                      key: ValueKey('spbCentralCard-${item.id}'),
-                      child: allowItemDragging
-                          ? Draggable<SecretItem>(
-                              data: item,
-                              maxSimultaneousDrags: spbWallet == null ? 0 : 1,
-                              dragAnchorStrategy: pointerDragAnchorStrategy,
-                              feedback: Material(
-                                color: Colors.transparent,
-                                child: Container(
-                                  width: 104,
-                                  padding: const EdgeInsets.all(8),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xffedf7fe),
-                                    border: Border.all(
-                                      color: const Color(0xff367ca8),
+                        onTap: () => selectSpbCardFromPrimaryClick(item),
+                        onContextMenu: (position) =>
+                            showSpbCardMenu(item, position),
+                      );
+                      return KeyedSubtree(
+                        key: ValueKey('spbCentralCard-${item.id}'),
+                        child: Container(
+                          key: spbGridEntryKey('card:${item.id}'),
+                          child: allowItemDragging
+                              ? Draggable<SecretItem>(
+                                  data: item,
+                                  maxSimultaneousDrags:
+                                      spbWallet == null ? 0 : 1,
+                                  dragAnchorStrategy: pointerDragAnchorStrategy,
+                                  feedback: Material(
+                                    color: Colors.transparent,
+                                    child: Container(
+                                      width: 104,
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xffedf7fe),
+                                        border: Border.all(
+                                          color: const Color(0xff367ca8),
+                                        ),
+                                        boxShadow: const [
+                                          BoxShadow(
+                                            color: Colors.black26,
+                                            blurRadius: 6,
+                                          ),
+                                        ],
+                                      ),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          spbSizedDataIcon(
+                                            itemIconId(item, template),
+                                            42,
+                                            fallbackColor: itemPictogramColor(
+                                                item, template),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            item.title,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ],
+                                      ),
                                     ),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Colors.black26,
-                                        blurRadius: 6,
-                                      ),
-                                    ],
                                   ),
-                                  child: Column(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      spbSizedDataIcon(
-                                        itemIconId(item, template),
-                                        42,
-                                        fallbackColor:
-                                            itemPictogramColor(item, template),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        item.title,
-                                        maxLines: 2,
-                                        overflow: TextOverflow.ellipsis,
-                                        textAlign: TextAlign.center,
-                                      ),
-                                    ],
+                                  childWhenDragging: Opacity(
+                                    opacity: 0.35,
+                                    child: cardEntry,
                                   ),
-                                ),
-                              ),
-                              childWhenDragging: Opacity(
-                                opacity: 0.35,
-                                child: cardEntry,
-                              ),
-                              child: cardEntry,
-                            )
-                          : cardEntry,
-                    );
-                  },
+                                  child: cardEntry,
+                                )
+                              : cardEntry,
+                        ),
+                      );
+                    },
+                  ),
                 ),
               ),
             ),
@@ -7451,7 +7975,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         parentPath: selectedCategoryPath,
       );
     } else if (selected == 'import') {
-      await importSpbWalletCards();
+      await importSpbWalletCards(destinationCategoryPath: selectedCategoryPath);
     }
   }
 
@@ -7623,7 +8147,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         );
         break;
       case 'import':
-        await importSpbWalletCards();
+        await importSpbWalletCards(destinationCategoryPath: folder.path);
         break;
       case 'delete':
         await deleteCategoryWithConfirmation(folder);
@@ -7633,6 +8157,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Future<void> showSpbCardMenu(SecretItem item, Offset globalPosition) async {
     if (spbContextMenuOpen) return;
+    if (!selectedItemIds.contains(item.id)) {
+      setState(() {
+        selectedItemIds
+          ..clear()
+          ..add(item.id);
+        selectedItemId = item.id;
+      });
+    }
+    final actionItems = selectedSpbCardsForAction(item);
+    final multiple = actionItems.length > 1;
     spbContextMenuOpen = true;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     String? selected;
@@ -7643,46 +8177,61 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
           Offset.zero & overlay.size,
         ),
-        items: const [
+        items: [
+          if (!multiple)
+            const PopupMenuItem(
+              key: Key('viewCardContextAction'),
+              value: 'view',
+              child: Text('Просмотр'),
+            ),
+          if (!multiple)
+            const PopupMenuItem(
+              key: Key('createCardContextAction'),
+              value: 'create',
+              child: Text('Создать'),
+            ),
+          if (!multiple)
+            const PopupMenuItem(
+              key: Key('editCardContextAction'),
+              value: 'edit',
+              child: Text('Редактировать'),
+            ),
+          if (!multiple)
+            const PopupMenuItem(
+              key: Key('copyCardContextAction'),
+              value: 'copy',
+              child: Text('Копировать'),
+            ),
           PopupMenuItem(
-            key: Key('viewCardContextAction'),
-            value: 'view',
-            child: Text('Просмотр'),
-          ),
-          PopupMenuItem(
-            key: Key('createCardContextAction'),
-            value: 'create',
-            child: Text('Создать'),
-          ),
-          PopupMenuItem(
-            key: Key('editCardContextAction'),
-            value: 'edit',
-            child: Text('Редактировать'),
-          ),
-          PopupMenuItem(
-            key: Key('copyCardContextAction'),
-            value: 'copy',
-            child: Text('Копировать'),
-          ),
-          PopupMenuItem(
-            key: Key('moveCardContextAction'),
+            key: const Key('moveCardContextAction'),
             value: 'move',
-            child: Text('Переместить'),
+            child: Text(
+              multiple
+                  ? 'Переместить карточки (${actionItems.length})'
+                  : 'Переместить',
+            ),
           ),
           PopupMenuItem(
-            key: Key('exportObjectContextAction'),
+            key: const Key('exportObjectContextAction'),
             value: 'export',
-            child: Text('Экспортировать'),
+            child: Text(
+              multiple
+                  ? 'Экспортировать карточки (${actionItems.length})'
+                  : 'Экспортировать',
+            ),
           ),
+          if (!multiple)
+            const PopupMenuItem(
+              key: Key('importCardContextAction'),
+              value: 'import',
+              child: Text('Импортировать'),
+            ),
           PopupMenuItem(
-            key: Key('importCardContextAction'),
-            value: 'import',
-            child: Text('Импортировать'),
-          ),
-          PopupMenuItem(
-            key: Key('deleteCardContextAction'),
+            key: const Key('deleteCardContextAction'),
             value: 'delete',
-            child: Text('Удалить'),
+            child: Text(
+              multiple ? 'Удалить карточки (${actionItems.length})' : 'Удалить',
+            ),
           ),
         ],
       );
@@ -7701,19 +8250,32 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         await openItemDialog(item: item);
         break;
       case 'export':
-        await exportSpbItems([item], suggestedName: item.title);
+        await exportSpbItems(
+          actionItems,
+          suggestedName: actionItems.length == 1
+              ? item.title
+              : defaultMultiCardExportName(),
+        );
         break;
       case 'copy':
         await cloneSpbCard(item);
         break;
       case 'move':
-        await moveSpbCard(item);
+        if (multiple) {
+          await moveSpbCards(actionItems);
+        } else {
+          await moveSpbCard(item);
+        }
         break;
       case 'import':
-        await importSpbWalletCards();
+        await importSpbWalletCards(destinationCategoryPath: item.category);
         break;
       case 'delete':
-        await deleteItemWithConfirmation(item);
+        if (multiple) {
+          await deleteSpbCardsWithConfirmation(actionItems);
+        } else {
+          await deleteItemWithConfirmation(item);
+        }
         break;
     }
   }
@@ -7859,6 +8421,49 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final target = await showMoveTargetDialog(initialPath: item.category);
     if (target == null || target == item.category || !mounted) return;
     await moveSpbCardTo(item, target);
+  }
+
+  Future<void> moveSpbCards(List<SecretItem> selectedCards) async {
+    final wallet = spbWallet;
+    if (wallet == null || !ensureSpbWalletWritable() || selectedCards.isEmpty) {
+      return;
+    }
+    final initialPath =
+        selectedCards.map((item) => item.category).toSet().length == 1
+            ? selectedCards.first.category
+            : selectedCategoryPath;
+    final target = await showMoveTargetDialog(initialPath: initialPath);
+    if (target == null || !mounted) return;
+    final moving = selectedCards
+        .where((item) => item.category != target)
+        .toList(growable: false);
+    if (moving.isEmpty) return;
+    SessionUndoEntry? undoEntry;
+    try {
+      undoEntry = await captureSessionUndo(
+        'Перемещение карточек: ${moving.length}',
+        itemIconId(moving.first, templateFor(moving.first.templateId)),
+      );
+      for (final item in moving) {
+        wallet.moveCard(item.id, target);
+      }
+      markVaultDirty();
+      final written = await writeBackSpbWallet();
+      final snapshot = wallet.loadSnapshot();
+      setState(() {
+        applySpbSnapshot(snapshot);
+        selectedCategoryPath = target;
+        selectedItemIds
+          ..clear()
+          ..addAll(moving.map((item) => item.id));
+        selectedItemId = moving.first.id;
+        if (written) message = null;
+      });
+      commitSessionUndo(undoEntry);
+    } catch (error) {
+      discardSessionUndo(undoEntry);
+      showSpbOperationMessage('Не удалось переместить карточки: $error');
+    }
   }
 
   Future<void> moveSpbCardTo(SecretItem item, String target) async {
@@ -8140,6 +8745,146 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return '${safe.isEmpty ? 'Экспорт' : safe}.swl';
   }
 
+  String normalizedSpbTemplateName(String value) => value.trim().toLowerCase();
+
+  String defaultMultiCardExportName([DateTime? value]) {
+    final now = value ?? DateTime.now();
+    String two(int number) => number.toString().padLeft(2, '0');
+    return 'import_card_${two(now.hour)}-${two(now.minute)}-${two(now.second)}_'
+        '${two(now.day)}-${two(now.month)}-${now.year}';
+  }
+
+  SpbWalletTemplateRecord? existingSpbTemplateForImport(
+    SpbWalletTemplateRecord source,
+    List<SpbWalletTemplateRecord> destinationTemplates,
+  ) {
+    for (final candidate in destinationTemplates) {
+      if (candidate.id == source.id) return candidate;
+    }
+    final sourceName = normalizedSpbTemplateName(source.name);
+    for (final candidate in destinationTemplates) {
+      if (normalizedSpbTemplateName(candidate.name) == sourceName) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
+  Map<String, String> importedFieldIdsForExistingTemplate(
+    SpbWalletTemplateRecord source,
+    SpbWalletTemplateRecord destination,
+  ) {
+    final result = <String, String>{};
+    final usedDestinationIds = <String>{};
+    for (var index = 0; index < source.fields.length; index++) {
+      final sourceField = source.fields[index];
+      final normalizedName = sourceField.name.trim().toLowerCase();
+      SpbWalletTemplateFieldRecord? match;
+      for (final candidate in destination.fields) {
+        if (!usedDestinationIds.contains(candidate.id) &&
+            candidate.id == sourceField.id) {
+          match = candidate;
+          break;
+        }
+      }
+      for (final candidate in destination.fields) {
+        if (match != null) break;
+        if (!usedDestinationIds.contains(candidate.id) &&
+            candidate.fieldTypeId == sourceField.fieldTypeId &&
+            candidate.name.trim().toLowerCase() == normalizedName) {
+          match = candidate;
+          break;
+        }
+      }
+      if (match == null) {
+        for (final candidate in destination.fields) {
+          if (!usedDestinationIds.contains(candidate.id) &&
+              candidate.name.trim().toLowerCase() == normalizedName) {
+            match = candidate;
+            break;
+          }
+        }
+      }
+      if (match == null && index < destination.fields.length) {
+        final candidate = destination.fields[index];
+        if (!usedDestinationIds.contains(candidate.id)) match = candidate;
+      }
+      if (match != null) {
+        result[sourceField.id] = match.id;
+        usedDestinationIds.add(match.id);
+      }
+    }
+    return result;
+  }
+
+  List<SpbWalletTemplateRecord> requiredSpbTemplatesForImport(
+    SpbWalletSnapshot snapshot,
+  ) {
+    final result = snapshot.templates.toList();
+    final sourceTemplateIds = result.map((entry) => entry.id).toSet();
+    final missingTemplateIds = snapshot.cards
+        .map((card) => card.templateId)
+        .where((id) => !sourceTemplateIds.contains(id))
+        .toSet();
+    for (final missingTemplateId in missingTemplateIds) {
+      final recoveredFieldIds = snapshot.cards
+          .where((card) => card.templateId == missingTemplateId)
+          .expand((card) => card.fieldValues.keys)
+          .toSet()
+          .toList()
+        ..sort();
+      result.add(
+        SpbWalletTemplateRecord(
+          id: missingTemplateId,
+          name: 'Восстановленный шаблон $missingTemplateId',
+          iconId: SpbWalletDatabase.defaultCardIconId,
+          fields: [
+            for (var index = 0; index < recoveredFieldIds.length; index++)
+              SpbWalletTemplateFieldRecord(
+                id: recoveredFieldIds[index],
+                name: 'Сохранённое поле ${index + 1}',
+                templateId: missingTemplateId,
+              ),
+          ],
+        ),
+      );
+    }
+    return result;
+  }
+
+  String cardIconIdForImport({
+    required String sourceIconId,
+    required SpbWalletSnapshot sourceSnapshot,
+    required SpbWalletSnapshot destinationSnapshot,
+    Random? random,
+  }) {
+    final normalizedSourceId = sourceIconId.trim().toUpperCase();
+    final destinationIconIds = <String>{
+      ...destinationSnapshot.embeddedIconPngs.keys.map(
+        (id) => id.toUpperCase(),
+      ),
+    }..removeWhere((id) => id.isEmpty);
+    final sourceIconCanBeCopied = sourceSnapshot.embeddedIconPngs.keys.any(
+      (id) => id.toUpperCase() == normalizedSourceId,
+    );
+    if (normalizedSourceId.isNotEmpty &&
+        (spbOriginalIconAssets.containsKey(normalizedSourceId) ||
+            destinationIconIds.contains(normalizedSourceId) ||
+            sourceIconCanBeCopied)) {
+      return normalizedSourceId;
+    }
+    final availableIconIds = <String>{
+      ...spbOriginalIconAssets.keys,
+      ...destinationSnapshot.embeddedIconPngs.keys,
+    }.where((id) => id.isNotEmpty).toList()
+      ..sort();
+    if (availableIconIds.isEmpty) {
+      return SpbWalletDatabase.defaultCardIconId;
+    }
+    final generator = random ?? Random();
+    return availableIconIds[generator.nextInt(availableIconIds.length)];
+  }
+
   Future<File> createSpbItemsExportFile(
     List<SecretItem> exportItems, {
     required String password,
@@ -8155,6 +8900,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final exportWallet = SpbWalletDatabase.create(file.path, password);
     try {
       if (categoryPath != null && categoryPath.trim().isNotEmpty) {
+        exportWallet.saveExportedFolderPath(categoryPath);
         exportWallet.ensureCategoryPath(categoryPath);
       }
       final templateIds = <String, String>{};
@@ -8357,7 +9103,128 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> importSpbWalletCards() async {
+  List<String> spbImportSourceCandidates(String selectedPath) {
+    final candidates = <String>[selectedPath];
+    if (!Platform.isWindows) return candidates;
+    try {
+      final subst = Process.runSync(
+        'subst',
+        const <String>[],
+        runInShell: false,
+      );
+      final resolved = resolveWindowsSubstPath(
+        selectedPath,
+        parseWindowsSubstMappings('${subst.stdout}'),
+      );
+      if (resolved != null && resolved != selectedPath) {
+        candidates.insert(0, resolved);
+      }
+    } catch (_) {}
+    if (selectedPath.length >= 3 &&
+        selectedPath[0].toUpperCase() == 'S' &&
+        selectedPath[1] == ':') {
+      final profile = Platform.environment['USERPROFILE'];
+      if (profile != null && profile.isNotEmpty) {
+        final relative = selectedPath.substring(3).replaceAll('/', '\\');
+        final synologyPath =
+            '$profile\\SynologyDrive${relative.isEmpty ? '' : '\\$relative'}';
+        if (!candidates.contains(synologyPath)) {
+          candidates.insert(0, synologyPath);
+        }
+      }
+    }
+    return candidates;
+  }
+
+  Future<Uint8List> readSpbImportBytes(PlatformFile selected) async {
+    final pickerBytes = selected.bytes;
+    if (pickerBytes != null) return pickerBytes;
+    final selectedPath = selected.path;
+    if (selectedPath == null || selectedPath.trim().isEmpty) {
+      throw const FormatException('Не удалось прочитать SWL.');
+    }
+    Object? lastError;
+    const retryDelays = <Duration>[
+      Duration.zero,
+      Duration(milliseconds: 250),
+      Duration(seconds: 1),
+      Duration(seconds: 3),
+      Duration(seconds: 6),
+    ];
+    for (final delay in retryDelays) {
+      if (delay != Duration.zero) await Future<void>.delayed(delay);
+      for (final candidate in spbImportSourceCandidates(selectedPath)) {
+        try {
+          final bytes = File(candidate).readAsBytesSync();
+          if (selected.size <= 0 || bytes.length == selected.size) {
+            return bytes;
+          }
+          lastError = FileSystemException(
+            'Файл прочитан не полностью: ${bytes.length} из ${selected.size} байт',
+            candidate,
+          );
+        } catch (error) {
+          lastError = error;
+        }
+      }
+    }
+    throw FormatException(
+      'Не удалось прочитать SWL по пути «$selectedPath»'
+      '${lastError == null ? '.' : ': $lastError'}',
+    );
+  }
+
+  String importedFolderCategoryPath(
+    String sourcePath,
+    String exportedFolderPath,
+    String destinationPath,
+  ) {
+    final sourceParts = categoryParts(sourcePath);
+    final rootParts = categoryParts(exportedFolderPath);
+    if (rootParts.isEmpty) return destinationPath;
+    final relativeParts = sourceParts.length >= rootParts.length &&
+            listEquals(sourceParts.take(rootParts.length).toList(), rootParts)
+        ? sourceParts.skip(rootParts.length)
+        : const <String>[];
+    return <String>[
+      ...categoryParts(destinationPath),
+      rootParts.last,
+      ...relativeParts,
+    ].join(' / ');
+  }
+
+  String legacyExportedFolderPath(
+    SpbWalletSnapshot snapshot,
+    String fileName,
+  ) {
+    final baseName = fileName.toLowerCase().endsWith('.swl')
+        ? fileName.substring(0, fileName.length - 4)
+        : fileName;
+    final sourcePaths = buildCategoryPathsById(
+      snapshot.categories,
+      idOf: (entry) => entry.id,
+      parentIdOf: (entry) => entry.parentId,
+      nameOf: (entry) => entry.name,
+    );
+    final candidates = sourcePaths.values.where((path) {
+      final parts = categoryParts(path);
+      if (parts.isEmpty ||
+          parts.last.toLowerCase() != baseName.trim().toLowerCase()) {
+        return false;
+      }
+      return snapshot.cards.every(
+        (card) =>
+            card.categoryPath == path ||
+            card.categoryPath.startsWith('$path / '),
+      );
+    }).toList()
+      ..sort(
+          (a, b) => categoryParts(b).length.compareTo(categoryParts(a).length));
+    return candidates.firstOrNull ?? '';
+  }
+
+  Future<void> importSpbWalletCards(
+      {String destinationCategoryPath = ''}) async {
     final destination = spbWallet;
     if (destination == null) {
       showSpbOperationMessage('Сначала откройте базу, в которую нужен импорт.');
@@ -8371,26 +9238,22 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       final picked = await FilePicker.platform.pickFiles(
         type: FileType.custom,
         allowedExtensions: const ['swl'],
-        withData: true,
+        // On Windows, reading bytes inside file_picker is unreliable for
+        // SUBST/network/sync drives and happens before our fallback handling.
+        withData: Platform.isAndroid || Platform.isIOS,
       );
       final selected = picked?.files.single;
       if (selected == null) return;
-      String sourcePath;
-      if (selected.path != null && File(selected.path!).existsSync()) {
-        sourcePath = selected.path!;
-      } else {
-        final bytes = selected.bytes;
-        if (bytes == null) {
-          throw const FormatException('Не удалось прочитать SWL.');
-        }
-        final directory = await getTemporaryDirectory();
-        temporary = File(
-          '${directory.path}${Platform.pathSeparator}'
-          'wallet_aps_import_${DateTime.now().microsecondsSinceEpoch}.swl',
-        );
-        await temporary.writeAsBytes(bytes, flush: true);
-        sourcePath = temporary.path;
-      }
+      final directory = Directory.systemTemp;
+      temporary = File(
+        '${directory.path}${Platform.pathSeparator}'
+        'wallet_aps_import_${DateTime.now().microsecondsSinceEpoch}.swl',
+      );
+      temporary.writeAsBytesSync(
+        await readSpbImportBytes(selected),
+        flush: true,
+      );
+      final sourcePath = temporary.path;
       try {
         source = SpbWalletDatabase.open(sourcePath, '');
       } catch (_) {
@@ -8399,13 +9262,73 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         source = SpbWalletDatabase.open(sourcePath, password);
       }
       final snapshot = source.loadSnapshot();
+      var exportedFolderPath = source.loadExportedFolderPath();
+      if (exportedFolderPath.isEmpty) {
+        exportedFolderPath = legacyExportedFolderPath(snapshot, selected.name);
+      }
+      final importingFolder = exportedFolderPath.isNotEmpty;
+      if (snapshot.cards.isEmpty && snapshot.cardLoadFailures.isNotEmpty) {
+        throw const FormatException(
+          'База несовместима: ни одну карточку не удалось прочитать.',
+        );
+      }
+      if (snapshot.cards.any((card) => card.templateId.isEmpty)) {
+        throw const FormatException(
+          'База несовместима: у карточки отсутствует идентификатор шаблона.',
+        );
+      }
       undoEntry = await captureSessionUndo(
         'Импорт карточек: ${snapshot.cards.length}',
         'folder',
       );
+      if (importingFolder) {
+        final importedPaths = <String>{
+          for (final category in snapshot.categories)
+            importedFolderCategoryPath(
+              buildCategoryPathsById(
+                    snapshot.categories,
+                    idOf: (entry) => entry.id,
+                    parentIdOf: (entry) => entry.parentId,
+                    nameOf: (entry) => entry.name,
+                  )[category.id] ??
+                  '',
+              exportedFolderPath,
+              destinationCategoryPath,
+            ),
+        }..removeWhere((path) => path.isEmpty);
+        final conflictingTrashPaths = sessionTrashFolderPaths
+            .where((trashPath) => importedPaths.any(
+                  (path) =>
+                      path == trashPath ||
+                      path.startsWith('$trashPath / ') ||
+                      trashPath.startsWith('$path / '),
+                ))
+            .toSet();
+        sessionTrashFolderPaths.removeAll(conflictingTrashPaths);
+        sessionTrash.removeWhere(
+          (entry) =>
+              entry.kind == SessionTrashKind.folder &&
+              conflictingTrashPaths.contains(entry.id),
+        );
+      }
       final templateIds = <String, String>{};
       final fieldIds = <String, Map<String, String>>{};
-      for (final template in snapshot.templates) {
+      final destinationSnapshot = destination.loadSnapshot();
+      final destinationTemplates = destinationSnapshot.templates.toList();
+      final sourceTemplates = requiredSpbTemplatesForImport(snapshot);
+      for (final template in sourceTemplates) {
+        final existing = existingSpbTemplateForImport(
+          template,
+          destinationTemplates,
+        );
+        if (existing != null) {
+          templateIds[template.id] = existing.id;
+          fieldIds[template.id] = importedFieldIdsForExistingTemplate(
+            template,
+            existing,
+          );
+          continue;
+        }
         final importedTemplateId = SpbWalletDatabase.makeId();
         final importedFieldIds = <String, String>{
           for (final field in template.fields)
@@ -8413,54 +9336,190 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         };
         templateIds[template.id] = importedTemplateId;
         fieldIds[template.id] = importedFieldIds;
-        destination.saveTemplate(
-          SpbWalletTemplateDraft(
+        final importedFields = [
+          for (final field in template.fields)
+            SpbWalletTemplateFieldRecord(
+              id: importedFieldIds[field.id]!,
+              name: field.name,
+              templateId: importedTemplateId,
+              fieldTypeId: field.fieldTypeId,
+            ),
+        ];
+        try {
+          destination.saveTemplate(
+            SpbWalletTemplateDraft(
+              id: importedTemplateId,
+              name: template.name,
+              iconId: template.iconId,
+              cardColor: template.cardColor,
+              categoryPath: template.categoryPath,
+              iconBytes: snapshot.embeddedIconPngs[template.iconId],
+              iconFileName: 'imported-template-icon.png',
+              fields: importedFields,
+            ),
+          );
+        } catch (_) {
+          destination.saveTemplate(
+            SpbWalletTemplateDraft(
+              id: importedTemplateId,
+              name: template.name,
+              iconId: SpbWalletDatabase.defaultCardIconId,
+              cardColor: template.cardColor,
+              categoryPath: template.categoryPath,
+              fields: importedFields,
+            ),
+          );
+        }
+        destinationTemplates.add(
+          SpbWalletTemplateRecord(
             id: importedTemplateId,
             name: template.name,
             iconId: template.iconId,
-            fields: [
-              for (final field in template.fields)
-                SpbWalletTemplateFieldRecord(
-                  id: importedFieldIds[field.id]!,
-                  name: field.name,
-                  templateId: importedTemplateId,
-                  fieldTypeId: field.fieldTypeId,
-                ),
-            ],
+            cardColor: template.cardColor,
+            categoryPath: template.categoryPath,
+            fields: importedFields,
           ),
         );
       }
+      if (importingFolder) {
+        final sourcePaths = buildCategoryPathsById(
+          snapshot.categories,
+          idOf: (entry) => entry.id,
+          parentIdOf: (entry) => entry.parentId,
+          nameOf: (entry) => entry.name,
+        );
+        final sourceCategories = snapshot.categories.where((category) {
+          final path = sourcePaths[category.id] ?? '';
+          return path == exportedFolderPath ||
+              path.startsWith('$exportedFolderPath / ');
+        }).toList()
+          ..sort((first, second) => categoryParts(sourcePaths[first.id] ?? '')
+              .length
+              .compareTo(categoryParts(sourcePaths[second.id] ?? '').length));
+        for (final category in sourceCategories) {
+          final path = importedFolderCategoryPath(
+            sourcePaths[category.id] ?? '',
+            exportedFolderPath,
+            destinationCategoryPath,
+          );
+          try {
+            destination.createCategory(
+              path,
+              category.iconId,
+              iconBytes: snapshot.embeddedIconPngs[category.iconId],
+              iconFileName: 'imported-folder-icon.png',
+              colorId: category.colorId,
+            );
+          } catch (_) {
+            destination.ensureCategoryPath(path);
+          }
+        }
+      }
+      var importedCardCount = 0;
+      var skippedAttachmentCount = 0;
+      final incompatibleCards = <String>[
+        for (final failure in snapshot.cardLoadFailures) failure.cardId,
+      ];
       for (final card in snapshot.cards) {
         final importedTemplateId = templateIds[card.templateId];
         final importedFieldIds = fieldIds[card.templateId];
-        if (importedTemplateId == null || importedFieldIds == null) continue;
-        final cardId = SpbWalletDatabase.makeId();
-        destination.saveCard(
-          SpbWalletCardDraft(
-            id: cardId,
-            title: card.title,
-            description: card.description,
-            categoryPath: card.categoryPath,
-            templateId: importedTemplateId,
-            fieldValues: {
-              for (final entry in card.fieldValues.entries)
-                if (importedFieldIds[entry.key] != null)
-                  importedFieldIds[entry.key]!: entry.value,
-            },
-            iconId: card.iconId,
-            cardColor: card.cardColor,
-            backgroundImageBase64: card.backgroundImageBase64,
-          ),
-        );
-        for (final attachment in card.attachments) {
-          destination.saveAttachment(
-            cardId: cardId,
-            fileName: attachment.fileName,
-            bytes: source.readAttachmentBytes(attachment.id),
+        if (importedTemplateId == null || importedFieldIds == null) {
+          throw FormatException(
+            'База несовместима: шаблон карточки «${card.title}» '
+            'не удалось восстановить.',
           );
         }
+        final importedCardIconId = cardIconIdForImport(
+          sourceIconId: card.iconId,
+          sourceSnapshot: snapshot,
+          destinationSnapshot: destinationSnapshot,
+        );
+        final cardId = SpbWalletDatabase.makeId();
+        final importedValues = {
+          for (final entry in card.fieldValues.entries)
+            if (importedFieldIds[entry.key] != null)
+              importedFieldIds[entry.key]!: entry.value,
+        };
+        try {
+          destination.saveCard(
+            SpbWalletCardDraft(
+              id: cardId,
+              title: card.title,
+              description: card.description,
+              categoryPath: importingFolder
+                  ? importedFolderCategoryPath(
+                      card.categoryPath,
+                      exportedFolderPath,
+                      destinationCategoryPath,
+                    )
+                  : destinationCategoryPath,
+              templateId: importedTemplateId,
+              fieldValues: importedValues,
+              iconId: importedCardIconId,
+              iconBytes: snapshot.embeddedIconPngs[importedCardIconId],
+              iconFileName: 'imported-card-icon.png',
+              cardColor: card.cardColor,
+              backgroundImageBase64: card.backgroundImageBase64,
+              fieldOrder: [
+                for (final id in card.fieldOrder)
+                  if (importedFieldIds[id] != null) importedFieldIds[id]!,
+              ],
+              hiddenFieldIds: {
+                for (final id in card.hiddenFieldIds)
+                  if (importedFieldIds[id] != null) importedFieldIds[id]!,
+              },
+              modifiedAt: card.modifiedAt,
+            ),
+          );
+        } catch (_) {
+          try {
+            destination.saveCard(
+              SpbWalletCardDraft(
+                id: cardId,
+                title: card.title.isEmpty
+                    ? 'Импортированная карточка'
+                    : card.title,
+                description: card.description,
+                categoryPath: importingFolder
+                    ? importedFolderCategoryPath(
+                        card.categoryPath,
+                        exportedFolderPath,
+                        destinationCategoryPath,
+                      )
+                    : destinationCategoryPath,
+                templateId: importedTemplateId,
+                fieldValues: importedValues,
+                iconId: importedCardIconId,
+                cardColor: card.cardColor,
+                modifiedAt: card.modifiedAt,
+              ),
+            );
+          } catch (_) {
+            incompatibleCards.add(card.title);
+            continue;
+          }
+        }
+        importedCardCount++;
+        for (final attachment in card.attachments) {
+          try {
+            destination.saveAttachment(
+              cardId: cardId,
+              fileName: attachment.fileName,
+              bytes: source.readAttachmentBytes(attachment.id),
+            );
+          } catch (_) {
+            skippedAttachmentCount++;
+          }
+        }
       }
-      if (snapshot.templates.isNotEmpty || snapshot.cards.isNotEmpty) {
+      if (snapshot.cards.isNotEmpty && importedCardCount == 0) {
+        throw const FormatException(
+          'База полностью несовместима: ни одну карточку импортировать не удалось.',
+        );
+      }
+      if (snapshot.templates.isNotEmpty ||
+          snapshot.cards.isNotEmpty ||
+          snapshot.categories.isNotEmpty) {
         markVaultDirty();
       }
       final written = await writeBackSpbWallet();
@@ -8469,11 +9528,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       commitSessionUndo(undoEntry);
       showSpbOperationMessage(
         written
-            ? 'Импортировано карточек: ${snapshot.cards.length}'
+            ? 'Импортировано карточек: $importedCardCount'
+                '${incompatibleCards.isEmpty ? '' : ', несовместимых: ${incompatibleCards.length}'}'
+                '${skippedAttachmentCount == 0 ? '' : ', пропущено вложений: $skippedAttachmentCount'}'
             : 'Карточки импортированы в рабочую копию, но исходный файл '
                 'записать не удалось.',
       );
     } catch (error) {
+      if (undoEntry != null) {
+        try {
+          await destination.restoreUndoSnapshot(undoEntry.databaseSnapshot);
+        } catch (_) {}
+      }
       discardSessionUndo(undoEntry);
       showSpbOperationMessage('Не удалось импортировать SWL: $error');
     } finally {
@@ -11812,37 +12878,97 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     await openItemDialog(item: item);
   }
 
-  Future<bool> deleteItemWithConfirmation(SecretItem item) async {
-    if (!ensureSpbWalletWritable()) return false;
+  Future<void> deleteSpbCardsWithConfirmation(
+    List<SecretItem> selectedCards,
+  ) async {
+    if (!ensureSpbWalletWritable() || selectedCards.isEmpty) return;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-        title: const Text('Удалить карточку'),
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        title: const Text('Удалить карточки'),
+        content: Text(
+          'Выбранные карточки (${selectedCards.length}) будут удалены из базы.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('confirmDeleteSelectedCardsButton'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Удалить'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Отмена'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final wallet = spbWallet;
+    if (wallet == null) return;
+    final ids = selectedCards.map((item) => item.id).toSet();
+    SessionUndoEntry? undoEntry;
+    try {
+      undoEntry = await captureSessionUndo(
+        'Удаление карточек: ${selectedCards.length}',
+        itemIconId(
+          selectedCards.first,
+          templateFor(selectedCards.first.templateId),
+        ),
+      );
+      for (final item in selectedCards) {
+        sessionTrashCardIds.add(item.id);
+        sessionTrash.add(
+          SessionTrashEntry(
+            kind: SessionTrashKind.card,
+            id: item.id,
+            title: item.title,
+            iconId: itemIconId(item, templateFor(item.templateId)),
+          ),
+        );
+      }
+      setState(() {
+        items = items.where((item) => !ids.contains(item.id)).toList();
+        itemsById.removeWhere((id, _) => ids.contains(id));
+        recentlyOpenedItemIds.removeWhere(ids.contains);
+        selectedItemIds.clear();
+        selectedItemId = null;
+        message = null;
+      });
+      commitSessionUndo(undoEntry);
+    } catch (error) {
+      discardSessionUndo(undoEntry);
+      showSpbOperationMessage('Не удалось удалить карточки: $error');
+    }
+  }
+
+  Future<bool> deleteItemWithConfirmation(SecretItem item) async {
+    if (!ensureSpbWalletWritable()) return false;
+    final itemTemplate = templateFor(item.templateId);
+    final isNote = itemTemplate.id == 'tpl_note' ||
+        itemTemplate.name.toLowerCase().contains('замет');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        title: Text(isNote ? 'Удалить заметку' : 'Удалить карточку'),
         content: Text('Карточка "${item.title}" будет удалена из базы.'),
         actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
         actions: [
-          SizedBox(
-            width: 124,
-            child: passwordKey(
-              key: const Key('cancelDeleteCardButton'),
-              label: 'Отмена',
-              height: 40,
-              fontSize: 18,
-              onPressed: () => Navigator.pop(dialogContext, false),
-            ),
+          SpbGradientActionButton(
+            key: const Key('confirmDeleteCardButton'),
+            icon: Icons.check,
+            tooltip: isNote ? 'Удалить заметку' : 'Удалить карточку',
+            colors: const [Color(0xff43a047), Color(0xff1b5e20)],
+            onTap: () => Navigator.pop(dialogContext, true),
           ),
-          SizedBox(
-            width: 124,
-            child: passwordKey(
-              key: const Key('confirmDeleteCardButton'),
-              label: 'Удалить',
-              height: 40,
-              fontSize: 18,
-              top: const Color(0xffe04b3f),
-              bottom: const Color(0xff8f1515),
-              onPressed: () => Navigator.pop(dialogContext, true),
-            ),
+          const SizedBox(width: 8),
+          SpbGradientActionButton(
+            key: const Key('cancelDeleteCardButton'),
+            icon: Icons.close,
+            tooltip: 'Отмена',
+            colors: const [Color(0xffd32b31), Color(0xff7f0609)],
+            onTap: () => Navigator.pop(dialogContext, false),
           ),
         ],
       ),

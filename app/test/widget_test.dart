@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:wallet_aps/main.dart';
 import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
 import 'package:flutter/foundation.dart';
@@ -9,6 +11,32 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+class TestFilePicker extends FilePicker {
+  TestFilePicker(this.result);
+
+  final FilePickerResult? result;
+  bool? lastWithData;
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    bool allowCompression = false,
+    int compressionQuality = 0,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+  }) async {
+    lastWithData = withData;
+    return result;
+  }
+}
 
 Offset textOffsetPosition(
   WidgetTester tester,
@@ -34,6 +62,20 @@ Offset textOffsetPosition(
 }
 
 void main() {
+  test('SUBST paths resolve to their stable backing directory', () {
+    final mappings = parseWindowsSubstMappings(
+      'S:\\: => C:\\Users\\Vadim\\SynologyDrive\r\n'
+      'R:\\: => D:\\Archive\r\n',
+    );
+
+    expect(mappings['S'], r'C:\Users\Vadim\SynologyDrive');
+    expect(
+      resolveWindowsSubstPath(r'S:\WalletAPS\ЯВArchive.swl', mappings),
+      r'C:\Users\Vadim\SynologyDrive\WalletAPS\ЯВArchive.swl',
+    );
+    expect(resolveWindowsSubstPath(r'C:\local.swl', mappings), isNull);
+  });
+
   testWidgets('replacement third-party icon bundle is available',
       (tester) async {
     addTearDown(() {
@@ -1552,6 +1594,122 @@ void main() {
     );
   });
 
+  testWidgets('wide card grid supports mouse marquee selection',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final CardTemplate template = state.templates.first as CardTemplate;
+    state.setState(() {
+      state.items = <SecretItem>[
+        for (final id in const ['marquee-card-1', 'marquee-card-2'])
+          SecretItem(
+            id: id,
+            templateId: template.id,
+            title: id,
+            category: '',
+            colorId: template.colorId,
+            values: const <String, String>{},
+            modifiedAt: DateTime(2026),
+          ),
+      ];
+      state.selectedItemIds.clear();
+    });
+    await tester.pumpAndSettle();
+
+    final workspace = tester.getRect(
+      find.byKey(const Key('spbCentralWorkspace')),
+    );
+    final gesture = await tester.startGesture(
+      workspace.bottomRight - const Offset(12, 12),
+      kind: PointerDeviceKind.mouse,
+      buttons: kPrimaryMouseButton,
+    );
+    await gesture.moveTo(workspace.topLeft + const Offset(8, 8));
+    await tester.pump();
+    expect(find.byKey(const Key('spbCardMarquee')), findsOneWidget);
+    await gesture.up();
+    await tester.pump();
+
+    expect(
+      state.selectedItemIds,
+      <String>{'marquee-card-1', 'marquee-card-2'},
+    );
+    expect(find.byKey(const Key('spbCardMarquee')), findsNothing);
+  });
+
+  testWidgets(
+      'wide layout supports Ctrl multi-selection for cards and templates',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final CardTemplate template = state.templates.first as CardTemplate;
+    state.setState(() {
+      state.items = <SecretItem>[
+        for (final id in const ['multi-card-1', 'multi-card-2'])
+          SecretItem(
+            id: id,
+            templateId: template.id,
+            title: id,
+            category: '',
+            colorId: template.colorId,
+            values: const <String, String>{},
+            modifiedAt: DateTime(2026),
+          ),
+      ];
+      state.selectedItemId = null;
+      state.selectedItemIds.clear();
+    });
+    await tester.pumpAndSettle();
+
+    for (final id in const ['multi-card-1', 'multi-card-2']) {
+      state.selectSpbCardFromPrimaryClick(
+        state.items.firstWhere((SecretItem item) => item.id == id),
+        controlPressed: true,
+      );
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+
+    expect(state.selectedItemIds, <String>{'multi-card-1', 'multi-card-2'});
+    expect(find.byKey(const Key('cardPreviewSurface')), findsNothing);
+    expect(
+      state.defaultMultiCardExportName(DateTime(2026, 9, 29, 17, 8, 4)),
+      'import_card_17-08-04_29-09-2026',
+    );
+
+    state.setState(() {
+      state.mobileTemplatesOpen = true;
+      state.selectedTemplateId = null;
+      state.selectedTemplateIds.clear();
+    });
+    await tester.pumpAndSettle();
+    final templateIds = <String>[
+      (state.templates[0] as CardTemplate).id,
+      (state.templates[1] as CardTemplate).id,
+    ];
+    for (final id in templateIds) {
+      state.selectSpbTemplateFromPrimaryClick(
+        state.templates.firstWhere((CardTemplate entry) => entry.id == id),
+        controlPressed: true,
+      );
+      await tester.pump();
+    }
+    await tester.pumpAndSettle();
+    expect(state.selectedTemplateIds, templateIds.toSet());
+  });
+
   testWidgets('central card reacts only on its icon and label', (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2737,7 +2895,223 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('delete card confirmation uses blue and red 3D buttons',
+  testWidgets('card import reuses an existing template and maps its fields',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    const source = SpbWalletTemplateRecord(
+      id: 'source-template',
+      name: '  СЕРВЕР  ',
+      iconId: 'source-icon',
+      fields: [
+        SpbWalletTemplateFieldRecord(
+          id: 'source-login',
+          name: 'Логин',
+          templateId: 'source-template',
+          fieldTypeId: 1,
+        ),
+        SpbWalletTemplateFieldRecord(
+          id: 'source-password',
+          name: 'Пароль',
+          templateId: 'source-template',
+          fieldTypeId: 2,
+        ),
+      ],
+    );
+    const existing = SpbWalletTemplateRecord(
+      id: 'existing-template',
+      name: 'сервер',
+      iconId: 'existing-icon',
+      fields: [
+        SpbWalletTemplateFieldRecord(
+          id: 'existing-login',
+          name: 'Логин',
+          templateId: 'existing-template',
+          fieldTypeId: 1,
+        ),
+        SpbWalletTemplateFieldRecord(
+          id: 'existing-password',
+          name: 'Пароль',
+          templateId: 'existing-template',
+          fieldTypeId: 2,
+        ),
+      ],
+    );
+
+    final matched = state.existingSpbTemplateForImport(source, [existing]);
+    expect(matched.id, existing.id);
+    expect(
+      state.importedFieldIdsForExistingTemplate(source, existing),
+      const {
+        'source-login': 'existing-login',
+        'source-password': 'existing-password',
+      },
+    );
+    const orphanSnapshot = SpbWalletSnapshot(
+      templates: [],
+      categories: [],
+      cards: [
+        SpbWalletCardRecord(
+          id: 'orphan-card',
+          title: 'Карточка без шаблона',
+          description: '',
+          categoryPath: 'Импорт / Вложенная папка',
+          templateId: 'missing-template',
+          fieldValues: {'missing-field': 'Сохранённое значение'},
+          attachments: [],
+          hitCount: 0,
+          iconId: '',
+          cardColor: 0xffffff,
+        ),
+      ],
+    );
+    final recovered = state.requiredSpbTemplatesForImport(orphanSnapshot);
+    expect(recovered, hasLength(1));
+    expect(recovered.single.id, 'missing-template');
+    expect(recovered.single.fields.single.id, 'missing-field');
+    final randomIcon = state.cardIconIdForImport(
+      sourceIconId: 'FFFFFFFFFFFFFFFF',
+      sourceSnapshot: orphanSnapshot,
+      destinationSnapshot: const SpbWalletSnapshot(
+        templates: [],
+        categories: [],
+        cards: [],
+      ),
+      random: Random(7),
+    );
+    expect(randomIcon, isNot('FFFFFFFFFFFFFFFF'));
+    expect(spbOriginalIconAssets, contains(randomIcon));
+  });
+
+  testWidgets('folder SWL import restores the folder below the target folder',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final directory =
+        Directory.systemTemp.createTempSync('wallet_aps_folder_import_');
+    final sourcePath = '${directory.path}${Platform.pathSeparator}Импорт.swl';
+    final destinationPath =
+        '${directory.path}${Platform.pathSeparator}destination.swl';
+    final source = SpbWalletDatabase.create(sourcePath, '');
+    final templateId = SpbWalletDatabase.makeId();
+    final fieldId = SpbWalletDatabase.makeId();
+    final cardId = SpbWalletDatabase.makeId();
+    source.saveTemplate(
+      SpbWalletTemplateDraft(
+        id: templateId,
+        name: 'Импортируемый шаблон',
+        fields: [
+          SpbWalletTemplateFieldRecord(
+            id: fieldId,
+            name: 'Логин',
+            templateId: templateId,
+            fieldTypeId: 1,
+          ),
+        ],
+      ),
+    );
+    source.saveCard(
+      SpbWalletCardDraft(
+        id: cardId,
+        title: 'Карточка из папки',
+        description: 'Описание',
+        categoryPath: 'Импорт / Вложенная',
+        templateId: templateId,
+        fieldValues: {fieldId: 'user@example.test'},
+        iconId: 'FFFFFFFFFFFFFFFF',
+      ),
+    );
+    source.saveAttachment(
+      cardId: cardId,
+      fileName: 'данные.txt',
+      bytes: const [1, 2, 3, 4],
+    );
+    source.close();
+    final destination = SpbWalletDatabase.create(destinationPath, '');
+    destination.ensureCategoryPath('Назначение');
+    final filePicker = TestFilePicker(
+      FilePickerResult([
+        PlatformFile(
+          name: 'Импорт.swl',
+          path: sourcePath,
+          size: File(sourcePath).lengthSync(),
+        ),
+      ]),
+    );
+    FilePicker.platform = filePicker;
+    addTearDown(() {
+      FilePicker.platform = TestFilePicker(null);
+      try {
+        destination.close();
+      } catch (_) {}
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    state.spbWallet = destination;
+    state.applySpbSnapshot(destination.loadSnapshot());
+    state.setState(() {});
+
+    await state.importSpbWalletCards(
+      destinationCategoryPath: 'Назначение',
+    );
+    await tester.pumpAndSettle();
+
+    final imported = destination.loadSnapshot();
+    expect(filePicker.lastWithData, isFalse);
+    expect(imported.cards, hasLength(1));
+    expect(imported.cards.single.title, 'Карточка из папки');
+    expect(
+      imported.cards.single.categoryPath,
+      'Назначение / Импорт / Вложенная',
+    );
+    expect(imported.cards.single.attachments, hasLength(1));
+    expect(imported.cards.single.iconId, isNot('FFFFFFFFFFFFFFFF'));
+    expect(spbOriginalIconAssets, contains(imported.cards.single.iconId));
+    expect(
+      imported.cards.single.fieldValues.values,
+      contains('user@example.test'),
+    );
+    expect(
+      imported.categories.map((entry) => entry.name),
+      containsAll(<String>['Назначение', 'Импорт', 'Вложенная']),
+    );
+    expect(find.textContaining('Импортировано карточек: 1'), findsOneWidget);
+
+    destination.deleteCard(imported.cards.single.id);
+    state.setState(() {
+      state.applySpbSnapshot(destination.loadSnapshot());
+    });
+    await tester.pumpAndSettle();
+    expect(state.items, isEmpty);
+
+    await state.importSpbWalletCards(
+      destinationCategoryPath: 'Назначение',
+    );
+    await tester.pumpAndSettle();
+
+    final reimported = destination.loadSnapshot();
+    expect(reimported.cards, hasLength(1));
+    expect(state.items, hasLength(1));
+    expect(state.items.single.title, 'Карточка из папки');
+    expect(
+      reimported.cards.single.categoryPath,
+      'Назначение / Импорт / Вложенная',
+    );
+    state.spbWallet = null;
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('delete card confirmation is square with green and red buttons',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -2765,12 +3139,290 @@ void main() {
     expect(find.text('Удалить карточку'), findsOneWidget);
     expect(cancel, findsOneWidget);
     expect(confirm, findsOneWidget);
-    expect(tester.getSize(cancel), const Size(124, 48));
-    expect(tester.getSize(confirm), const Size(124, 48));
+    expect(tester.getSize(cancel), const Size(48, 48));
+    expect(tester.getSize(confirm), const Size(48, 48));
+    expect(
+      tester.widget<SpbGradientActionButton>(confirm).colors,
+      const [Color(0xff43a047), Color(0xff1b5e20)],
+    );
+    expect(
+      tester.widget<SpbGradientActionButton>(cancel).colors,
+      const [Color(0xffd32b31), Color(0xff7f0609)],
+    );
+    expect(tester.getCenter(confirm).dx, lessThan(tester.getCenter(cancel).dx));
+    final dialog = tester.widget<AlertDialog>(find.byType(AlertDialog));
+    expect(
+      (dialog.shape! as RoundedRectangleBorder).borderRadius,
+      BorderRadius.zero,
+    );
 
     await tester.tap(cancel);
     await tester.pumpAndSettle();
     expect(confirm, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('delete note confirmation uses the standard square dialog',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final template = builtInTemplates().firstWhere(
+      (entry) => entry.id == 'tpl_note',
+    );
+    final item = SecretItem(
+      id: 'delete-dialog-note',
+      templateId: template.id,
+      title: 'Удаляемая заметка',
+      category: '',
+      colorId: template.colorId,
+      values: const {},
+      modifiedAt: DateTime(2026),
+    );
+
+    unawaited(state.deleteItemWithConfirmation(item));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Удалить заметку'), findsOneWidget);
+    final confirm = find.byKey(const Key('confirmDeleteCardButton'));
+    final cancel = find.byKey(const Key('cancelDeleteCardButton'));
+    expect(
+      tester.widget<SpbGradientActionButton>(confirm).colors,
+      const [Color(0xff43a047), Color(0xff1b5e20)],
+    );
+    expect(
+      tester.widget<SpbGradientActionButton>(cancel).colors,
+      const [Color(0xffd32b31), Color(0xff7f0609)],
+    );
+    final dialog = tester.widget<AlertDialog>(find.byType(AlertDialog));
+    expect(
+      (dialog.shape! as RoundedRectangleBorder).borderRadius,
+      BorderRadius.zero,
+    );
+
+    await tester.tap(cancel);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'delete template confirmation is square with green and red buttons',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final template = builtInTemplates().first;
+
+    unawaited(state.deleteTemplateWithConfirmation(template));
+    await tester.pumpAndSettle();
+
+    final confirm = find.byKey(const Key('confirmDeleteTemplateButton'));
+    final cancel = find.byKey(const Key('cancelDeleteTemplateButton'));
+    expect(find.text('Удалить шаблон'), findsOneWidget);
+    expect(confirm, findsOneWidget);
+    expect(cancel, findsOneWidget);
+    expect(tester.getSize(confirm), const Size(48, 48));
+    expect(tester.getSize(cancel), const Size(48, 48));
+    expect(
+      tester.widget<SpbGradientActionButton>(confirm).colors,
+      const [Color(0xff43a047), Color(0xff1b5e20)],
+    );
+    expect(
+      tester.widget<SpbGradientActionButton>(cancel).colors,
+      const [Color(0xffd32b31), Color(0xff7f0609)],
+    );
+    expect(tester.getCenter(confirm).dx, lessThan(tester.getCenter(cancel).dx));
+    final dialog = tester.widget<AlertDialog>(find.byType(AlertDialog));
+    expect(
+      (dialog.shape! as RoundedRectangleBorder).borderRadius,
+      BorderRadius.zero,
+    );
+
+    await tester.tap(cancel);
+    await tester.pumpAndSettle();
+    expect(confirm, findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('deleting a template reassigns cards to an identical template',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final directory =
+        Directory.systemTemp.createTempSync('wallet_aps_template_reassign_');
+    final database = SpbWalletDatabase.create(
+      '${directory.path}${Platform.pathSeparator}template-reassign.swl',
+      '',
+    );
+    addTearDown(() {
+      try {
+        database.close();
+      } catch (_) {}
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
+    final sourceTemplateId = SpbWalletDatabase.makeId();
+    final replacementTemplateId = SpbWalletDatabase.makeId();
+    final sourceFieldId = SpbWalletDatabase.makeId();
+    final replacementFieldId = SpbWalletDatabase.makeId();
+    final cardId = SpbWalletDatabase.makeId();
+    database.saveTemplate(
+      SpbWalletTemplateDraft(
+        id: sourceTemplateId,
+        name: 'Учётная запись',
+        fields: [
+          SpbWalletTemplateFieldRecord(
+            id: sourceFieldId,
+            name: 'Логин',
+            templateId: sourceTemplateId,
+            fieldTypeId: 1,
+          ),
+        ],
+      ),
+    );
+    database.saveTemplate(
+      SpbWalletTemplateDraft(
+        id: replacementTemplateId,
+        name: 'Учётная запись',
+        fields: [
+          SpbWalletTemplateFieldRecord(
+            id: replacementFieldId,
+            name: 'Логин',
+            templateId: replacementTemplateId,
+            fieldTypeId: 1,
+          ),
+        ],
+      ),
+    );
+    database.saveCard(
+      SpbWalletCardDraft(
+        id: cardId,
+        title: 'Рабочая почта',
+        description: 'Описание',
+        categoryPath: '',
+        templateId: sourceTemplateId,
+        fieldValues: {sourceFieldId: 'user@example.test'},
+      ),
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    state.spbWallet = database;
+    state.applySpbSnapshot(database.loadSnapshot());
+    state.setState(() {});
+    await tester.pumpAndSettle();
+    final CardTemplate source = state.templates.firstWhere(
+      (CardTemplate entry) => entry.id == sourceTemplateId,
+    );
+
+    unawaited(state.deleteTemplateWithConfirmation(source));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('automaticTemplateReplacementText')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('replacementTemplateDropdown')), findsNothing);
+    await tester.tap(find.byKey(const Key('confirmDeleteTemplateButton')));
+    await tester.pumpAndSettle();
+
+    expect(state.items.single.templateId, replacementTemplateId);
+    expect(state.items.single.values[replacementFieldId], 'user@example.test');
+    state.purgeSessionTrashFromDatabase();
+    final snapshot = database.loadSnapshot();
+    expect(snapshot.templates.any((entry) => entry.id == sourceTemplateId),
+        isFalse);
+    expect(snapshot.cards, hasLength(1));
+    expect(snapshot.cards.single.templateId, replacementTemplateId);
+    expect(
+      snapshot.cards.single.fieldValues[replacementFieldId],
+      'user@example.test',
+    );
+    state.spbWallet = null;
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('template deletion offers a dropdown when no exact match exists',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    state.applySpbSnapshot(
+      const SpbWalletSnapshot(
+        templates: [
+          SpbWalletTemplateRecord(
+            id: 'source-template',
+            name: 'Исходный',
+            iconId: '',
+            fields: [
+              SpbWalletTemplateFieldRecord(
+                id: 'source-field',
+                name: 'Логин',
+                templateId: 'source-template',
+              ),
+            ],
+          ),
+          SpbWalletTemplateRecord(
+            id: 'other-template',
+            name: 'Другой',
+            iconId: '',
+            fields: [
+              SpbWalletTemplateFieldRecord(
+                id: 'other-field',
+                name: 'Пароль',
+                templateId: 'other-template',
+              ),
+            ],
+          ),
+        ],
+        categories: [],
+        cards: [
+          SpbWalletCardRecord(
+            id: 'linked-card',
+            title: 'Карточка',
+            description: '',
+            categoryPath: '',
+            templateId: 'source-template',
+            fieldValues: {'source-field': 'user'},
+            attachments: [],
+            hitCount: 0,
+            iconId: '',
+            cardColor: 0xffffff,
+          ),
+        ],
+      ),
+    );
+    state.setState(() {});
+    await tester.pumpAndSettle();
+    final CardTemplate source = state.templates.firstWhere(
+      (CardTemplate entry) => entry.id == 'source-template',
+    );
+
+    unawaited(state.deleteTemplateWithConfirmation(source));
+    await tester.pumpAndSettle();
+
+    expect(
+        find.byKey(const Key('replacementTemplateDropdown')), findsOneWidget);
+    expect(
+      find.byKey(const Key('automaticTemplateReplacementText')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(const Key('cancelDeleteTemplateButton')));
+    await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
   });
 
@@ -2845,7 +3497,8 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('icon upload confirmation uses standard actions on narrow Android',
+  testWidgets(
+      'icon upload confirmation uses standard actions on narrow Android',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await tester.binding.setSurfaceSize(const Size(390, 800));
@@ -2868,7 +3521,8 @@ void main() {
 
     final confirm = find.byKey(const Key('confirmIconUploadButton'));
     final cancel = find.byKey(const Key('cancelIconUploadButton'));
-    expect(find.byKey(const Key('iconUploadConfirmationDialog')), findsOneWidget);
+    expect(
+        find.byKey(const Key('iconUploadConfirmationDialog')), findsOneWidget);
     expect(confirm, findsOneWidget);
     expect(cancel, findsOneWidget);
     expect(tester.getSize(confirm), const Size(48, 48));
