@@ -6,7 +6,6 @@ on:
     branches: [ master ]
     paths:
       - "app/**"
-      - "core/**"
       - "tools/windows/**"
       - ".github/workflows/windows_setup.yml"
 

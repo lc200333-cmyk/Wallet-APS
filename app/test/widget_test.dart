@@ -85,11 +85,32 @@ void main() {
     });
     final icons = await loadThirdPartyIconAssets();
 
-    expect(icons, hasLength(1103));
-    expect(icons, contains('third-party://NewIcons/1.1-Bank-Account.png'));
+    expect(icons, hasLength(1012));
+    expect(icons, contains('third-party://NewIcons/1.2-Discover-4.png'));
     expect(icons, contains('third-party://NewIcons/Ziraat_Bank_3.png'));
     expect(thirdPartyIconPngs[icons.first], isNotEmpty);
   });
+
+  testWidgets('brand icon bundle is available', (tester) async {
+    addTearDown(() {
+      brandIconAssetsFuture = null;
+      brandIconAssets = [];
+      brandIconPngs = {};
+    });
+    final icons = await loadBrandIconAssets();
+
+    expect(icons, hasLength(433));
+    expect(
+      icons,
+      contains('brand://BrendLogo-3D-inner/apple-pay.png'),
+    );
+    expect(
+      icons,
+      contains('brand://BrendLogo-3D-inner/Apple_3.png'),
+    );
+    expect(brandIconPngs[icons.first], isNotEmpty);
+  });
+
   test('selected template icon survives the stored IconID round trip', () {
     const selected = 'spb://third_party/custom_icon.png';
     final previousAssets = spb64PngIconAssets;
@@ -274,6 +295,9 @@ void main() {
       thirdPartyIconAssetsFuture = null;
       thirdPartyIconAssets = [];
       thirdPartyIconPngs = {};
+      brandIconAssetsFuture = null;
+      brandIconAssets = [];
+      brandIconPngs = {};
     });
     await tester.binding.setSurfaceSize(const Size(720, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -312,14 +336,20 @@ void main() {
     );
     final original = find.byKey(const Key('spbCardIconPicker'));
     final pictogram = find.byKey(const Key('cardPictogramPicker'));
+    final brands = find.byKey(const Key('cardBrandPicker'));
     final thirdParty = find.byKey(const Key('cardThirdPartyPicker'));
     final upload = find.byKey(const Key('cardUploadIconButton'));
     expect(original, findsOneWidget);
     expect(pictogram, findsOneWidget);
+    expect(brands, findsOneWidget);
     expect(thirdParty, findsOneWidget);
     expect(upload, findsOneWidget);
     expect(tester.getTopLeft(original).dx,
         lessThan(tester.getTopLeft(pictogram).dx));
+    expect(tester.getTopLeft(pictogram).dx,
+        lessThan(tester.getTopLeft(brands).dx));
+    expect(tester.getTopLeft(brands).dx,
+        lessThan(tester.getTopLeft(thirdParty).dx));
     for (final color in templateColorPalette) {
       expect(find.byKey(ValueKey('cardColor-${color.id}')), findsOneWidget);
     }
@@ -527,21 +557,29 @@ void main() {
     await tester.tap(original);
     await tester.pumpAndSettle();
     expect(find.text('Иконки SPB Wallet'), findsOneWidget);
-    await tester.tap(find.widgetWithText(TextButton, 'Отмена'));
+    final closeButton = find.byKey(const Key('iconPickerCloseButton'));
+    expect(closeButton, findsOneWidget);
+    expect(
+      find.descendant(of: closeButton, matching: find.byIcon(Icons.close)),
+      findsOneWidget,
+    );
+    expect(
+      tester.widget<SpbGradientActionButton>(closeButton).colors,
+      const [Color(0xffff5a5f), Color(0xffa90000)],
+    );
+    await tester.tap(closeButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('cardBrandPicker')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('brandIconSearch')), findsOneWidget);
+    expect(find.byKey(const Key('brandIconPickerDialog')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('iconPickerCloseButton')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('cardThirdPartyPicker')));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('thirdPartyIconSearch')), findsNothing);
     expect(tester.takeException(), isNull);
-    final thirdPartyDialog = find.byKey(
-      const Key('thirdPartyIconPickerDialog'),
-    );
-    await tester.tap(
-      find.descendant(
-        of: thirdPartyDialog,
-        matching: find.byType(TextButton),
-      ),
-    );
+    await tester.tap(find.byKey(const Key('iconPickerCloseButton')));
     await tester.pumpAndSettle();
   });
 

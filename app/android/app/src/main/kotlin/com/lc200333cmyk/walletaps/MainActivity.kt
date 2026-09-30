@@ -2,7 +2,6 @@ package com.lc200333cmyk.walletaps
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
-import android.content.ClipData
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -87,16 +86,6 @@ class MainActivity : FlutterActivity() {
                         result.error("bad_args", "Missing path", null)
                     } else {
                         openFile(path, mimeType, result)
-                    }
-                }
-                "shareFile" -> {
-                    val path = call.argument<String>("path")
-                    val mimeType = call.argument<String>("mimeType") ?: "application/octet-stream"
-                    val title = call.argument<String>("title") ?: "Card.swl"
-                    if (path == null) {
-                        result.error("bad_args", "Missing path", null)
-                    } else {
-                        shareFile(path, mimeType, title, result)
                     }
                 }
                 else -> result.notImplemented()
@@ -289,26 +278,6 @@ class MainActivity : FlutterActivity() {
             result.error("no_viewer", "No application can open this file", null)
         } catch (error: Throwable) {
             result.error("open_failed", error.message, null)
-        }
-    }
-
-    private fun shareFile(path: String, mimeType: String, title: String, result: MethodChannel.Result) {
-        try {
-            val file = File(path)
-            if (!file.exists()) error("File does not exist")
-            val uri = FileProvider.getUriForFile(this, "${applicationContext.packageName}.fileprovider", file)
-            val intent = Intent(Intent.ACTION_SEND).apply {
-                type = mimeType
-                putExtra(Intent.EXTRA_STREAM, uri)
-                clipData = ClipData.newRawUri(title, uri)
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent.createChooser(intent, title))
-            result.success(true)
-        } catch (error: ActivityNotFoundException) {
-            result.error("no_share_target", "No application can share this file", null)
-        } catch (error: Throwable) {
-            result.error("share_failed", error.message, null)
         }
     }
 

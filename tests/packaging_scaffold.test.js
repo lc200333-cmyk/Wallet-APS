@@ -15,10 +15,6 @@ function exists(relativePath) {
 [
   'app/pubspec.yaml',
   'app/lib/main.dart',
-  'core/Cargo.toml',
-  'core/crates/vault_core/src/lib.rs',
-  'core/crates/sync_core/src/lib.rs',
-  'core/crates/ffi_api/src/lib.rs',
   'tools/build_android_apk.sh',
   'tools/build_linux_deb.sh',
   'docker/build-env/Dockerfile',
@@ -119,7 +115,6 @@ const dockerfile = read('docker/build-env/Dockerfile');
   'sdkmanager',
   'platforms;android-36',
   'ndk;28.2.13676358',
-  'rustup target add',
   'flutter precache --linux --android',
 ].forEach((needle) => assert.ok(dockerfile.includes(needle), `Dockerfile missing ${needle}`));
 
@@ -169,9 +164,5 @@ assert.ok(pkg.scripts['docker:release'].includes('docker-compose run --rm build-
 assert.ok(pkg.scripts['docker:release'].includes('docker-compose build build-apk build-deb'));
 assert.ok(pkg.scripts['docker:build-image'].includes('COMPOSE_HTTP_TIMEOUT=300'));
 assert.ok(pkg.scripts['docker:test'].includes('COMPOSE_HTTP_TIMEOUT=300'));
-
-const rustVault = read('core/crates/vault_core/src/lib.rs');
-assert.ok(rustVault.includes('built_in_card_hides_only_cvv'));
-assert.ok(rustVault.includes('bank_account_number_is_visible_but_password_is_secret'));
 
 console.log('packaging_scaffold.test.js: all tests passed');

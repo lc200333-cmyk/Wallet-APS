@@ -52,14 +52,6 @@ const buildNumber = pubspecVersion ? Number(pubspecVersion[2]) + 1 : 1;
 pubspec = pubspec.replace(/^version:\s*.+$/m, `version: ${version}+${buildNumber}`);
 write(pubspecPath, pubspec);
 
-const cargoPath = 'core/Cargo.toml';
-if (fs.existsSync(file(cargoPath))) {
-  write(
-    cargoPath,
-    read(cargoPath).replace(/^version\s*=\s*"[^"]+"/m, `version = "${version}"`),
-  );
-}
-
 const issPath = 'tools/windows/Wallet-APS.iss';
 write(
   issPath,

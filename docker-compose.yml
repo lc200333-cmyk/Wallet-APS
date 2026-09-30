@@ -21,8 +21,6 @@ services:
       - flutter-cache:/opt/flutter/bin/cache
       - pub-cache:/root/.pub-cache
       - gradle-cache:/root/.gradle
-      - cargo-cache:/root/.cargo
-      - rustup-cache:/root/.rustup
     command: bash -lc "trap 'chown -R $${HOST_UID}:$${HOST_GID} /workspace/dist 2>/dev/null || true' EXIT; npm test"
 
   build-apk:
@@ -45,8 +43,6 @@ services:
       - flutter-cache:/opt/flutter/bin/cache
       - pub-cache:/root/.pub-cache
       - gradle-cache:/root/.gradle
-      - cargo-cache:/root/.cargo
-      - rustup-cache:/root/.rustup
     command: bash -lc "trap 'chown -R $${HOST_UID}:$${HOST_GID} /workspace/dist /workspace/app/android /workspace/app/build 2>/dev/null || true' EXIT; tools/build_android_apk.sh"
 
   build-deb:
@@ -71,6 +67,4 @@ volumes:
   flutter-cache:
   pub-cache:
   gradle-cache:
-  cargo-cache:
-  rustup-cache:
   flutter-linux-cache:

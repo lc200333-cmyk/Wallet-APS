@@ -2,7 +2,7 @@
 set -euo pipefail
 
 missing=0
-for tool in flutter dart rustc cargo dpkg-deb; do
+for tool in flutter dart dpkg-deb; do
   if command -v "$tool" >/dev/null 2>&1; then
     echo "ok: $tool -> $(command -v "$tool")"
   else

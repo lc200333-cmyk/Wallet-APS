@@ -47,6 +47,7 @@ dist/
 *.tar.gz
 *.zip
 !app/assets/third_party/NewIcons.zip
+!app/assets/brands/BrendLogo-3D-inner.zip
 
 # Flutter/Dart generated state
 .dart_tool/

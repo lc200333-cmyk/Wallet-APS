@@ -8,9 +8,7 @@ ENV ANDROID_HOME=/opt/android-sdk \
     FLUTTER_HOME=/opt/flutter \
     PUB_CACHE=/root/.pub-cache \
     GRADLE_USER_HOME=/root/.gradle \
-    CARGO_HOME=/root/.cargo \
-    RUSTUP_HOME=/root/.rustup \
-    PATH=/opt/flutter/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PATH=/opt/flutter/bin:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -53,14 +51,6 @@ RUN mkdir -p "$ANDROID_HOME/cmdline-tools" \
     "cmake;3.22.1" \
   && flutter config --android-sdk "$ANDROID_HOME" \
   && yes | flutter doctor --android-licenses >/dev/null
-
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-  | sh -s -- -y --profile minimal --default-toolchain stable \
-  && rustup target add \
-    aarch64-linux-android \
-    armv7-linux-androideabi \
-    i686-linux-android \
-    x86_64-linux-android
 
 RUN flutter precache --linux --android \
   && flutter doctor -v

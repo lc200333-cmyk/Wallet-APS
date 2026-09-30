@@ -242,8 +242,6 @@ docker-compose.yml
 flutter-cache
 pub-cache
 gradle-cache
-cargo-cache
-rustup-cache
 ```
 
 ## Частые проблемы

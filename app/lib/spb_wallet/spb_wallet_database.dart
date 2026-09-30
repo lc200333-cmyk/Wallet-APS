@@ -632,13 +632,6 @@ class SpbWalletDatabase {
     ]);
   }
 
-  void recordCardHit(String cardId) {
-    _db.execute(
-      'UPDATE spbwlt_Card SET HitCount = HitCount + 1 WHERE hex(ID) = ?',
-      [cardId],
-    );
-  }
-
   void saveCategoryIcon(String categoryPath, String iconId) {
     _transaction(() {
       final categoryId = _ensureCategoryPath(categoryPath);

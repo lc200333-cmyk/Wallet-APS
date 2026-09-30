@@ -12,7 +12,6 @@ on:
     branches: [ master ]
     paths:
       - "app/**"
-      - "core/**"
       - "tools/**"
       - "docker/**"
       - "package.json"
@@ -38,9 +37,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
       - name: Verify packaging
         run: npm test
       - name: Resolve Flutter dependencies
@@ -52,12 +48,6 @@ jobs:
       - name: Test Flutter
         working-directory: app
         run: flutter test
-      - name: Verify Rust
-        working-directory: core
-        run: |
-          cargo fmt --all -- --check
-          cargo clippy --workspace --all-targets -- -D warnings
-          cargo test --workspace
 
   version:
     needs: verify
@@ -96,7 +86,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json app/pubspec.yaml core/Cargo.toml tools/windows/Wallet-APS.iss tools/build_linux_deb.sh
+          git add package.json package-lock.json app/pubspec.yaml tools/windows/Wallet-APS.iss tools/build_linux_deb.sh
           git commit -m "chore: release v$VERSION [skip release]"
           git tag -a "v$VERSION" -m "Wallet APS v$VERSION"
           git push origin HEAD:master

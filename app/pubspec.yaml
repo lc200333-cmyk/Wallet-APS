@@ -33,7 +33,7 @@ flutter:
     - assets/spb_icons.bundle
     # User-provided third-party icon library, kept in one non-media archive.
     - assets/third_party/NewIcons.zip
-    # Original template library. Legacy databases refer to stable identities.
-    - assets/spb_wallet_libraries/templates/
+    # Brand icon library, kept in one non-media archive.
+    - assets/brands/BrendLogo-3D-inner.zip
     # Base wallet used when the user creates a new encrypted .swl database.
     - assets/base_wallet/MyWallet.swl
