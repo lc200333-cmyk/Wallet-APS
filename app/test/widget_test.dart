@@ -2785,6 +2785,19 @@ void main() {
 
   testWidgets('inactivity warning locks the vault instead of closing the app',
       (tester) async {
+    String? clipboardText;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        clipboardText =
+            (call.arguments as Map<dynamic, dynamic>)['text'] as String;
+      }
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
     await tester.binding.setSurfaceSize(const Size(720, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(
@@ -2808,6 +2821,8 @@ void main() {
 
     expect(find.byKey(const Key('passwordInput')), findsOneWidget);
     expect(find.byType(VaultShell), findsOneWidget);
+    expect(find.text('Сохранить буфер обмена?'), findsNothing);
+    expect(clipboardText, isEmpty);
     expect(tester.takeException(), isNull);
   });
 
@@ -2862,6 +2877,71 @@ void main() {
     expect(find.text('Предупреждение'), findsNothing);
     expect(find.byKey(const Key('passwordInput')), findsOneWidget);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('automatic exit clears clipboard without confirmation',
+      (tester) async {
+    String? clipboardText;
+    var exitRequested = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        clipboardText =
+            (call.arguments as Map<dynamic, dynamic>)['text'] as String;
+      }
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VaultShell(
+          onExitRequested: () async => exitRequested = true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    await state.exitApplication(automatic: true);
+    await tester.pumpAndSettle();
+
+    expect(exitRequested, isTrue);
+    expect(clipboardText, isEmpty);
+    expect(find.text('Сохранить буфер обмена?'), findsNothing);
+    expect(find.byKey(const Key('exitKeepClipboardButton')), findsNothing);
+    expect(find.byKey(const Key('exitClearClipboardButton')), findsNothing);
+  });
+
+  testWidgets('manual exit asks whether to keep the clipboard', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(720, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const WalletApsApp());
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final confirmation = state.confirmClipboardOnExit() as Future<bool?>;
+    await tester.pumpAndSettle();
+
+    expect(find.text('Сохранить буфер обмена?'), findsOneWidget);
+    final keepButton = find.byKey(const Key('exitKeepClipboardButton'));
+    final clearButton = find.byKey(const Key('exitClearClipboardButton'));
+    expect(keepButton, findsOneWidget);
+    expect(clearButton, findsOneWidget);
+    expect(
+      tester.widget<SpbGradientActionButton>(keepButton).colors,
+      const [Color(0xff5bc96d), Color(0xff08772f)],
+    );
+    expect(
+      tester.widget<SpbGradientActionButton>(clearButton).colors,
+      const [Color(0xffff5a5f), Color(0xffa90000)],
+    );
+
+    await tester.tap(clearButton);
+    await tester.pumpAndSettle();
+    expect(await confirmation, isFalse);
   });
 
   testWidgets('new vault dialog never reuses the current password',

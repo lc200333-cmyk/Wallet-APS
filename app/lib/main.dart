@@ -2647,11 +2647,13 @@ class VaultShell extends StatefulWidget {
   const VaultShell({
     this.initiallyUnlocked = false,
     this.initialVaultPath,
+    this.onExitRequested,
     super.key,
   });
 
   final bool initiallyUnlocked;
   final String? initialVaultPath;
+  final Future<void> Function()? onExitRequested;
 
   @override
   State<VaultShell> createState() => _VaultShellState();
@@ -2726,6 +2728,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Timer? passwordUnlockDebounce;
   bool automaticUnlockInProgress = false;
   bool closingForInactivity = false;
+  bool exitPromptVisible = false;
+  bool exitInProgress = false;
   DateTime lastUserActivityAt = DateTime.now();
 
   List<CardTemplate> templates = builtInTemplates();
@@ -2827,6 +2831,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       if (mounted) {
         passwordFocusNode.requestFocus();
         initializeExternalWalletHandling();
+        initializeWindowHandling();
+      }
+    });
+  }
+
+  void initializeWindowHandling() {
+    if (!Platform.isWindows) return;
+    windowChannel.setMethodCallHandler((call) async {
+      if (call.method == 'requestClose') {
+        await exitApplication();
       }
     });
   }
@@ -2939,6 +2953,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     appUserActivityPulse.removeListener(recordAppWideUserActivity);
+    if (Platform.isWindows) {
+      windowChannel.setMethodCallHandler(null);
+    }
     inactivityTimer?.cancel();
     inactivityCountdownTimer?.cancel();
     lockedExitTimer?.cancel();
@@ -2980,7 +2997,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           idleFor >= const Duration(minutes: 2, seconds: 45)) {
         unawaited(showInactivityWarning());
       } else if (!unlocked && idleFor >= const Duration(minutes: 5)) {
-        unawaited(exitApplication());
+        unawaited(exitApplication(automatic: true));
       }
     }
   }
@@ -9444,7 +9461,108 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     setState(() => loginHintVisible = false);
   }
 
-  Future<void> exitApplication() async {
+  Future<bool?> confirmClipboardOnExit() {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => Dialog(
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.zero,
+          side: BorderSide(color: Color(0xff7f8d98)),
+        ),
+        child: SizedBox(
+          width: 440,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                height: 48,
+                alignment: Alignment.centerLeft,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+                  ),
+                  border: Border(
+                    bottom: BorderSide(color: Color(0xff7f8d98)),
+                  ),
+                ),
+                child: const Text(
+                  'Выход',
+                  style: TextStyle(fontSize: 18),
+                ),
+              ),
+              const ColoredBox(
+                color: Color(0xfff4f4f4),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 22, vertical: 24),
+                    child: Text(
+                      'Сохранить буфер обмена?',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 20),
+                    ),
+                  ),
+                ),
+              ),
+              Container(
+                height: 64,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: const BoxDecoration(
+                  color: Color(0xffdce8f1),
+                  border: Border(top: BorderSide(color: Color(0xff7f8d98))),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    SpbGradientActionButton(
+                      key: const Key('exitKeepClipboardButton'),
+                      icon: Icons.check,
+                      tooltip: 'Да, сохранить буфер обмена',
+                      colors: const [Color(0xff5bc96d), Color(0xff08772f)],
+                      onTap: () => Navigator.of(dialogContext).pop(true),
+                    ),
+                    const SizedBox(width: 4),
+                    SpbGradientActionButton(
+                      key: const Key('exitClearClipboardButton'),
+                      icon: Icons.close,
+                      tooltip: 'Нет, очистить буфер обмена',
+                      colors: const [Color(0xffff5a5f), Color(0xffa90000)],
+                      onTap: () => Navigator.of(dialogContext).pop(false),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> clearClipboardSilently() async {
+    try {
+      await SecureClipboardService.clear();
+    } on MissingPluginException {
+      // Widget tests and unsupported targets do not provide clipboard access.
+    } on PlatformException {
+      // Shutdown and automatic locking must continue if clipboard access is
+      // temporarily unavailable.
+    }
+  }
+
+  Future<void> exitApplication({bool automatic = false}) async {
+    if (exitInProgress || exitPromptVisible) return;
+    var keepClipboard = false;
+    if (!automatic) {
+      exitPromptVisible = true;
+      keepClipboard = await confirmClipboardOnExit() ?? false;
+      exitPromptVisible = false;
+      if (!mounted) return;
+    }
+    exitInProgress = true;
     lockedExitTimer?.cancel();
     lockedExitTimer = null;
     lockedExitCountdownTimer?.cancel();
@@ -9453,10 +9571,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     persistVaultState();
     final saved = await writeBackSpbWallet();
     if (!saved) {
+      exitInProgress = false;
       showSpbOperationMessage(
         'Программа не закрыта: не удалось сохранить изменения базы.',
       );
       return;
+    }
+    if (keepClipboard) {
+      SecureClipboardService.retain();
+    } else {
+      await clearClipboardSilently();
     }
     passwordController.clear();
     confirmController.clear();
@@ -9467,7 +9591,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     spbWalletPath = null;
     spbWalletUri = null;
     spbWalletDisplayPath = null;
-    if (Platform.isAndroid || Platform.isIOS) {
+    if (widget.onExitRequested != null) {
+      await widget.onExitRequested!();
+    } else if (Platform.isAndroid || Platform.isIOS) {
       await SystemNavigator.pop();
     } else {
       exit(0);
@@ -9477,7 +9603,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   void ensureLockedExitTimer() {
     lockedExitTimer ??= Timer(
       const Duration(minutes: 5),
-      () => unawaited(exitApplication()),
+      () => unawaited(exitApplication(automatic: true)),
     );
   }
 
@@ -9487,7 +9613,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     lockedExitTimer?.cancel();
     lockedExitTimer = Timer(
       const Duration(minutes: 5),
-      () => unawaited(exitApplication()),
+      () => unawaited(exitApplication(automatic: true)),
     );
   }
 
@@ -9641,6 +9767,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     purgeSessionTrashFromDatabase();
     persistVaultState();
     await writeBackSpbWallet();
+    await clearClipboardSilently();
     clearSessionUndoHistory();
     spbWallet?.close(flush: vaultDirty);
     spbWallet = null;

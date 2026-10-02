@@ -26,4 +26,14 @@ abstract final class SecureClipboardService {
       }
     });
   }
+
+  static void retain() {
+    _clearTimer?.cancel();
+    _clearTimer = null;
+  }
+
+  static Future<void> clear() async {
+    retain();
+    await Clipboard.setData(const ClipboardData(text: ''));
+  }
 }
