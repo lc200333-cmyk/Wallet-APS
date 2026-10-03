@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:wallet_aps/main.dart';
+import 'package:wallet_aps/services/platform/secure_clipboard_service.dart';
 import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
@@ -2783,6 +2784,20 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('desktop password window keeps its original size',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(const WalletApsApp());
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.getSize(find.byKey(const Key('passwordWindow'))),
+      const Size(562, 590),
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('inactivity warning locks the vault instead of closing the app',
       (tester) async {
     String? clipboardText;
@@ -2791,6 +2806,8 @@ void main() {
       if (call.method == 'Clipboard.setData') {
         clipboardText =
             (call.arguments as Map<dynamic, dynamic>)['text'] as String;
+      } else if (call.method == 'Clipboard.getData') {
+        return <String, dynamic>{'text': clipboardText};
       }
       return null;
     });
@@ -2800,6 +2817,7 @@ void main() {
     });
     await tester.binding.setSurfaceSize(const Size(720, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
+    await SecureClipboardService.copy('Секрет из приложения');
     await tester.pumpWidget(
       const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
     );
@@ -2879,7 +2897,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('automatic exit clears clipboard without confirmation',
+  testWidgets('every exit clears app clipboard without confirmation',
       (tester) async {
     String? clipboardText;
     var exitRequested = false;
@@ -2888,6 +2906,8 @@ void main() {
       if (call.method == 'Clipboard.setData') {
         clipboardText =
             (call.arguments as Map<dynamic, dynamic>)['text'] as String;
+      } else if (call.method == 'Clipboard.getData') {
+        return <String, dynamic>{'text': clipboardText};
       }
       return null;
     });
@@ -2895,6 +2915,7 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(SystemChannels.platform, null);
     });
+    await SecureClipboardService.copy('Секрет из приложения');
     await tester.pumpWidget(
       MaterialApp(
         home: VaultShell(
@@ -2905,43 +2926,48 @@ void main() {
     await tester.pumpAndSettle();
 
     final dynamic state = tester.state(find.byType(VaultShell));
-    await state.exitApplication(automatic: true);
+    await state.exitApplication();
     await tester.pumpAndSettle();
 
     expect(exitRequested, isTrue);
     expect(clipboardText, isEmpty);
     expect(find.text('Сохранить буфер обмена?'), findsNothing);
-    expect(find.byKey(const Key('exitKeepClipboardButton')), findsNothing);
-    expect(find.byKey(const Key('exitClearClipboardButton')), findsNothing);
   });
 
-  testWidgets('manual exit asks whether to keep the clipboard', (tester) async {
-    await tester.binding.setSurfaceSize(const Size(720, 900));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
-    await tester.pumpWidget(const WalletApsApp());
+  testWidgets('exit preserves clipboard replaced by another application',
+      (tester) async {
+    String? clipboardText;
+    var exitRequested = false;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        clipboardText =
+            (call.arguments as Map<dynamic, dynamic>)['text'] as String;
+      } else if (call.method == 'Clipboard.getData') {
+        return <String, dynamic>{'text': clipboardText};
+      }
+      return null;
+    });
+    addTearDown(() {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null);
+    });
+    await SecureClipboardService.copy('Секрет из приложения');
+    clipboardText = 'Новый текст из другой программы';
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VaultShell(
+          onExitRequested: () async => exitRequested = true,
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     final dynamic state = tester.state(find.byType(VaultShell));
-    final confirmation = state.confirmClipboardOnExit() as Future<bool?>;
-    await tester.pumpAndSettle();
+    await state.exitApplication();
 
-    expect(find.text('Сохранить буфер обмена?'), findsOneWidget);
-    final keepButton = find.byKey(const Key('exitKeepClipboardButton'));
-    final clearButton = find.byKey(const Key('exitClearClipboardButton'));
-    expect(keepButton, findsOneWidget);
-    expect(clearButton, findsOneWidget);
-    expect(
-      tester.widget<SpbGradientActionButton>(keepButton).colors,
-      const [Color(0xff5bc96d), Color(0xff08772f)],
-    );
-    expect(
-      tester.widget<SpbGradientActionButton>(clearButton).colors,
-      const [Color(0xffff5a5f), Color(0xffa90000)],
-    );
-
-    await tester.tap(clearButton);
-    await tester.pumpAndSettle();
-    expect(await confirmation, isFalse);
+    expect(exitRequested, isTrue);
+    expect(clipboardText, 'Новый текст из другой программы');
   });
 
   testWidgets('new vault dialog never reuses the current password',

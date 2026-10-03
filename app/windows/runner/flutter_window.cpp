@@ -163,8 +163,8 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
-  // Let Flutter ask whether the clipboard should be kept before the native
-  // window is destroyed. The Dart side terminates the process after saving.
+  // Let Flutter clear app-owned clipboard data and save the vault before the
+  // native window is destroyed. The Dart side then terminates the process.
   if (message == WM_CLOSE && window_channel_) {
     window_channel_->InvokeMethod(
         "requestClose", std::make_unique<flutter::EncodableValue>());

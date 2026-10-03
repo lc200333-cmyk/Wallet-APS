@@ -2728,7 +2728,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Timer? passwordUnlockDebounce;
   bool automaticUnlockInProgress = false;
   bool closingForInactivity = false;
-  bool exitPromptVisible = false;
   bool exitInProgress = false;
   DateTime lastUserActivityAt = DateTime.now();
 
@@ -2997,7 +2996,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           idleFor >= const Duration(minutes: 2, seconds: 45)) {
         unawaited(showInactivityWarning());
       } else if (!unlocked && idleFor >= const Duration(minutes: 5)) {
-        unawaited(exitApplication(automatic: true));
+        unawaited(exitApplication());
       }
     }
   }
@@ -9461,87 +9460,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     setState(() => loginHintVisible = false);
   }
 
-  Future<bool?> confirmClipboardOnExit() {
-    return showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => Dialog(
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-          side: BorderSide(color: Color(0xff7f8d98)),
-        ),
-        child: SizedBox(
-          width: 440,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                height: 48,
-                alignment: Alignment.centerLeft,
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-                  ),
-                  border: Border(
-                    bottom: BorderSide(color: Color(0xff7f8d98)),
-                  ),
-                ),
-                child: const Text(
-                  'Выход',
-                  style: TextStyle(fontSize: 18),
-                ),
-              ),
-              const ColoredBox(
-                color: Color(0xfff4f4f4),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 22, vertical: 24),
-                    child: Text(
-                      'Сохранить буфер обмена?',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(fontSize: 20),
-                    ),
-                  ),
-                ),
-              ),
-              Container(
-                height: 64,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                decoration: const BoxDecoration(
-                  color: Color(0xffdce8f1),
-                  border: Border(top: BorderSide(color: Color(0xff7f8d98))),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    SpbGradientActionButton(
-                      key: const Key('exitKeepClipboardButton'),
-                      icon: Icons.check,
-                      tooltip: 'Да, сохранить буфер обмена',
-                      colors: const [Color(0xff5bc96d), Color(0xff08772f)],
-                      onTap: () => Navigator.of(dialogContext).pop(true),
-                    ),
-                    const SizedBox(width: 4),
-                    SpbGradientActionButton(
-                      key: const Key('exitClearClipboardButton'),
-                      icon: Icons.close,
-                      tooltip: 'Нет, очистить буфер обмена',
-                      colors: const [Color(0xffff5a5f), Color(0xffa90000)],
-                      onTap: () => Navigator.of(dialogContext).pop(false),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Future<void> clearClipboardSilently() async {
     try {
       await SecureClipboardService.clear();
@@ -9553,15 +9471,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> exitApplication({bool automatic = false}) async {
-    if (exitInProgress || exitPromptVisible) return;
-    var keepClipboard = false;
-    if (!automatic) {
-      exitPromptVisible = true;
-      keepClipboard = await confirmClipboardOnExit() ?? false;
-      exitPromptVisible = false;
-      if (!mounted) return;
-    }
+  Future<void> exitApplication() async {
+    if (exitInProgress) return;
     exitInProgress = true;
     lockedExitTimer?.cancel();
     lockedExitTimer = null;
@@ -9577,11 +9488,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       );
       return;
     }
-    if (keepClipboard) {
-      SecureClipboardService.retain();
-    } else {
-      await clearClipboardSilently();
-    }
+    await clearClipboardSilently();
     passwordController.clear();
     confirmController.clear();
     clearSessionUndoHistory();
@@ -9603,7 +9510,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   void ensureLockedExitTimer() {
     lockedExitTimer ??= Timer(
       const Duration(minutes: 5),
-      () => unawaited(exitApplication(automatic: true)),
+      () => unawaited(exitApplication()),
     );
   }
 
@@ -9613,7 +9520,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     lockedExitTimer?.cancel();
     lockedExitTimer = Timer(
       const Duration(minutes: 5),
-      () => unawaited(exitApplication(automatic: true)),
+      () => unawaited(exitApplication()),
     );
   }
 
@@ -10092,6 +9999,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         child: Center(
           child: SingleChildScrollView(
             child: SizedBox(
+              key: const Key('passwordWindow'),
               width: min(MediaQuery.sizeOf(context).width, 562),
               height: message == null && !loginHintVisible ? 590 : 650,
               child: LayoutBuilder(
