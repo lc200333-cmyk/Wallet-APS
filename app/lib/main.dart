@@ -6896,6 +6896,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool showPersistentScrollbar = false,
     bool allowItemDragging = true,
   }) {
+    final mediaSize = MediaQuery.sizeOf(context);
+    final portraitTablet = mediaSize.height > mediaSize.width &&
+        min(mediaSize.width, mediaSize.height) >= 600;
+    final wideAndroidLayout = defaultTargetPlatform == TargetPlatform.android &&
+        mediaSize.width >= 700 &&
+        mediaSize.height >= 500 &&
+        !portraitTablet;
     final searchQuery = spbSubmittedSearchQuery;
     final showingSearchResults = searchQuery.isNotEmpty;
     final root = buildCategoryTree(
@@ -6982,12 +6989,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       showPersistentScrollbar ? 28 : 16,
                       16,
                     ),
-                    gridDelegate:
-                        const SliverGridDelegateWithMaxCrossAxisExtent(
+                    gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
                       maxCrossAxisExtent: 89.04,
                       mainAxisExtent: 83.475,
                       crossAxisSpacing: 3.975,
-                      mainAxisSpacing: 6.36,
+                      mainAxisSpacing: wideAndroidLayout ? 11.36 : 6.36,
                     ),
                     itemCount: folders.length + cards.length,
                     itemBuilder: (context, index) {
@@ -12726,6 +12732,15 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                                           ),
                                           SpbGrayPickerButton(
                                             key: const Key(
+                                              'categoryBrandPicker',
+                                            ),
+                                            label: 'Бренды',
+                                            icon: Icons.storefront_outlined,
+                                            tooltip: 'Иконки брендов',
+                                            onTap: pickBrandIcon,
+                                          ),
+                                          SpbGrayPickerButton(
+                                            key: const Key(
                                               'categoryThirdPartyPicker',
                                             ),
                                             label: 'сторонние',
@@ -12860,6 +12875,14 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
   Future<void> pickPictogram() async {
     final picked = await showIconPickerDialog(context, iconId);
     if (picked != null && mounted) setState(() => iconId = picked);
+  }
+
+  Future<void> pickBrandIcon() async {
+    final picked = await showBrandIconPickerDialog(context);
+    if (picked == null || !mounted) return;
+    final bytes = brandIconPngs[picked];
+    if (bytes == null) return;
+    setState(() => iconId = registerEmbeddedIcon(bytes));
   }
 
   Future<void> pickThirdPartyIcon() async {
@@ -15615,6 +15638,13 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                       onPressed: pickPictogram,
                     ),
                     templatePickerButton(
+                      key: const Key('templateBrandPicker'),
+                      label: 'Бренды',
+                      icon: Icons.storefront_outlined,
+                      tooltip: 'Иконки брендов',
+                      onPressed: pickBrandIcon,
+                    ),
+                    templatePickerButton(
                       key: const Key('templateIconsButton'),
                       label: 'сторонние',
                       icon: Icons.public_outlined,
@@ -16196,6 +16226,14 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   Future<void> pickSpbIcon() async {
     final picked = await showSpbOriginalIconPickerDialog(context, iconId);
     if (picked != null && mounted) changeIcon(picked);
+  }
+
+  Future<void> pickBrandIcon() async {
+    final picked = await showBrandIconPickerDialog(context);
+    if (picked == null || !mounted) return;
+    final bytes = brandIconPngs[picked];
+    if (bytes == null) return;
+    applyCustomIcon(bytes, picked.split('/').last);
   }
 
   Future<void> pickThirdPartyIcon() async {

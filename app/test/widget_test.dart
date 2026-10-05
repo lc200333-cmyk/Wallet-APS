@@ -180,6 +180,7 @@ void main() {
     expect(find.text('Выбрать иконку'), findsOneWidget);
     expect(find.byKey(const Key('templateSpbDefaultButton')), findsOneWidget);
     expect(find.byKey(const Key('templatePictogramsButton')), findsOneWidget);
+    expect(find.byKey(const Key('templateBrandPicker')), findsOneWidget);
     expect(find.byKey(const Key('templateIconsButton')), findsOneWidget);
     expect(find.byKey(const Key('templateUploadIconButton')), findsOneWidget);
     expect(
@@ -202,6 +203,13 @@ void main() {
       ),
     );
     expect(externalIcons.onTap, isNotNull);
+    final brandIcons = tester.widget<InkWell>(
+      find.descendant(
+        of: find.byKey(const Key('templateBrandPicker')),
+        matching: find.byType(InkWell),
+      ),
+    );
+    expect(brandIcons.onTap, isNotNull);
     final uploadIcon = tester.widget<InkWell>(
       find.descendant(
         of: find.byKey(const Key('templateUploadIconButton')),
@@ -1373,6 +1381,7 @@ void main() {
     expect(find.byKey(const Key('categoryBoundIcon')), findsOneWidget);
     expect(find.byKey(const Key('spbFolderIconPicker')), findsOneWidget);
     expect(find.byKey(const Key('categoryPictogramPicker')), findsOneWidget);
+    expect(find.byKey(const Key('categoryBrandPicker')), findsOneWidget);
     expect(find.byKey(const Key('categoryThirdPartyPicker')), findsOneWidget);
     expect(find.byKey(const Key('categoryUploadIconButton')), findsOneWidget);
     expect(find.byKey(const Key('categoryDeleteButton')), findsOneWidget);
@@ -2481,6 +2490,33 @@ void main() {
     expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
     expect(find.byKey(const Key('spbNavigatorSplitter')), findsNothing);
     expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
+  });
+
+  testWidgets('wide Android card grid adds five pixels between rows',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    await tester.binding.setSurfaceSize(const Size(1280, 800));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final grid = tester.widget<GridView>(
+      find.descendant(
+        of: find.byKey(const Key('spbCentralWorkspace')),
+        matching: find.byType(GridView),
+      ),
+    );
+    final delegate =
+        grid.gridDelegate as SliverGridDelegateWithMaxCrossAxisExtent;
+    expect(delegate.mainAxisSpacing, 11.36);
     debugDefaultTargetPlatformOverride = null;
     await tester.binding.setSurfaceSize(null);
   });
