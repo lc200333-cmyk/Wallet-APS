@@ -1,7 +1,10 @@
 #include "flutter_window.h"
 
 #include <algorithm>
+#include <cstdint>
+#include <cstring>
 #include <optional>
+#include <vector>
 
 #include "flutter/generated_plugin_registrant.h"
 
@@ -20,6 +23,73 @@ std::wstring Utf16FromUtf8(const std::string& value) {
   MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
                       static_cast<int>(value.size()), result.data(), length);
   return result;
+}
+
+std::optional<std::vector<uint8_t>> ReadClipboardBitmap(HWND owner) {
+  constexpr DWORD kBiAlphaBitfields = 6;
+  if (!OpenClipboard(owner)) {
+    return std::nullopt;
+  }
+  const UINT format = IsClipboardFormatAvailable(CF_DIBV5) ? CF_DIBV5
+                                                            : CF_DIB;
+  if (!IsClipboardFormatAvailable(format)) {
+    CloseClipboard();
+    return std::nullopt;
+  }
+  HANDLE handle = GetClipboardData(format);
+  if (handle == nullptr) {
+    CloseClipboard();
+    return std::nullopt;
+  }
+  const SIZE_T dib_size = GlobalSize(handle);
+  const auto* dib = static_cast<const uint8_t*>(GlobalLock(handle));
+  if (dib == nullptr || dib_size < sizeof(BITMAPINFOHEADER)) {
+    if (dib != nullptr) {
+      GlobalUnlock(handle);
+    }
+    CloseClipboard();
+    return std::nullopt;
+  }
+
+  const auto* info = reinterpret_cast<const BITMAPINFOHEADER*>(dib);
+  if (info->biSize < sizeof(BITMAPINFOHEADER) || info->biSize > dib_size) {
+    GlobalUnlock(handle);
+    CloseClipboard();
+    return std::nullopt;
+  }
+  const uint32_t palette_entries =
+      info->biClrUsed != 0
+          ? info->biClrUsed
+          : (info->biBitCount <= 8 ? (1u << info->biBitCount) : 0u);
+  uint32_t masks_size = 0;
+  if (info->biSize == sizeof(BITMAPINFOHEADER) &&
+      (info->biCompression == BI_BITFIELDS ||
+       info->biCompression == kBiAlphaBitfields)) {
+    masks_size = info->biCompression == kBiAlphaBitfields ? 16u : 12u;
+  }
+  const uint64_t pixel_offset =
+      14ull + info->biSize + masks_size + palette_entries * 4ull;
+  if (pixel_offset > 14ull + dib_size) {
+    GlobalUnlock(handle);
+    CloseClipboard();
+    return std::nullopt;
+  }
+
+  std::vector<uint8_t> bitmap(14 + dib_size, 0);
+  bitmap[0] = 'B';
+  bitmap[1] = 'M';
+  auto write_u32 = [&bitmap](size_t offset, uint32_t value) {
+    bitmap[offset] = static_cast<uint8_t>(value & 0xff);
+    bitmap[offset + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+    bitmap[offset + 2] = static_cast<uint8_t>((value >> 16) & 0xff);
+    bitmap[offset + 3] = static_cast<uint8_t>((value >> 24) & 0xff);
+  };
+  write_u32(2, static_cast<uint32_t>(bitmap.size()));
+  write_u32(10, static_cast<uint32_t>(pixel_offset));
+  std::memcpy(bitmap.data() + 14, dib, dib_size);
+  GlobalUnlock(handle);
+  CloseClipboard();
+  return bitmap;
 }
 }  // namespace
 
@@ -73,6 +143,13 @@ bool FlutterWindow::OnCreate() {
           SetMainWindowMode(
               Utf16FromUtf8(title == nullptr ? std::string() : *title));
           result->Success();
+        } else if (call.method_name() == "readClipboardImage") {
+          const auto bitmap = ReadClipboardBitmap(GetHandle());
+          if (bitmap.has_value()) {
+            result->Success(flutter::EncodableValue(bitmap.value()));
+          } else {
+            result->Success(flutter::EncodableValue());
+          }
         } else {
           result->NotImplemented();
         }

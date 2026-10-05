@@ -4,9 +4,12 @@ import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.view.DragEvent
+import android.view.ViewGroup
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -16,11 +19,14 @@ import java.io.FileOutputStream
 
 class MainActivity : FlutterActivity() {
     private val channelName = "wallet_aps/spb_wallet"
+    private val attachmentDropChannelName = "wallet_aps/android_attachment_drop"
     private val openRequestCode = 7401
     private val createRequestCode = 7402
     private var pendingPickResult: MethodChannel.Result? = null
     private var pendingCreateResult: MethodChannel.Result? = null
     private var walletChannel: MethodChannel? = null
+    private var attachmentDropChannel: MethodChannel? = null
+    private var attachmentDropEnabled = false
     private var launchWalletConsumed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,6 +96,89 @@ class MainActivity : FlutterActivity() {
                 }
                 else -> result.notImplemented()
             }
+        }
+        attachmentDropChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            attachmentDropChannelName
+        )
+        attachmentDropChannel!!.setMethodCallHandler { call, result ->
+            if (call.method == "setEnabled") {
+                attachmentDropEnabled = call.arguments as? Boolean ?: false
+                result.success(null)
+            } else {
+                result.notImplemented()
+            }
+        }
+        cacheDir.listFiles()
+            ?.filter { it.name.startsWith("card_drop_") }
+            ?.forEach { it.delete() }
+        installAttachmentDropListener()
+    }
+
+    private fun installAttachmentDropListener() {
+        val content = findViewById<ViewGroup>(android.R.id.content) ?: return
+        content.setOnDragListener { _, event ->
+            if (!attachmentDropEnabled) return@setOnDragListener false
+            when (event.action) {
+                DragEvent.ACTION_DRAG_ENTERED -> sendAttachmentDragPosition("dragEntered", event)
+                DragEvent.ACTION_DRAG_LOCATION -> sendAttachmentDragPosition("dragUpdated", event)
+                DragEvent.ACTION_DRAG_EXITED -> sendAttachmentDragPosition("dragExited", event)
+                DragEvent.ACTION_DROP -> cacheDroppedAttachments(event)
+            }
+            true
+        }
+    }
+
+    private fun sendAttachmentDragPosition(method: String, event: DragEvent) {
+        attachmentDropChannel?.invokeMethod(
+            method,
+            mapOf("x" to event.x.toDouble(), "y" to event.y.toDouble())
+        )
+    }
+
+    private fun cacheDroppedAttachments(event: DragEvent) {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            requestDragAndDropPermissions(event)
+        } else {
+            null
+        }
+        val cached = mutableListOf<Map<String, String>>()
+        try {
+            for (index in 0 until event.clipData.itemCount) {
+                val uri = event.clipData.getItemAt(index)?.uri ?: continue
+                val name = displayName(uri)
+                val safeName = name
+                    .replace(Regex("[^\\p{L}\\p{N}._ -]"), "_")
+                    .take(120)
+                    .ifBlank { "attachment" }
+                val target = File(
+                    cacheDir,
+                    "card_drop_${System.nanoTime()}_${index}_$safeName"
+                )
+                try {
+                    contentResolver.openInputStream(uri).use { input ->
+                        if (input == null) return@use
+                        FileOutputStream(target).use { output -> input.copyTo(output) }
+                    }
+                    if (target.isFile && target.length() > 0L) {
+                        cached.add(mapOf("path" to target.absolutePath, "name" to name))
+                    } else {
+                        target.delete()
+                    }
+                } catch (_: Throwable) {
+                    target.delete()
+                }
+            }
+            attachmentDropChannel?.invokeMethod(
+                "drop",
+                mapOf(
+                    "x" to event.x.toDouble(),
+                    "y" to event.y.toDouble(),
+                    "files" to cached
+                )
+            )
+        } finally {
+            permission?.release()
         }
     }
 

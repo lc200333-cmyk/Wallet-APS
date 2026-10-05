@@ -12,6 +12,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as image;
 
 class TestFilePicker extends FilePicker {
   TestFilePicker(this.result);
@@ -39,6 +40,56 @@ class TestFilePicker extends FilePicker {
   }
 }
 
+class InactiveBuildContext implements BuildContext {
+  @override
+  bool get mounted => true;
+
+  @override
+  RenderObject? findRenderObject() {
+    throw FlutterError('Cannot get renderObject of an inactive element.');
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _MovingGlobalKeyStack extends StatelessWidget {
+  const _MovingGlobalKeyStack({
+    required this.stackKey,
+    required this.moveRight,
+  });
+
+  final GlobalKey stackKey;
+  final bool moveRight;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: moveRight
+          ? [const SizedBox(width: 1), _GlobalKeyStackProbe(stackKey: stackKey)]
+          : [
+              _GlobalKeyStackProbe(stackKey: stackKey),
+              const SizedBox(width: 1)
+            ],
+    );
+  }
+}
+
+class _GlobalKeyStackProbe extends StatelessWidget {
+  const _GlobalKeyStackProbe({required this.stackKey});
+
+  final GlobalKey stackKey;
+
+  @override
+  Widget build(BuildContext context) {
+    activeGlobalRectForKey(stackKey);
+    return Stack(
+      key: stackKey,
+      children: const [SizedBox(width: 20, height: 20)],
+    );
+  }
+}
+
 Offset textOffsetPosition(
   WidgetTester tester,
   Finder editableText,
@@ -63,6 +114,102 @@ Offset textOffsetPosition(
 }
 
 void main() {
+  test('Windows pointer hit testing ignores inactive keyed elements', () {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    expect(activeRenderBox(InactiveBuildContext()), isNull);
+  });
+
+  testWidgets('Windows layout can move a keyed Stack without a red error',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    try {
+      final stackKey = GlobalKey();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: _MovingGlobalKeyStack(stackKey: stackKey, moveRight: false),
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: _MovingGlobalKeyStack(stackKey: stackKey, moveRight: true),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.byKey(stackKey), findsOneWidget);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
+  test('dropped icons preserve proportions with a 128 pixel longest side', () {
+    final landscape = image.decodePng(
+      normalizeDroppedIconPng(image.Image(width: 400, height: 200)),
+    )!;
+    final portrait = image.decodePng(
+      normalizeDroppedIconPng(image.Image(width: 150, height: 300)),
+    )!;
+
+    expect((landscape.width, landscape.height), (128, 64));
+    expect((portrait.width, portrait.height), (64, 128));
+  });
+
+  testWidgets('card folder and template icons are external image drop targets',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ItemEditorDialog(
+          templates: builtInTemplates(),
+          categories: const [],
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final cardTarget = tester.widget<ExternalImageDropTarget>(
+      find.ancestor(
+        of: find.byKey(const Key('cardBoundIcon')),
+        matching: find.byType(ExternalImageDropTarget),
+      ),
+    );
+    expect(cardTarget.enableWindowsPaste, isTrue);
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: CategoryEditorDialog(
+          editing: false,
+          initialName: '',
+          initialIconId: 'folder',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final categoryTarget = tester.widget<ExternalImageDropTarget>(
+      find.ancestor(
+        of: find.byKey(const Key('categoryBoundIcon')),
+        matching: find.byType(ExternalImageDropTarget),
+      ),
+    );
+    expect(categoryTarget.enableWindowsPaste, isFalse);
+
+    await tester.pumpWidget(
+      const MaterialApp(home: TemplateEditorDialog()),
+    );
+    await tester.pumpAndSettle();
+    final templateTarget = tester.widget<ExternalImageDropTarget>(
+      find.ancestor(
+        of: find.byKey(const Key('templateBoundIcon')),
+        matching: find.byType(ExternalImageDropTarget),
+      ),
+    );
+    expect(templateTarget.enableWindowsPaste, isFalse);
+  });
+
   test('SUBST paths resolve to their stable backing directory', () {
     final mappings = parseWindowsSubstMappings(
       'S:\\: => C:\\Users\\Vadim\\SynologyDrive\r\n'
@@ -735,7 +882,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('vertical editors keep their size when keyboard opens and closes',
+  testWidgets('vertical editors shrink and scroll above the screen keyboard',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(360, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -759,7 +906,14 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester.getSize(find.byKey(const Key('templateEditorSurface'))),
-      initialTemplateSize,
+      Size(initialTemplateSize.width, initialTemplateSize.height - 224),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('templateEditorSurface')),
+        matching: find.byType(Scrollbar),
+      ),
+      findsOneWidget,
     );
     final lastField = find.byKey(
       ValueKey('templateFieldName-${template.fields.last.id}'),
@@ -796,13 +950,51 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       tester.getSize(find.byKey(const Key('cardEditorSurface'))),
-      initialCardSize,
+      Size(initialCardSize.width, initialCardSize.height - 224),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('cardEditorSurface')),
+        matching: find.byType(Scrollbar),
+      ),
+      findsOneWidget,
     );
     await tester.pumpWidget(cardEditor(0));
     await tester.pumpAndSettle();
     expect(
       tester.getSize(find.byKey(const Key('cardEditorSurface'))),
       initialCardSize,
+    );
+
+    Widget categoryEditor(double keyboardHeight) => MaterialApp(
+          home: MediaQuery(
+            data: MediaQueryData(
+              size: const Size(360, 800),
+              viewInsets: EdgeInsets.only(bottom: keyboardHeight),
+            ),
+            child: const CategoryEditorDialog(
+              editing: false,
+              initialName: '',
+              initialIconId: 'folder',
+            ),
+          ),
+        );
+    await tester.pumpWidget(categoryEditor(0));
+    await tester.pumpAndSettle();
+    final initialCategorySize =
+        tester.getSize(find.byKey(const Key('categoryEditorSurface')));
+    await tester.pumpWidget(categoryEditor(224));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getSize(find.byKey(const Key('categoryEditorSurface'))),
+      Size(initialCategorySize.width, initialCategorySize.height - 224),
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('categoryEditorSurface')),
+        matching: find.byType(Scrollbar),
+      ),
+      findsOneWidget,
     );
   });
 

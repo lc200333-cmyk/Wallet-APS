@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:archive/archive.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -37,6 +38,39 @@ final appUserActivityPulse = ValueNotifier<int>(0);
 
 void notifyAppUserActivity() {
   appUserActivityPulse.value++;
+}
+
+RenderBox? activeRenderBox(BuildContext? context) {
+  if (context == null || !context.mounted) return null;
+  try {
+    final renderObject = context.findRenderObject();
+    if (renderObject is RenderBox &&
+        renderObject.attached &&
+        renderObject.hasSize) {
+      return renderObject;
+    }
+  } on FlutterError {
+    // A GlobalKey can briefly retain an inactive element while Flutter moves or
+    // removes its subtree. Such an element must not be queried for layout.
+  }
+  return null;
+}
+
+RenderBox? activeRenderBoxForKey(GlobalKey key) =>
+    activeRenderBox(key.currentContext);
+
+Rect? activeGlobalRectForKey(GlobalKey key) {
+  final renderObject = activeRenderBoxForKey(key);
+  if (renderObject == null) return null;
+  try {
+    final origin = renderObject.localToGlobal(Offset.zero);
+    if (!origin.dx.isFinite || !origin.dy.isFinite) return null;
+    return origin & renderObject.size;
+  } on FlutterError {
+    // Pointer and drag callbacks can arrive while Windows is replacing the
+    // keyed subtree. Ignore that event until the next laid-out frame.
+    return null;
+  }
 }
 
 const spbIconBundleAsset = 'assets/spb_icons.bundle';
@@ -1701,6 +1735,361 @@ Uint8List normalizeUserIconPng(image.Image source, {int size = 128}) {
   return Uint8List.fromList(image.encodePng(canvas));
 }
 
+Uint8List normalizeDroppedIconPng(image.Image source, {int maxSide = 128}) {
+  final scale = maxSide / max(source.width, source.height);
+  final width = max(1, (source.width * scale).round());
+  final height = max(1, (source.height * scale).round());
+  final resized = image.copyResize(
+    source,
+    width: width,
+    height: height,
+    interpolation: image.Interpolation.cubic,
+  );
+  return Uint8List.fromList(image.encodePng(resized));
+}
+
+image.Image? decodeUserIconImage(Uint8List bytes) {
+  try {
+    final ico = image.IcoDecoder().decodeImageLargest(bytes);
+    if (ico != null) return ico;
+  } catch (_) {}
+  return image.decodeImage(bytes);
+}
+
+String pngIconFileName(String originalName) {
+  final baseName = originalName.replaceFirst(RegExp(r'\.[^.]+$'), '').trim();
+  return '${baseName.isEmpty ? 'icon' : baseName}.png';
+}
+
+typedef AndroidDropFile = ({String path, String name});
+
+class _AndroidDropRegistration {
+  const _AndroidDropRegistration({
+    required this.regionKey,
+    required this.onHover,
+    required this.onDrop,
+  });
+
+  final GlobalKey regionKey;
+  final ValueChanged<bool> onHover;
+  final Future<void> Function(List<AndroidDropFile> files) onDrop;
+}
+
+class _AndroidExternalDropRegistry {
+  _AndroidExternalDropRegistry._();
+
+  static final instance = _AndroidExternalDropRegistry._();
+  final Map<Object, _AndroidDropRegistration> _registrations = {};
+
+  void register(Object token, _AndroidDropRegistration registration) {
+    final wasEmpty = _registrations.isEmpty;
+    _registrations[token] = registration;
+    if (wasEmpty) {
+      androidAttachmentDropChannel.setMethodCallHandler(_handleCall);
+      unawaited(
+        androidAttachmentDropChannel.invokeMethod<void>('setEnabled', true),
+      );
+    }
+  }
+
+  void unregister(Object token) {
+    _registrations.remove(token);
+    if (_registrations.isEmpty) {
+      unawaited(
+        androidAttachmentDropChannel.invokeMethod<void>('setEnabled', false),
+      );
+      androidAttachmentDropChannel.setMethodCallHandler(null);
+    }
+  }
+
+  bool _contains(_AndroidDropRegistration registration, Offset position) {
+    return activeGlobalRectForKey(registration.regionKey)?.contains(position) ??
+        false;
+  }
+
+  Future<void> _handleCall(MethodCall call) async {
+    if (call.arguments is! Map || _registrations.isEmpty) return;
+    final arguments = Map<Object?, Object?>.from(call.arguments as Map);
+    final registrations = _registrations.values.toList(growable: false);
+    final context = registrations
+        .map((entry) => entry.regionKey.currentContext)
+        .where((context) => activeRenderBox(context) != null)
+        .firstOrNull;
+    if (context == null) return;
+    final pixelRatio = View.maybeOf(context)?.devicePixelRatio;
+    if (pixelRatio == null) return;
+    final position = Offset(
+      ((arguments['x'] as num?)?.toDouble() ?? -1) / pixelRatio,
+      ((arguments['y'] as num?)?.toDouble() ?? -1) / pixelRatio,
+    );
+    final active = [
+      for (final entry in registrations)
+        if (_contains(entry, position)) entry,
+    ];
+    if (call.method == 'dragEntered' || call.method == 'dragUpdated') {
+      for (final entry in registrations) {
+        entry.onHover(active.contains(entry));
+      }
+      return;
+    }
+    if (call.method == 'dragExited') {
+      for (final entry in registrations) {
+        entry.onHover(false);
+      }
+      return;
+    }
+    if (call.method != 'drop') return;
+    for (final entry in registrations) {
+      entry.onHover(false);
+    }
+    final files = <AndroidDropFile>[];
+    final rawFiles = arguments['files'];
+    if (rawFiles is List) {
+      for (final rawFile in rawFiles) {
+        if (rawFile is! Map) continue;
+        final file = Map<Object?, Object?>.from(rawFile);
+        final path = file['path'] as String?;
+        if (path == null) continue;
+        files.add((path: path, name: file['name'] as String? ?? 'attachment'));
+      }
+    }
+    try {
+      if (active.isNotEmpty) await active.first.onDrop(files);
+    } finally {
+      for (final file in files) {
+        try {
+          final cached = File(file.path);
+          if (await cached.exists()) await cached.delete();
+        } catch (_) {}
+      }
+    }
+  }
+}
+
+class AndroidExternalDropTarget extends StatefulWidget {
+  const AndroidExternalDropTarget({
+    required this.child,
+    required this.onHover,
+    required this.onDrop,
+    super.key,
+  });
+
+  final Widget child;
+  final ValueChanged<bool> onHover;
+  final Future<void> Function(List<AndroidDropFile> files) onDrop;
+
+  @override
+  State<AndroidExternalDropTarget> createState() =>
+      _AndroidExternalDropTargetState();
+}
+
+class _AndroidExternalDropTargetState extends State<AndroidExternalDropTarget> {
+  final GlobalKey regionKey = GlobalKey();
+  bool registered = false;
+
+  void registerDropTarget() {
+    _AndroidExternalDropRegistry.instance.register(
+      this,
+      _AndroidDropRegistration(
+        regionKey: regionKey,
+        onHover: widget.onHover,
+        onDrop: widget.onDrop,
+      ),
+    );
+    registered = true;
+  }
+
+  void unregisterDropTarget() {
+    if (!registered) return;
+    _AndroidExternalDropRegistry.instance.unregister(this);
+    registered = false;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    registerDropTarget();
+  }
+
+  @override
+  void activate() {
+    super.activate();
+    registerDropTarget();
+  }
+
+  @override
+  void deactivate() {
+    unregisterDropTarget();
+    super.deactivate();
+  }
+
+  @override
+  void didUpdateWidget(AndroidExternalDropTarget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (registered) registerDropTarget();
+  }
+
+  @override
+  void dispose() {
+    unregisterDropTarget();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) =>
+      SizedBox(key: regionKey, child: widget.child);
+}
+
+class ExternalImageDropTarget extends StatefulWidget {
+  const ExternalImageDropTarget({
+    required this.child,
+    required this.onImage,
+    this.enableWindowsPaste = false,
+    super.key,
+  });
+
+  final Widget child;
+  final void Function(Uint8List pngBytes, String fileName) onImage;
+  final bool enableWindowsPaste;
+
+  @override
+  State<ExternalImageDropTarget> createState() =>
+      _ExternalImageDropTargetState();
+}
+
+class _ExternalImageDropTargetState extends State<ExternalImageDropTarget> {
+  bool hovering = false;
+
+  void setHovering(bool value) {
+    if (mounted && hovering != value) setState(() => hovering = value);
+  }
+
+  Future<void> acceptBytes(Uint8List bytes, String sourceName) async {
+    try {
+      final decoded = decodeUserIconImage(bytes);
+      if (decoded == null) {
+        throw const FormatException('Формат изображения не поддерживается.');
+      }
+      widget.onImage(
+          normalizeDroppedIconPng(decoded), pngIconFileName(sourceName));
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось загрузить изображение: $error')),
+      );
+    }
+  }
+
+  Future<void> acceptWindowsDrop(List<DropItem> files) async {
+    setHovering(false);
+    for (final file in files) {
+      try {
+        final bytes = await file.readAsBytes();
+        if (bytes.isEmpty) continue;
+        await acceptBytes(bytes, file.name);
+        return;
+      } catch (_) {}
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Перетащите поддерживаемый файл изображения.')),
+      );
+    }
+  }
+
+  Future<void> acceptAndroidDrop(List<AndroidDropFile> files) async {
+    setHovering(false);
+    for (final file in files) {
+      try {
+        final bytes = await File(file.path).readAsBytes();
+        if (bytes.isEmpty) continue;
+        await acceptBytes(bytes, file.name);
+        return;
+      } catch (_) {}
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('Перетащите поддерживаемый файл изображения.')),
+      );
+    }
+  }
+
+  Future<void> showPasteMenu(Offset globalPosition) async {
+    Uint8List? clipboardBitmap;
+    try {
+      clipboardBitmap =
+          await windowChannel.invokeMethod<Uint8List>('readClipboardImage');
+    } catch (_) {
+      return;
+    }
+    if (!mounted || clipboardBitmap == null || clipboardBitmap.isEmpty) return;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem<String>(value: 'paste', child: Text('Paste')),
+      ],
+    );
+    if (selected != 'paste' || !mounted) return;
+    final now = DateTime.now();
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    final fileName =
+        '${now.year}-${twoDigits(now.month)}-${twoDigits(now.day)}-'
+        '${twoDigits(now.hour)}-${twoDigits(now.minute)}.png';
+    await acceptBytes(clipboardBitmap, fileName);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    Widget result = Stack(
+      fit: StackFit.passthrough,
+      children: [
+        widget.child,
+        if (hovering)
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: const Color(0x33266fd5),
+                  border: Border.all(color: const Color(0xff266fd5), width: 3),
+                  borderRadius: BorderRadius.circular(5),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+    if (Platform.isWindows && widget.enableWindowsPaste) {
+      result = GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onSecondaryTapDown: (details) => showPasteMenu(details.globalPosition),
+        child: result,
+      );
+    }
+    if (Platform.isWindows) {
+      result = DropTarget(
+        onDragEntered: (_) => setHovering(true),
+        onDragExited: (_) => setHovering(false),
+        onDragDone: (details) => acceptWindowsDrop(details.files),
+        child: result,
+      );
+    } else if (Platform.isAndroid) {
+      result = AndroidExternalDropTarget(
+        onHover: setHovering,
+        onDrop: acceptAndroidDrop,
+        child: result,
+      );
+    }
+    return result;
+  }
+}
+
 Future<({Uint8List bytes, String fileName})?> pickUserIconFile(
   BuildContext context,
 ) async {
@@ -2292,6 +2681,9 @@ enum VirtualKeyboardMode { numeric, uppercase, lowercase, symbols }
 const spbDescriptionFieldId = '__spb_description';
 const spbWalletChannel = MethodChannel('wallet_aps/spb_wallet');
 const windowChannel = MethodChannel('wallet_aps/window');
+const androidAttachmentDropChannel = MethodChannel(
+  'wallet_aps/android_attachment_drop',
+);
 
 bool isNotesLabel(String label) {
   final normalized = label.trim().toLowerCase();
@@ -5066,10 +5458,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Future<void> showSessionUndoMenu() async {
-    final buttonContext = spbSessionUndoButtonKey.currentContext;
-    final overlay =
-        Overlay.of(context).context.findRenderObject() as RenderBox?;
-    final button = buttonContext?.findRenderObject() as RenderBox?;
+    final overlay = activeRenderBox(Overlay.of(context).context);
+    final button = activeRenderBoxForKey(spbSessionUndoButtonKey);
     if (button == null || overlay == null) return;
     final offset = button.localToGlobal(Offset.zero, ancestor: overlay);
     final selected = await showMenu<int>(
@@ -6075,9 +6465,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       spbGridEntryKeys.putIfAbsent(id, GlobalKey.new);
 
   Rect? spbGlobalRectForKey(GlobalKey key) {
-    final renderObject = key.currentContext?.findRenderObject();
-    if (renderObject is! RenderBox || !renderObject.hasSize) return null;
-    return renderObject.localToGlobal(Offset.zero) & renderObject.size;
+    return activeGlobalRectForKey(key);
   }
 
   void beginSpbCardMarquee(PointerDownEvent event) {
@@ -6142,9 +6530,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final start = spbCardMarqueeStartGlobal;
     final current = spbCardMarqueeCurrentGlobal;
     Rect? localRect;
-    final workspace =
-        spbCardMarqueeWorkspaceKey.currentContext?.findRenderObject();
-    if (start != null && current != null && workspace is RenderBox) {
+    final workspace = activeRenderBoxForKey(spbCardMarqueeWorkspaceKey);
+    if (start != null && current != null && workspace != null) {
       localRect = Rect.fromPoints(
         workspace.globalToLocal(start),
         workspace.globalToLocal(current),
@@ -12567,6 +12954,7 @@ class CategoryEditorDialog extends StatefulWidget {
 
 class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
   late final TextEditingController name;
+  final ScrollController editorScrollController = ScrollController();
   late String iconId;
   late String colorId;
   bool invalidName = false;
@@ -12582,6 +12970,7 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
   @override
   void dispose() {
     name.dispose();
+    editorScrollController.dispose();
     super.dispose();
   }
 
@@ -12598,14 +12987,13 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
     final media = mediaQuery.size;
-    // Keyboard avoidance is owned by the dialog route. Keep the editor surface
-    // stable and let its scroll view reveal the focused control.
-    final availableHeight = media.height;
+    final keyboardInset = mediaQuery.viewInsets.bottom;
+    final availableHeight = max(0.0, media.height - keyboardInset);
     final fullScreen = Platform.isAndroid || media.width < 700;
     return AnimatedPadding(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
-      padding: EdgeInsets.zero,
+      padding: EdgeInsets.only(bottom: keyboardInset),
       child: Align(
         alignment: Alignment.center,
         child: Material(
@@ -12657,157 +13045,135 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                 Expanded(
                   child: ColoredBox(
                     color: colorById(colorId).bg,
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(
-                        14,
-                        14,
-                        14,
-                        18 + MediaQuery.viewInsetsOf(context).bottom,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Container(
-                                key: const Key('categoryBoundIcon'),
-                                width: 112,
-                                height: 112,
-                                alignment: Alignment.center,
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  border: Border.all(
-                                    color: const Color(0xff82929d),
-                                    width: 2,
-                                  ),
-                                  borderRadius: BorderRadius.circular(5),
-                                  boxShadow: const [
-                                    BoxShadow(
-                                      color: Color(0x26000000),
-                                      offset: Offset(1, 2),
-                                      blurRadius: 5,
-                                    ),
-                                  ],
-                                ),
-                                child: templateIconWidget(
-                                  iconId.isEmpty ? 'folder' : iconId,
-                                  size: 88,
-                                  color: templatePictogramColor(colorId),
-                                ),
-                              ),
-                              const SizedBox(width: 14),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.stretch,
-                                  children: [
-                                    const Text(
-                                      'Выбрать иконку',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.w600,
+                    child: Scrollbar(
+                      controller: editorScrollController,
+                      thumbVisibility: true,
+                      interactive: true,
+                      child: SingleChildScrollView(
+                        controller: editorScrollController,
+                        padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                buildCategoryBoundIcon(),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.stretch,
+                                    children: [
+                                      const Text(
+                                        'Выбрать иконку',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 7),
-                                    LayoutBuilder(
-                                      builder: (context, constraints) {
-                                        final buttons = [
-                                          SpbGrayPickerButton(
-                                            key: const Key(
-                                              'spbFolderIconPicker',
+                                      const SizedBox(height: 7),
+                                      LayoutBuilder(
+                                        builder: (context, constraints) {
+                                          final buttons = [
+                                            SpbGrayPickerButton(
+                                              key: const Key(
+                                                'spbFolderIconPicker',
+                                              ),
+                                              label: 'SPB',
+                                              icon:
+                                                  Icons.photo_library_outlined,
+                                              tooltip: 'Иконки из базы SPB',
+                                              onTap: pickSpbIcon,
                                             ),
-                                            label: 'SPB',
-                                            icon: Icons.photo_library_outlined,
-                                            tooltip: 'Иконки из базы SPB',
-                                            onTap: pickSpbIcon,
-                                          ),
-                                          SpbGrayPickerButton(
-                                            key: const Key(
-                                              'categoryPictogramPicker',
+                                            SpbGrayPickerButton(
+                                              key: const Key(
+                                                'categoryPictogramPicker',
+                                              ),
+                                              label: 'пиктограммы',
+                                              icon: Icons.category_outlined,
+                                              tooltip: 'Выбрать пиктограмму',
+                                              onTap: pickPictogram,
                                             ),
-                                            label: 'пиктограммы',
-                                            icon: Icons.category_outlined,
-                                            tooltip: 'Выбрать пиктограмму',
-                                            onTap: pickPictogram,
-                                          ),
-                                          SpbGrayPickerButton(
-                                            key: const Key(
-                                              'categoryBrandPicker',
+                                            SpbGrayPickerButton(
+                                              key: const Key(
+                                                'categoryBrandPicker',
+                                              ),
+                                              label: 'Бренды',
+                                              icon: Icons.storefront_outlined,
+                                              tooltip: 'Иконки брендов',
+                                              onTap: pickBrandIcon,
                                             ),
-                                            label: 'Бренды',
-                                            icon: Icons.storefront_outlined,
-                                            tooltip: 'Иконки брендов',
-                                            onTap: pickBrandIcon,
-                                          ),
-                                          SpbGrayPickerButton(
-                                            key: const Key(
-                                              'categoryThirdPartyPicker',
+                                            SpbGrayPickerButton(
+                                              key: const Key(
+                                                'categoryThirdPartyPicker',
+                                              ),
+                                              label: 'сторонние',
+                                              icon: Icons.public_outlined,
+                                              tooltip: 'Иконки Visual Studio',
+                                              onTap: pickThirdPartyIcon,
                                             ),
-                                            label: 'сторонние',
-                                            icon: Icons.public_outlined,
-                                            tooltip: 'Иконки Visual Studio',
-                                            onTap: pickThirdPartyIcon,
-                                          ),
-                                          SpbGrayPickerButton(
-                                            key: const Key(
-                                              'categoryUploadIconButton',
+                                            SpbGrayPickerButton(
+                                              key: const Key(
+                                                'categoryUploadIconButton',
+                                              ),
+                                              label: 'загрузить иконку',
+                                              icon: Icons.upload_file_outlined,
+                                              tooltip:
+                                                  'Загрузить файл PNG или ICO',
+                                              onTap: pickCustomIconFile,
                                             ),
-                                            label: 'загрузить иконку',
-                                            icon: Icons.upload_file_outlined,
-                                            tooltip:
-                                                'Загрузить файл PNG или ICO',
-                                            onTap: pickCustomIconFile,
-                                          ),
-                                        ];
-                                        if (constraints.maxWidth >= 420) {
-                                          return Row(
-                                            children: [
-                                              for (var index = 0;
-                                                  index < buttons.length;
-                                                  index++) ...[
-                                                if (index > 0)
-                                                  const SizedBox(width: 7),
-                                                Expanded(child: buttons[index]),
+                                          ];
+                                          if (constraints.maxWidth >= 420) {
+                                            return Row(
+                                              children: [
+                                                for (var index = 0;
+                                                    index < buttons.length;
+                                                    index++) ...[
+                                                  if (index > 0)
+                                                    const SizedBox(width: 7),
+                                                  Expanded(
+                                                      child: buttons[index]),
+                                                ],
                                               ],
+                                            );
+                                          }
+                                          final width =
+                                              (constraints.maxWidth - 7) / 2;
+                                          return Wrap(
+                                            spacing: 7,
+                                            runSpacing: 7,
+                                            children: [
+                                              for (final button in buttons)
+                                                SizedBox(
+                                                  width: width,
+                                                  child: button,
+                                                ),
                                             ],
                                           );
-                                        }
-                                        final width =
-                                            (constraints.maxWidth - 7) / 2;
-                                        return Wrap(
-                                          spacing: 7,
-                                          runSpacing: 7,
-                                          children: [
-                                            for (final button in buttons)
-                                              SizedBox(
-                                                width: width,
-                                                child: button,
-                                              ),
-                                          ],
-                                        );
-                                      },
-                                    ),
-                                  ],
+                                        },
+                                      ),
+                                    ],
+                                  ),
                                 ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            ColorPicker(
+                              value: colorId,
+                              label: 'Цвет папки',
+                              keyPrefix: 'categoryColor',
+                              onChanged: (value) =>
+                                  setState(() => colorId = value),
+                            ),
+                            if (invalidName) ...[
+                              const SizedBox(height: 12),
+                              const Text(
+                                'Введите название папки без символа «/».',
+                                style: TextStyle(color: Color(0xffa90000)),
                               ),
                             ],
-                          ),
-                          const SizedBox(height: 12),
-                          ColorPicker(
-                            value: colorId,
-                            label: 'Цвет папки',
-                            keyPrefix: 'categoryColor',
-                            onChanged: (value) =>
-                                setState(() => colorId = value),
-                          ),
-                          if (invalidName) ...[
-                            const SizedBox(height: 12),
-                            const Text(
-                              'Введите название папки без символа «/».',
-                              style: TextStyle(color: Color(0xffa90000)),
-                            ),
                           ],
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -12862,6 +13228,37 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
               ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget buildCategoryBoundIcon() {
+    return ExternalImageDropTarget(
+      onImage: (pngBytes, _) {
+        setState(() => iconId = registerEmbeddedIcon(pngBytes));
+      },
+      child: Container(
+        key: const Key('categoryBoundIcon'),
+        width: 112,
+        height: 112,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xff82929d), width: 2),
+          borderRadius: BorderRadius.circular(5),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x26000000),
+              offset: Offset(1, 2),
+              blurRadius: 5,
+            ),
+          ],
+        ),
+        child: templateIconWidget(
+          iconId.isEmpty ? 'folder' : iconId,
+          size: 88,
+          color: templatePictogramColor(colorId),
         ),
       ),
     );
@@ -13639,6 +14036,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   int? spbColor;
   final Set<String> visibleSecrets = {};
   final List<CardEditorSnapshot> undoHistory = [];
+  final ScrollController editorScrollController = ScrollController();
+  bool attachmentDropActive = false;
 
   Color get editorBackgroundColor => spbColor == null
       ? colorById(colorId).bg
@@ -13722,6 +14121,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     for (final controller in values.values) {
       controller.dispose();
     }
+    editorScrollController.dispose();
     super.dispose();
   }
 
@@ -13915,14 +14315,13 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
     final media = mediaQuery.size;
-    // Keyboard avoidance is owned by the dialog route. Keep the editor surface
-    // stable and let its scroll view reveal the focused control.
-    final availableHeight = media.height;
+    final keyboardInset = mediaQuery.viewInsets.bottom;
+    final availableHeight = max(0.0, media.height - keyboardInset);
     final fullScreen = Platform.isAndroid || media.width < 700;
     return AnimatedPadding(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
-      padding: EdgeInsets.zero,
+      padding: EdgeInsets.only(bottom: keyboardInset),
       child: Align(
         alignment: Alignment.center,
         child: Material(
@@ -13985,14 +14384,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                       color: editorBackgroundColor,
                       backgroundImage: editorBackgroundImage,
                     ),
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(
-                        14,
-                        14,
-                        14,
-                        18 + mediaQuery.viewInsets.bottom,
+                    child: Scrollbar(
+                      controller: editorScrollController,
+                      thumbVisibility: true,
+                      interactive: true,
+                      child: SingleChildScrollView(
+                        controller: editorScrollController,
+                        padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+                        child: buildCardEditorContent(wideLayout: !fullScreen),
                       ),
-                      child: buildCardEditorContent(wideLayout: !fullScreen),
                     ),
                   ),
                 ),
@@ -14022,13 +14422,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                           ),
                           const SizedBox(width: 6),
                         ],
-                        SpbGradientActionButton(
-                          key: const Key('cardEditorAddAttachmentButton'),
-                          icon: Icons.add,
-                          tooltip: 'Загрузить вложение',
-                          colors: const [Color(0xff5b9dff), Color(0xff0752b5)],
-                          onTap: addAttachment,
-                        ),
+                        buildAddAttachmentButton(),
                         if (activeAttachments.isNotEmpty) ...[
                           const SizedBox(width: 6),
                           SpbGradientActionButton(
@@ -14254,28 +14648,35 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     double iconSize = 88,
     bool scaleOriginalToFit = false,
   }) {
-    return Container(
-      key: const Key('cardBoundIcon'),
-      width: dimension,
-      height: dimension,
-      alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: Colors.white,
-        border: Border.all(color: const Color(0xff82929d), width: 2),
-        borderRadius: BorderRadius.circular(5),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x26000000),
-            offset: Offset(1, 2),
-            blurRadius: 5,
-          ),
-        ],
-      ),
-      child: templateIconWidget(
-        iconId,
-        size: iconSize,
-        color: pictogramColorForBackground(editorBackgroundColor),
-        scaleOriginalToFit: scaleOriginalToFit,
+    return ExternalImageDropTarget(
+      enableWindowsPaste: true,
+      onImage: (pngBytes, _) {
+        rememberCurrentAction();
+        setState(() => iconId = registerEmbeddedIcon(pngBytes));
+      },
+      child: Container(
+        key: const Key('cardBoundIcon'),
+        width: dimension,
+        height: dimension,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xff82929d), width: 2),
+          borderRadius: BorderRadius.circular(5),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x26000000),
+              offset: Offset(1, 2),
+              blurRadius: 5,
+            ),
+          ],
+        ),
+        child: templateIconWidget(
+          iconId,
+          size: iconSize,
+          color: pictogramColorForBackground(editorBackgroundColor),
+          scaleOriginalToFit: scaleOriginalToFit,
+        ),
       ),
     );
   }
@@ -15052,6 +15453,180 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     });
   }
 
+  Widget buildAddAttachmentButton() {
+    Widget button = SpbGradientActionButton(
+      key: const Key('cardEditorAddAttachmentButton'),
+      icon: attachmentDropActive ? Icons.file_download_done : Icons.add,
+      tooltip: attachmentDropActive
+          ? 'Отпустите файл, чтобы прикрепить'
+          : 'Загрузить вложение',
+      colors: attachmentDropActive
+          ? const [Color(0xff83bdff), Color(0xff0068dd)]
+          : const [Color(0xff5b9dff), Color(0xff0752b5)],
+      onTap: addAttachment,
+    );
+
+    if (Platform.isWindows) {
+      button = GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onSecondaryTapDown: (details) =>
+            showAttachmentPasteMenu(details.globalPosition),
+        child: button,
+      );
+    }
+
+    if (Platform.isWindows) {
+      button = DropTarget(
+        onDragEntered: (_) {
+          if (mounted) setState(() => attachmentDropActive = true);
+        },
+        onDragExited: (_) {
+          if (mounted) setState(() => attachmentDropActive = false);
+        },
+        onDragDone: (details) async {
+          if (mounted) setState(() => attachmentDropActive = false);
+          await addDroppedAttachments(details.files);
+        },
+        child: button,
+      );
+    }
+    if (Platform.isAndroid) {
+      button = AndroidExternalDropTarget(
+        onHover: (value) {
+          if (mounted && attachmentDropActive != value) {
+            setState(() => attachmentDropActive = value);
+          }
+        },
+        onDrop: addAndroidDroppedAttachments,
+        child: button,
+      );
+    }
+    return button;
+  }
+
+  Future<void> addAndroidDroppedAttachments(
+    List<AndroidDropFile> droppedFiles,
+  ) async {
+    final pending = <SecretAttachment>[];
+    var failed = 0;
+    for (final droppedFile in droppedFiles) {
+      try {
+        final bytes = await File(droppedFile.path).readAsBytes();
+        if (bytes.isEmpty) {
+          failed++;
+          continue;
+        }
+        pending.add(
+          SecretAttachment(
+            id: '',
+            fileName: droppedFile.name.trim().isEmpty
+                ? 'attachment'
+                : droppedFile.name.trim(),
+            size: bytes.length,
+            pendingBytes: bytes,
+          ),
+        );
+      } catch (_) {
+        failed++;
+      }
+    }
+    addPendingAttachments(pending);
+    if (failed > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось прикрепить файлов: $failed')),
+      );
+    }
+  }
+
+  void addPendingAttachments(List<SecretAttachment> pending) {
+    if (pending.isEmpty || !mounted) return;
+    rememberCurrentAction();
+    setState(() => attachments = [...attachments, ...pending]);
+  }
+
+  Future<void> addDroppedAttachments(List<DropItem> droppedFiles) async {
+    final pending = <SecretAttachment>[];
+    var failed = 0;
+    for (final droppedFile in droppedFiles) {
+      try {
+        final bytes = await droppedFile.readAsBytes();
+        if (bytes.isEmpty) {
+          failed++;
+          continue;
+        }
+        final rawName = droppedFile.name.trim();
+        pending.add(
+          SecretAttachment(
+            id: '',
+            fileName: rawName.isEmpty ? 'attachment' : rawName,
+            size: bytes.length,
+            pendingBytes: bytes,
+          ),
+        );
+      } catch (_) {
+        failed++;
+      }
+    }
+    addPendingAttachments(pending);
+    if (failed > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            failed == 1
+                ? 'Не удалось прикрепить один из файлов'
+                : 'Не удалось прикрепить файлов: $failed',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> showAttachmentPasteMenu(Offset globalPosition) async {
+    Uint8List? clipboardImage;
+    try {
+      final clipboardBitmap =
+          await windowChannel.invokeMethod<Uint8List>('readClipboardImage');
+      if (clipboardBitmap != null) {
+        final decoded = image.decodeImage(clipboardBitmap);
+        if (decoded != null) {
+          clipboardImage = Uint8List.fromList(image.encodePng(decoded));
+        }
+      }
+    } catch (_) {
+      return;
+    }
+    if (!mounted || clipboardImage == null || clipboardImage.isEmpty) return;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem<String>(
+          key: Key('cardEditorPasteAttachmentMenuItem'),
+          value: 'paste',
+          child: Text('Paste'),
+        ),
+      ],
+    );
+    if (selected != 'paste' || !mounted) return;
+    final now = DateTime.now();
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    final fileName =
+        '${now.year}-${twoDigits(now.month)}-${twoDigits(now.day)}-'
+        '${twoDigits(now.hour)}-${twoDigits(now.minute)}.png';
+    addPendingAttachments([
+      SecretAttachment(
+        id: '',
+        fileName: fileName,
+        size: clipboardImage.length,
+        pendingBytes: clipboardImage,
+      ),
+    ]);
+  }
+
   Future<void> addAttachment() async {
     final picked = await FilePicker.platform.pickFiles(withData: true);
     final file = picked?.files.single;
@@ -15059,18 +15634,14 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     final bytes = file.bytes ??
         (file.path == null ? null : await File(file.path!).readAsBytes());
     if (bytes == null) return;
-    rememberCurrentAction();
-    setState(() {
-      attachments = [
-        ...attachments,
-        SecretAttachment(
-          id: '',
-          fileName: file.name,
-          size: bytes.length,
-          pendingBytes: bytes,
-        ),
-      ];
-    });
+    addPendingAttachments([
+      SecretAttachment(
+        id: '',
+        fileName: file.name,
+        size: bytes.length,
+        pendingBytes: bytes,
+      ),
+    ]);
   }
 
   Future<void> exportAttachment(SecretAttachment attachment) async {
@@ -15378,6 +15949,7 @@ class TemplateEditorSnapshot {
 
 class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   late final TextEditingController name;
+  final ScrollController editorScrollController = ScrollController();
   late String iconId;
   late String colorId;
   late String categoryPath;
@@ -15440,6 +16012,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     for (final field in fields) {
       field.dispose();
     }
+    editorScrollController.dispose();
     super.dispose();
   }
 
@@ -15447,14 +16020,13 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
     final media = mediaQuery.size;
-    // Keyboard avoidance is owned by the dialog route. Keep the editor surface
-    // stable and let its scroll view reveal the focused control.
-    final availableHeight = media.height;
+    final keyboardInset = mediaQuery.viewInsets.bottom;
+    final availableHeight = max(0.0, media.height - keyboardInset);
     final fullScreen = Platform.isAndroid || media.width < 700;
     return AnimatedPadding(
       duration: const Duration(milliseconds: 180),
       curve: Curves.easeOut,
-      padding: EdgeInsets.zero,
+      padding: EdgeInsets.only(bottom: keyboardInset),
       child: Align(
         alignment: Alignment.center,
         child: Material(
@@ -15476,40 +16048,41 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                 Expanded(
                   child: ColoredBox(
                     color: editorBackgroundColor,
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.fromLTRB(
-                        14,
-                        14,
-                        14,
-                        12 + mediaQuery.viewInsets.bottom,
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          templateIconPicker(),
-                          const SizedBox(height: 12),
-                          templateColorPicker(),
-                          const SizedBox(height: 10),
-                          templateNameField(),
-                          const SizedBox(height: 10),
-                          Row(
-                            children: [
-                              Text(
-                                'Поля',
-                                style: Theme.of(context).textTheme.titleSmall,
-                              ),
-                              const Spacer(),
-                              TextButton.icon(
-                                key: const Key('templateAddFieldButton'),
-                                onPressed: addField,
-                                icon: const Icon(Icons.add),
-                                label: const Text('Добавить поле'),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          ...fields.map(fieldEditor),
-                        ],
+                    child: Scrollbar(
+                      controller: editorScrollController,
+                      thumbVisibility: true,
+                      interactive: true,
+                      child: SingleChildScrollView(
+                        controller: editorScrollController,
+                        padding: const EdgeInsets.fromLTRB(14, 14, 14, 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            templateIconPicker(),
+                            const SizedBox(height: 12),
+                            templateColorPicker(),
+                            const SizedBox(height: 10),
+                            templateNameField(),
+                            const SizedBox(height: 10),
+                            Row(
+                              children: [
+                                Text(
+                                  'Поля',
+                                  style: Theme.of(context).textTheme.titleSmall,
+                                ),
+                                const Spacer(),
+                                TextButton.icon(
+                                  key: const Key('templateAddFieldButton'),
+                                  onPressed: addField,
+                                  icon: const Icon(Icons.add),
+                                  label: const Text('Добавить поле'),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            ...fields.map(fieldEditor),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -15579,37 +16152,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        Container(
-          key: const Key('templateBoundIcon'),
-          width: 112,
-          height: 112,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: const Color(0xff82929d), width: 2),
-            borderRadius: BorderRadius.circular(5),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x26000000),
-                offset: Offset(1, 2),
-                blurRadius: 5,
-              ),
-            ],
-          ),
-          child: customIconBytes == null
-              ? templateIconWidget(
-                  iconId,
-                  size: 88,
-                  color: pictogramColorForBackground(editorBackgroundColor),
-                )
-              : Image.memory(
-                  customIconBytes!,
-                  width: 88,
-                  height: 88,
-                  fit: BoxFit.contain,
-                  filterQuality: FilterQuality.medium,
-                ),
-        ),
+        templateBoundIcon(),
         const SizedBox(width: 14),
         Expanded(
           child: Column(
@@ -16216,6 +16759,43 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       customIconBytes = null;
       customIconFileName = null;
     });
+  }
+
+  Widget templateBoundIcon() {
+    return ExternalImageDropTarget(
+      onImage: applyCustomIcon,
+      child: Container(
+        key: const Key('templateBoundIcon'),
+        width: 112,
+        height: 112,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: Colors.white,
+          border: Border.all(color: const Color(0xff82929d), width: 2),
+          borderRadius: BorderRadius.circular(5),
+          boxShadow: const [
+            BoxShadow(
+              color: Color(0x26000000),
+              offset: Offset(1, 2),
+              blurRadius: 5,
+            ),
+          ],
+        ),
+        child: customIconBytes == null
+            ? templateIconWidget(
+                iconId,
+                size: 88,
+                color: pictogramColorForBackground(editorBackgroundColor),
+              )
+            : Image.memory(
+                customIconBytes!,
+                width: 88,
+                height: 88,
+                fit: BoxFit.contain,
+                filterQuality: FilterQuality.medium,
+              ),
+      ),
+    );
   }
 
   Future<void> pickPictogram() async {

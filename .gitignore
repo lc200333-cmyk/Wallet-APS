@@ -36,6 +36,7 @@ coverage/
 
 # Build artifacts
 build/
+app/.build-local/
 dist/
 !dist/.gitkeep
 *.deb
