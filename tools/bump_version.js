@@ -52,6 +52,15 @@ const buildNumber = pubspecVersion ? Number(pubspecVersion[2]) + 1 : 1;
 pubspec = pubspec.replace(/^version:\s*.+$/m, `version: ${version}+${buildNumber}`);
 write(pubspecPath, pubspec);
 
+const dartVersionPath = 'app/lib/app_version.dart';
+write(
+  dartVersionPath,
+  read(dartVersionPath).replace(
+    /^const currentAppVersion = '[^']+';/m,
+    `const currentAppVersion = '${version}';`,
+  ),
+);
+
 const issPath = 'tools/windows/Wallet-APS.iss';
 write(
   issPath,

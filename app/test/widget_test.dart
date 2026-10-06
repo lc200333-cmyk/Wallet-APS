@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:wallet_aps/app_version.dart';
 import 'package:wallet_aps/main.dart';
 import 'package:wallet_aps/services/platform/secure_clipboard_service.dart';
 import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
@@ -114,6 +115,48 @@ Offset textOffsetPosition(
 }
 
 void main() {
+  test('GitHub release response returns a normalized version', () {
+    expect(
+      parseGithubReleaseVersion('{"tag_name":"v0.5.10"}'),
+      '0.5.10',
+    );
+    expect(parseGithubReleaseVersion('{"tag_name":"nightly"}'), isNull);
+    expect(parseGithubReleaseVersion('offline'), isNull);
+  });
+
+  testWidgets('password header shows current and available GitHub versions',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PasswordVersionLabel(
+            latestVersionLoader: () async => '0.5.10',
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('v. $currentAppVersion / 0.5.10'), findsOneWidget);
+  });
+
+  testWidgets('password header hides GitHub version while offline',
+      (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: PasswordVersionLabel(
+            latestVersionLoader: () async => null,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('v. $currentAppVersion'), findsOneWidget);
+    expect(find.textContaining(' / '), findsNothing);
+  });
+
   test('Windows pointer hit testing ignores inactive keyed elements', () {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     addTearDown(() => debugDefaultTargetPlatformOverride = null);
@@ -177,7 +220,7 @@ void main() {
         matching: find.byType(ExternalImageDropTarget),
       ),
     );
-    expect(cardTarget.enableWindowsPaste, isTrue);
+    expect(cardTarget.enableClipboardPaste, isTrue);
 
     await tester.pumpWidget(
       const MaterialApp(
@@ -195,7 +238,7 @@ void main() {
         matching: find.byType(ExternalImageDropTarget),
       ),
     );
-    expect(categoryTarget.enableWindowsPaste, isFalse);
+    expect(categoryTarget.enableClipboardPaste, isTrue);
 
     await tester.pumpWidget(
       const MaterialApp(home: TemplateEditorDialog()),
@@ -207,7 +250,56 @@ void main() {
         matching: find.byType(ExternalImageDropTarget),
       ),
     );
-    expect(templateTarget.enableWindowsPaste, isFalse);
+    expect(templateTarget.enableClipboardPaste, isTrue);
+  });
+
+  testWidgets('long press pastes and normalizes a clipboard image',
+      (tester) async {
+    final sourceBytes = Uint8List.fromList(
+      image.encodePng(image.Image(width: 400, height: 200)),
+    );
+    Uint8List? pastedBytes;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(windowChannel, (call) async {
+      expect(call.method, 'readClipboardImage');
+      return sourceBytes;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(windowChannel, null),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: ExternalImageDropTarget(
+              key: const Key('clipboardImageTarget'),
+              enableClipboardPaste: true,
+              onImage: (bytes, _) => pastedBytes = bytes,
+              child: const SizedBox(
+                width: 112,
+                height: 112,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final pasteGesture = find.descendant(
+      of: find.byKey(const Key('clipboardImageTarget')),
+      matching: find.byType(GestureDetector),
+    );
+    await tester.longPress(pasteGesture);
+    await tester.pumpAndSettle();
+    expect(find.text('Paste'), findsOneWidget);
+
+    await tester.tap(find.text('Paste'));
+    await tester.pumpAndSettle();
+
+    final pasted = image.decodePng(pastedBytes!);
+    expect((pasted!.width, pasted.height), (128, 64));
   });
 
   test('SUBST paths resolve to their stable backing directory', () {
@@ -2798,6 +2890,7 @@ void main() {
       await tester.pumpWidget(const WalletApsApp());
       await tester.pump();
       expect(find.byKey(const Key('passwordInput')), findsOneWidget);
+      expect(find.byKey(const Key('passwordVersion')), findsOneWidget);
       expect(
         tester.getSize(find.byKey(const Key('keypad1'))).height,
         greaterThanOrEqualTo(60),
@@ -2815,6 +2908,8 @@ void main() {
     await tester.pump();
 
     expect(find.text('Пароль'), findsOneWidget);
+    expect(find.byKey(const Key('passwordVersion')), findsOneWidget);
+    expect(find.text('v. $currentAppVersion'), findsOneWidget);
     expect(find.byKey(const Key('passwordPrompt')), findsOneWidget);
     expect(find.byKey(const Key('passwordInput')), findsOneWidget);
     expect(

@@ -14,6 +14,7 @@ function exists(relativePath) {
 
 [
   'app/pubspec.yaml',
+  'app/lib/app_version.dart',
   'app/lib/main.dart',
   'tools/build_android_apk.sh',
   'tools/build_linux_deb.sh',
@@ -99,6 +100,11 @@ const releaseWorkflow = read('.github/workflows/release.yml');
   'Wallet-APS-linux-amd64.deb',
   'softprops/action-gh-release',
 ].forEach((needle) => assert.ok(releaseWorkflow.includes(needle), `release workflow missing ${needle}`));
+assert.ok(releaseWorkflow.includes('app/lib/app_version.dart'));
+
+const bumpVersion = read('tools/bump_version.js');
+assert.ok(bumpVersion.includes("const dartVersionPath = 'app/lib/app_version.dart'"));
+assert.match(read('app/lib/app_version.dart'), /currentAppVersion = '\d+\.\d+\.\d+'/);
 
 const dockerfile = read('docker/build-env/Dockerfile');
 [

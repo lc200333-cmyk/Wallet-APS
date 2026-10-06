@@ -13,6 +13,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as image;
 import 'package:path_provider/path_provider.dart';
 
+import 'app_version.dart';
 import 'data/spb_wallet_repository.dart';
 import 'controllers/entity_index.dart';
 import 'features/cards/field_projection.dart';
@@ -70,6 +71,107 @@ Rect? activeGlobalRectForKey(GlobalKey key) {
     // Pointer and drag callbacks can arrive while Windows is replacing the
     // keyed subtree. Ignore that event until the next laid-out frame.
     return null;
+  }
+}
+
+const latestGithubReleaseUri =
+    'https://api.github.com/repos/lc200333-cmyk/Wallet-APS/releases/latest';
+const githubVersionRequestTimeout = Duration(seconds: 4);
+
+typedef LatestGithubVersionLoader = Future<String?> Function();
+
+String? parseGithubReleaseVersion(String responseBody) {
+  try {
+    final payload = jsonDecode(responseBody);
+    if (payload is! Map) return null;
+    final tag = payload['tag_name'];
+    if (tag is! String) return null;
+    final match = RegExp(r'^v?(\d+\.\d+\.\d+)$').firstMatch(tag.trim());
+    return match?.group(1);
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<String?> fetchLatestGithubVersion() async {
+  final client = HttpClient()..connectionTimeout = githubVersionRequestTimeout;
+  try {
+    return await (() async {
+      final request = await client.getUrl(Uri.parse(latestGithubReleaseUri));
+      request.headers.set(
+        HttpHeaders.acceptHeader,
+        'application/vnd.github+json',
+      );
+      request.headers.set(
+        HttpHeaders.userAgentHeader,
+        'Wallet-APS/$currentAppVersion',
+      );
+      final response = await request.close();
+      if (response.statusCode != HttpStatus.ok) {
+        await response.drain<void>();
+        return null;
+      }
+      final responseBody = await response.transform(utf8.decoder).join();
+      return parseGithubReleaseVersion(responseBody);
+    })()
+        .timeout(githubVersionRequestTimeout);
+  } catch (_) {
+    return null;
+  } finally {
+    client.close(force: true);
+  }
+}
+
+class PasswordVersionLabel extends StatefulWidget {
+  const PasswordVersionLabel({this.latestVersionLoader, super.key});
+
+  final LatestGithubVersionLoader? latestVersionLoader;
+
+  @override
+  State<PasswordVersionLabel> createState() => _PasswordVersionLabelState();
+}
+
+class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
+  String? latestGithubVersion;
+
+  @override
+  void initState() {
+    super.initState();
+    final runningFlutterTest =
+        Platform.environment.containsKey('FLUTTER_TEST') &&
+            Platform.environment['FLUTTER_TEST'] != 'false';
+    if (!runningFlutterTest || widget.latestVersionLoader != null) {
+      unawaited(loadLatestGithubVersion());
+    }
+  }
+
+  Future<void> loadLatestGithubVersion() async {
+    String? latest;
+    try {
+      latest = await (widget.latestVersionLoader ?? fetchLatestGithubVersion)();
+    } catch (_) {
+      return;
+    }
+    if (!mounted || latest == null || latest.trim().isEmpty) return;
+    setState(() => latestGithubVersion = latest!.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final latest = latestGithubVersion;
+    return Text(
+      latest == null
+          ? 'v. $currentAppVersion'
+          : 'v. $currentAppVersion / $latest',
+      maxLines: 1,
+      softWrap: false,
+      overflow: TextOverflow.fade,
+      style: const TextStyle(
+        color: Color(0xffeeeeee),
+        fontSize: 11,
+        fontWeight: FontWeight.normal,
+      ),
+    );
   }
 }
 
@@ -1944,13 +2046,13 @@ class ExternalImageDropTarget extends StatefulWidget {
   const ExternalImageDropTarget({
     required this.child,
     required this.onImage,
-    this.enableWindowsPaste = false,
+    this.enableClipboardPaste = false,
     super.key,
   });
 
   final Widget child;
   final void Function(Uint8List pngBytes, String fileName) onImage;
-  final bool enableWindowsPaste;
+  final bool enableClipboardPaste;
 
   @override
   State<ExternalImageDropTarget> createState() =>
@@ -2065,10 +2167,13 @@ class _ExternalImageDropTargetState extends State<ExternalImageDropTarget> {
           ),
       ],
     );
-    if (Platform.isWindows && widget.enableWindowsPaste) {
+    final clipboardPastePlatform =
+        Platform.isWindows || Platform.isLinux || Platform.isAndroid;
+    if (clipboardPastePlatform && widget.enableClipboardPaste) {
       result = GestureDetector(
         behavior: HitTestBehavior.translucent,
         onSecondaryTapDown: (details) => showPasteMenu(details.globalPosition),
+        onLongPressStart: (details) => showPasteMenu(details.globalPosition),
         child: result,
       );
     }
@@ -10423,12 +10528,21 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
                               ),
-                              child: const Text(
-                                'Пароль',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontSize: 18,
-                                ),
+                              child: const Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      'Пароль',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 18,
+                                      ),
+                                    ),
+                                  ),
+                                  PasswordVersionLabel(
+                                    key: Key('passwordVersion'),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
@@ -13235,6 +13349,7 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
 
   Widget buildCategoryBoundIcon() {
     return ExternalImageDropTarget(
+      enableClipboardPaste: true,
       onImage: (pngBytes, _) {
         setState(() => iconId = registerEmbeddedIcon(pngBytes));
       },
@@ -14649,7 +14764,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     bool scaleOriginalToFit = false,
   }) {
     return ExternalImageDropTarget(
-      enableWindowsPaste: true,
+      enableClipboardPaste: true,
       onImage: (pngBytes, _) {
         rememberCurrentAction();
         setState(() => iconId = registerEmbeddedIcon(pngBytes));
@@ -16763,6 +16878,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
 
   Widget templateBoundIcon() {
     return ExternalImageDropTarget(
+      enableClipboardPaste: true,
       onImage: applyCustomIcon,
       child: Container(
         key: const Key('templateBoundIcon'),

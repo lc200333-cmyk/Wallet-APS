@@ -1,5 +1,7 @@
 #include "my_application.h"
 
+#include <cstdint>
+
 #include <flutter_linux/flutter_linux.h>
 #ifdef GDK_WINDOWING_X11
 #include <gdk/gdkx.h>
@@ -10,9 +12,43 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* window_channel;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
+
+// Returns the clipboard image as PNG bytes for the shared Dart image decoder.
+static void window_channel_method_call_cb(FlMethodChannel* /*channel*/,
+                                          FlMethodCall* method_call,
+                                          gpointer /*user_data*/) {
+  const gchar* method = fl_method_call_get_name(method_call);
+  if (!g_str_equal(method, "readClipboardImage")) {
+    fl_method_call_respond_not_implemented(method_call, nullptr);
+    return;
+  }
+
+  GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+  g_autoptr(GdkPixbuf) pixbuf = gtk_clipboard_wait_for_image(clipboard);
+  if (pixbuf == nullptr) {
+    fl_method_call_respond_success(method_call, nullptr, nullptr);
+    return;
+  }
+
+  gchar* png_data = nullptr;
+  gsize png_size = 0;
+  g_autoptr(GError) error = nullptr;
+  if (!gdk_pixbuf_save_to_buffer(pixbuf, &png_data, &png_size, "png", &error,
+                                 nullptr)) {
+    g_warning("Failed to encode clipboard image: %s", error->message);
+    fl_method_call_respond_success(method_call, nullptr, nullptr);
+    return;
+  }
+
+  g_autoptr(FlValue) value = fl_value_new_uint8_list(
+      reinterpret_cast<const uint8_t*>(png_data), png_size);
+  g_free(png_data);
+  fl_method_call_respond_success(method_call, value, nullptr);
+}
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
@@ -73,6 +109,14 @@ static void my_application_activate(GApplication* application) {
                            self);
   gtk_widget_realize(GTK_WIDGET(view));
 
+  FlEngine* engine = fl_view_get_engine(view);
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  self->window_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(engine), "wallet_aps/window",
+      FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(
+      self->window_channel, window_channel_method_call_cb, self, nullptr);
+
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
@@ -121,6 +165,7 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_object(&self->window_channel);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 

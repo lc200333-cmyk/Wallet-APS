@@ -2,6 +2,8 @@ package com.lc200333cmyk.walletaps
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -20,12 +22,14 @@ import java.io.FileOutputStream
 class MainActivity : FlutterActivity() {
     private val channelName = "wallet_aps/spb_wallet"
     private val attachmentDropChannelName = "wallet_aps/android_attachment_drop"
+    private val clipboardImageChannelName = "wallet_aps/window"
     private val openRequestCode = 7401
     private val createRequestCode = 7402
     private var pendingPickResult: MethodChannel.Result? = null
     private var pendingCreateResult: MethodChannel.Result? = null
     private var walletChannel: MethodChannel? = null
     private var attachmentDropChannel: MethodChannel? = null
+    private var clipboardImageChannel: MethodChannel? = null
     private var attachmentDropEnabled = false
     private var launchWalletConsumed = false
 
@@ -109,10 +113,45 @@ class MainActivity : FlutterActivity() {
                 result.notImplemented()
             }
         }
+        clipboardImageChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            clipboardImageChannelName
+        )
+        clipboardImageChannel!!.setMethodCallHandler { call, result ->
+            if (call.method == "readClipboardImage") {
+                result.success(readClipboardImage())
+            } else {
+                result.notImplemented()
+            }
+        }
         cacheDir.listFiles()
             ?.filter { it.name.startsWith("card_drop_") }
             ?.forEach { it.delete() }
         installAttachmentDropListener()
+    }
+
+    private fun readClipboardImage(): ByteArray? {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = clipboard.primaryClip ?: return null
+        for (index in 0 until clip.itemCount) {
+            val item = clip.getItemAt(index) ?: continue
+            val uri = item.uri ?: item.intent?.data ?: item.text
+                ?.toString()
+                ?.takeIf { it.startsWith("content://") || it.startsWith("file://") }
+                ?.let(Uri::parse)
+                ?: continue
+            try {
+                contentResolver.openInputStream(uri).use { input ->
+                    if (input != null) {
+                        val bytes = input.readBytes()
+                        if (bytes.isNotEmpty()) return bytes
+                    }
+                }
+            } catch (_: Throwable) {
+                // Try the next clipboard item. Dart validates the image format.
+            }
+        }
+        return null
     }
 
     private fun installAttachmentDropListener() {
