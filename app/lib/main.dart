@@ -3020,6 +3020,190 @@ String? normalizeNewVaultDirectorySelection(
   return entityType == FileSystemEntityType.directory ? path : null;
 }
 
+bool get isDesktopFilePlatform =>
+    Platform.isWindows || Platform.isLinux || Platform.isMacOS;
+
+String? activeDesktopVaultPath;
+
+String stableWalletPathKey(String path) {
+  var hash = 0xcbf29ce484222325;
+  for (final byte in utf8.encode(File(path).absolute.path)) {
+    hash ^= byte;
+    hash = (hash * 0x100000001b3) & 0x7fffffffffffffff;
+  }
+  return hash.toRadixString(16).padLeft(16, '0');
+}
+
+String normalizedFileIdentity(String path) {
+  var normalized = File(path).absolute.path;
+  try {
+    if (FileSystemEntity.typeSync(normalized) !=
+        FileSystemEntityType.notFound) {
+      normalized = File(normalized).resolveSymbolicLinksSync();
+    }
+  } catch (_) {}
+  return Platform.isWindows ? normalized.toLowerCase() : normalized;
+}
+
+bool pathsReferToSameFile(String first, String second) =>
+    normalizedFileIdentity(first) == normalizedFileIdentity(second);
+
+void ensureTargetIsNotActiveVault(String targetPath) {
+  final activePath = activeDesktopVaultPath;
+  if (isDesktopFilePlatform &&
+      activePath != null &&
+      pathsReferToSameFile(targetPath, activePath)) {
+    throw StateError('Нельзя перезаписывать открытую базу другим файлом.');
+  }
+}
+
+String safeFileComponent(String value) {
+  final cleaned = value
+      .replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_')
+      .trim()
+      .replaceAll(RegExp(r'^\.+$'), '_');
+  return cleaned.length <= 120 ? cleaned : cleaned.substring(0, 120);
+}
+
+File siblingOperationFile(File target, String marker) => File(
+      '${target.parent.path}${Platform.pathSeparator}'
+      '.${target.uri.pathSegments.last}.$marker-'
+      '${DateTime.now().microsecondsSinceEpoch}-$pid',
+    );
+
+Future<void> flushFile(File file) async {
+  final handle = await file.open(mode: FileMode.append);
+  try {
+    await handle.flush();
+  } finally {
+    await handle.close();
+  }
+}
+
+Future<void> recoverInterruptedAtomicReplace(File target) async {
+  if (target.existsSync() || !target.parent.existsSync()) return;
+  final prefix = '.${target.uri.pathSegments.last}.walletaps-backup-';
+  final backups = target.parent
+      .listSync(followLinks: false)
+      .whereType<File>()
+      .where((file) => file.uri.pathSegments.last.startsWith(prefix))
+      .toList()
+    ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+  if (backups.isNotEmpty) await backups.first.rename(target.path);
+}
+
+Future<void> replacePreparedFileAtomically(File prepared, File target) async {
+  if (prepared.parent.absolute.path != target.parent.absolute.path) {
+    throw StateError('Временный и целевой файлы должны находиться рядом.');
+  }
+  if (!prepared.existsSync() || prepared.lengthSync() == 0) {
+    throw StateError('Подготовленный файл отсутствует или пуст.');
+  }
+  File? displaced;
+  if (target.existsSync()) {
+    displaced = siblingOperationFile(target, 'walletaps-backup');
+    await target.rename(displaced.path);
+  }
+  try {
+    await prepared.rename(target.path);
+  } catch (_) {
+    if (!target.existsSync() && (displaced?.existsSync() ?? false)) {
+      await displaced!.rename(target.path);
+    }
+    rethrow;
+  }
+  if (displaced?.existsSync() ?? false) {
+    try {
+      await displaced!.delete();
+    } on FileSystemException {
+      // The replacement is already complete. Leaving an extra backup is safer
+      // than reporting a failed save after the target was committed.
+    }
+  }
+}
+
+Future<void> writeBytesAtomically(File target, Uint8List bytes) async {
+  if (!target.parent.existsSync()) target.parent.createSync(recursive: true);
+  final temporary = siblingOperationFile(target, 'walletaps-write');
+  try {
+    await temporary.writeAsBytes(bytes, flush: true);
+    if (temporary.lengthSync() != bytes.length) {
+      throw StateError('Размер записанного файла не совпадает с ожидаемым.');
+    }
+    await replacePreparedFileAtomically(temporary, target);
+  } finally {
+    try {
+      if (temporary.existsSync()) await temporary.delete();
+    } on FileSystemException {
+      // A stale temporary file is harmless and can be cleaned up later.
+    }
+  }
+}
+
+Future<void> copyFileAtomically(File source, File target) async {
+  if (!source.existsSync() || source.lengthSync() == 0) {
+    throw StateError('Исходный файл отсутствует или пуст.');
+  }
+  if (!target.parent.existsSync()) target.parent.createSync(recursive: true);
+  final temporary = siblingOperationFile(target, 'walletaps-copy');
+  try {
+    await source.copy(temporary.path);
+    await flushFile(temporary);
+    if (temporary.lengthSync() != source.lengthSync()) {
+      throw StateError('Копирование файла завершилось не полностью.');
+    }
+    await replacePreparedFileAtomically(temporary, target);
+  } finally {
+    try {
+      if (temporary.existsSync()) await temporary.delete();
+    } on FileSystemException {
+      // A stale temporary file is harmless and can be cleaned up later.
+    }
+  }
+}
+
+Future<void> backupWalletAtomically(
+  SpbWalletDatabase wallet,
+  File target,
+) async {
+  if (!target.parent.existsSync()) target.parent.createSync(recursive: true);
+  final temporary = siblingOperationFile(target, 'walletaps-snapshot');
+  try {
+    await wallet.backupTo(temporary.path);
+    if (!SpbWalletDatabase.isStructurallyValid(temporary.path)) {
+      throw StateError('Снимок базы не прошёл проверку SQLite.');
+    }
+    await replacePreparedFileAtomically(temporary, target);
+  } finally {
+    try {
+      if (temporary.existsSync()) await temporary.delete();
+    } on FileSystemException {
+      // A stale temporary file is harmless and can be cleaned up later.
+    }
+  }
+}
+
+Future<File> createTemporaryWalletSnapshot(
+  SpbWalletDatabase wallet,
+  String marker,
+) async {
+  final safeMarker = safeFileComponent(marker);
+  final file = File(
+    '${Directory.systemTemp.path}${Platform.pathSeparator}'
+    'wallet_aps_${safeMarker}_${DateTime.now().microsecondsSinceEpoch}-$pid.swl',
+  );
+  await wallet.backupTo(file.path);
+  if (!SpbWalletDatabase.isStructurallyValid(file.path)) {
+    try {
+      file.deleteSync();
+    } on FileSystemException {
+      // The invalid temporary file is never used as a source.
+    }
+    throw StateError('Временный снимок базы не прошёл проверку SQLite.');
+  }
+  return file;
+}
+
 Map<String, String> parseWindowsSubstMappings(String output) {
   final result = <String, String>{};
   final pattern = RegExp(r'^([A-Za-z]):\\:\s*=>\s*(.+)$');
@@ -3179,6 +3363,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   bool spbWalletWritable = true;
   bool spbWritePending = false;
   bool vaultDirty = false;
+  bool spbRecoveredWorkingCopy = false;
+  bool desktopWalletRecovered = false;
+  Future<bool>? _spbWriteInFlight;
+  bool _spbForceWriteQueued = false;
+  int _vaultChangeGeneration = 0;
   SpbWalletDatabase? spbWallet;
   String templateFilter = '';
   String templateSearchQuery = '';
@@ -3333,7 +3522,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   void initializeWindowHandling() {
-    if (!Platform.isWindows) return;
+    if (!Platform.isWindows && !Platform.isLinux) return;
     windowChannel.setMethodCallHandler((call) async {
       if (call.method == 'requestClose') {
         await exitApplication();
@@ -3364,8 +3553,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final path = wallet['localPath']?.toString();
     if (path == null || path.isEmpty || !mounted) return;
     if (unlocked || spbWallet != null) {
-      await closeCurrentVaultForPasswordPrompt();
-      if (!mounted) return;
+      final closed = await closeCurrentVaultForPasswordPrompt();
+      if (!closed || !mounted) return;
     }
     final displayName =
         wallet['displayName']?.toString() ?? _vaultTitleFromPath(path);
@@ -3375,6 +3564,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       spbWalletPath = path;
       spbWalletUri = uri;
       spbWalletWritable = wallet['writable'] != false;
+      spbRecoveredWorkingCopy = wallet['recovered'] == true;
+      spbWritePending = spbRecoveredWorkingCopy;
       spbWalletDisplayPath = wallet['displayPath']?.toString() ?? uri ?? path;
       vaultNameController.text = displayName;
       passwordController.clear();
@@ -3449,7 +3640,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     appUserActivityPulse.removeListener(recordAppWideUserActivity);
-    if (Platform.isWindows) {
+    if (Platform.isWindows || Platform.isLinux) {
       windowChannel.setMethodCallHandler(null);
     }
     inactivityTimer?.cancel();
@@ -3460,6 +3651,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     persistVaultState();
     clearSessionUndoHistory();
     spbWallet?.close(flush: vaultDirty);
+    if (activeDesktopVaultPath == spbWalletPath) {
+      activeDesktopVaultPath = null;
+    }
     passwordUnlockDebounce?.cancel();
     vaultNameController.dispose();
     passwordController.dispose();
@@ -3508,6 +3702,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   void markVaultDirty() {
     vaultDirty = true;
     spbWritePending = true;
+    _vaultChangeGeneration++;
   }
 
   Future<SessionUndoEntry> captureSessionUndo(
@@ -3648,10 +3843,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Future<void> exitToPasswordPrompt() async {
-    final saved = await finalizeSessionTrash();
-    if (!saved || !mounted) return;
-    await closeCurrentVaultForPasswordPrompt();
-    if (!mounted) return;
+    final closed = await closeCurrentVaultForPasswordPrompt();
+    if (!closed || !mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) passwordFocusNode.requestFocus();
     });
@@ -3684,14 +3877,23 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         if (automatic) automaticUnlockInProgress = true;
         await loadSpb64PngIconAssets();
         if (spbWallet != null) {
-          await finalizeSessionTrash();
+          final saved = await finalizeSessionTrash();
+          if (!saved) return;
         }
         clearSessionUndoHistory();
         spbWallet?.close(flush: vaultDirty);
-        final wallet = SpbWalletDatabase.open(spbWalletPath!, password);
+        final opened = isDesktopFilePlatform
+            ? await openDesktopWalletWithRecovery(spbWalletPath!, password)
+            : (
+                wallet: SpbWalletDatabase.open(spbWalletPath!, password),
+                recovered: false,
+              );
+        final wallet = opened.wallet;
         final snapshot = wallet.loadSnapshot();
         final integrityReport = wallet.inspectIntegrity();
         spbWallet = wallet;
+        if (isDesktopFilePlatform) activeDesktopVaultPath = spbWalletPath;
+        desktopWalletRecovered = opened.recovered;
         vaultDirty = false;
         spbIconIdByUiIcon.clear();
         setState(() {
@@ -3708,6 +3910,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         confirmController.clear();
         if (!Platform.isAndroid || spbWalletUri == null) {
           await rememberRecentVault(spbWalletPath!);
+        }
+        if (spbRecoveredWorkingCopy) {
+          final restored = await writeBackSpbWallet(force: true);
+          if (restored) {
+            spbRecoveredWorkingCopy = false;
+            showSpbOperationMessage(
+              'База восстановлена из внутренней резервной копии и записана в исходный файл.',
+            );
+          }
+        }
+        if (isDesktopFilePlatform) {
+          final backedUp = await writeBackSpbWallet(force: true);
+          if (desktopWalletRecovered && backedUp) {
+            desktopWalletRecovered = false;
+            showSpbOperationMessage(
+              'Повреждённая база восстановлена из внутренней резервной копии.',
+            );
+          }
         }
       } catch (error) {
         if (!automatic) {
@@ -3750,28 +3970,34 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> closeCurrentVaultForPasswordPrompt() async {
+  Future<bool> closeCurrentVaultForPasswordPrompt() async {
     passwordUnlockDebounce?.cancel();
     automaticUnlockInProgress = false;
     if (spbWallet != null) {
-      await finalizeSessionTrash();
+      final saved = await finalizeSessionTrash();
+      if (!saved) return false;
     }
     clearSessionUndoHistory();
     spbWallet?.close(flush: vaultDirty);
     spbWallet = null;
+    if (isDesktopFilePlatform) activeDesktopVaultPath = null;
     vaultDirty = false;
+    spbWritePending = false;
+    spbRecoveredWorkingCopy = false;
+    desktopWalletRecovered = false;
     passwordController.clear();
     confirmController.clear();
     revealed.clear();
     loginHintVisible = false;
     loginPasswordHint = '';
     showPassword = false;
-    if (!mounted) return;
+    if (!mounted) return true;
     setState(() {
       unlocked = false;
       entryMode = EntryMode.openSwl;
       message = null;
     });
+    return true;
   }
 
   Future<void> pickSpbWalletFile() async {
@@ -3783,12 +4009,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         if (picked == null) return;
         final path = picked['localPath']?.toString();
         if (path == null || path.isEmpty) return;
-        await closeCurrentVaultForPasswordPrompt();
-        if (!mounted) return;
+        final closed = await closeCurrentVaultForPasswordPrompt();
+        if (!closed || !mounted) return;
         setState(() {
           spbWalletPath = path;
           spbWalletUri = picked['uri']?.toString();
           spbWalletWritable = picked['writable'] != false;
+          spbRecoveredWorkingCopy = picked['recovered'] == true;
+          spbWritePending = spbRecoveredWorkingCopy;
           spbWalletDisplayPath =
               picked['displayPath']?.toString() ?? spbWalletUri;
           vaultNameController.text = picked['displayName']?.toString() ??
@@ -3810,6 +4038,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             'перезапуска файл потребуется выбрать снова.',
           );
         }
+        if (picked['recovered'] == true) {
+          showSpbOperationMessage(
+            'Исходный файл пуст или повреждён. Открыта последняя внутренняя резервная копия.',
+          );
+        }
       } catch (error) {
         setState(() => message = 'Не удалось выбрать .swl файл: $error');
       }
@@ -3822,11 +4055,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
     final path = result?.files.single.path;
     if (path == null) return;
-    await closeCurrentVaultForPasswordPrompt();
-    if (!mounted) return;
+    final closed = await closeCurrentVaultForPasswordPrompt();
+    if (!closed || !mounted) return;
     setState(() {
       spbWalletPath = path;
       spbWalletUri = null;
+      spbRecoveredWorkingCopy = false;
+      spbWritePending = false;
       spbWalletDisplayPath = path;
       vaultNameController.text = File(path).uri.pathSegments.last;
       message = null;
@@ -3916,6 +4151,137 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     setState(() => recentVaults = entries);
   }
 
+  Future<Directory> desktopRecoveryDirectory() async {
+    final stateDirectory = await appStateDirectory();
+    final directory = Directory(
+      '${stateDirectory.path}${Platform.pathSeparator}Wallet APS Recovery',
+    );
+    if (!directory.existsSync()) directory.createSync(recursive: true);
+    return directory;
+  }
+
+  String desktopRecoveryPrefix(String path) =>
+      '${stableWalletPathKey(normalizedFileIdentity(path))}_';
+
+  Future<File?> latestDesktopRecovery(String path) async {
+    if (!isDesktopFilePlatform) return null;
+    final directory = await desktopRecoveryDirectory();
+    final prefix = desktopRecoveryPrefix(path);
+    final candidates = directory
+        .listSync(followLinks: false)
+        .whereType<File>()
+        .where(
+          (file) =>
+              file.uri.pathSegments.last.startsWith(prefix) &&
+              file.path.toLowerCase().endsWith('.swl') &&
+              SpbWalletDatabase.isStructurallyValid(file.path),
+        )
+        .toList()
+      ..sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+    return candidates.firstOrNull;
+  }
+
+  Future<void> createDesktopRecoveryCopy() async {
+    if (!isDesktopFilePlatform) return;
+    final wallet = spbWallet;
+    final path = spbWalletPath;
+    if (wallet == null || path == null || path.isEmpty) return;
+    final directory = await desktopRecoveryDirectory();
+    final prefix = desktopRecoveryPrefix(path);
+    final safeName = safeFileComponent(File(path).uri.pathSegments.last);
+    final temporary = File(
+      '${directory.path}${Platform.pathSeparator}'
+      '.$prefix${DateTime.now().microsecondsSinceEpoch}-$safeName.tmp',
+    );
+    final recovery = File(
+      '${directory.path}${Platform.pathSeparator}'
+      '$prefix${DateTime.now().microsecondsSinceEpoch}-$safeName.swl',
+    );
+    try {
+      await wallet.backupTo(temporary.path);
+      if (!SpbWalletDatabase.isStructurallyValid(temporary.path)) {
+        throw StateError('Резервная копия базы не прошла проверку.');
+      }
+      await temporary.rename(recovery.path);
+      final copies = directory
+          .listSync(followLinks: false)
+          .whereType<File>()
+          .where(
+            (file) =>
+                file.uri.pathSegments.last.startsWith(prefix) &&
+                file.path.toLowerCase().endsWith('.swl'),
+          )
+          .toList()
+        ..sort(
+          (a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()),
+        );
+      for (final old in copies.skip(5)) {
+        try {
+          old.deleteSync();
+        } on FileSystemException {
+          // A valid recent recovery already exists, so stale-copy cleanup is
+          // best effort only.
+        }
+      }
+    } finally {
+      try {
+        if (temporary.existsSync()) await temporary.delete();
+      } on FileSystemException {
+        // A completed recovery copy is already available.
+      }
+    }
+  }
+
+  Future<({SpbWalletDatabase wallet, bool recovered})>
+      openDesktopWalletWithRecovery(String path, String password) async {
+    final target = File(path);
+    await recoverInterruptedAtomicReplace(target);
+    Object? originalError;
+    StackTrace? originalStackTrace;
+    if (target.existsSync() && target.lengthSync() > 0) {
+      try {
+        return (
+          wallet: SpbWalletDatabase.open(path, password),
+          recovered: false,
+        );
+      } catch (error, stackTrace) {
+        originalError = error;
+        originalStackTrace = stackTrace;
+        if (SpbWalletDatabase.isStructurallyValid(path)) {
+          Error.throwWithStackTrace(error, stackTrace);
+        }
+      }
+    }
+
+    final recovery = await latestDesktopRecovery(path);
+    if (recovery == null) {
+      if (originalError != null && originalStackTrace != null) {
+        Error.throwWithStackTrace(originalError, originalStackTrace);
+      }
+      return (wallet: SpbWalletDatabase.open(path, password), recovered: false);
+    }
+
+    final verification = SpbWalletDatabase.open(recovery.path, password);
+    try {
+      verification.loadSnapshot();
+    } finally {
+      verification.close(flush: false);
+    }
+
+    if (target.existsSync() && target.lengthSync() > 0) {
+      final directory = await desktopRecoveryDirectory();
+      final damaged = File(
+        '${directory.path}${Platform.pathSeparator}'
+        'damaged-${desktopRecoveryPrefix(path)}'
+        '${DateTime.now().microsecondsSinceEpoch}.swl',
+      );
+      await target.copy(damaged.path);
+      await flushFile(damaged);
+    }
+    await copyFileAtomically(recovery, target);
+    return (wallet: SpbWalletDatabase.open(path, password), recovered: true);
+  }
+
   Future<void> createSwlVault(
     String password, {
     String passwordHint = '',
@@ -3923,15 +4289,25 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool rememberLocalFile = true,
     bool unlockAfterCreate = true,
   }) async {
+    if (spbWallet != null) {
+      final saved = await finalizeSessionTrash();
+      if (!saved) {
+        throw StateError(
+          'Текущая база не закрыта: сначала устраните ошибку сохранения.',
+        );
+      }
+    }
     final file = targetFile ?? await swlVaultFile();
     if (file.existsSync()) {
       throw StateError(
         'База "${file.uri.pathSegments.last}" уже есть. Выберите другое название или откройте существующую базу.',
       );
     }
+    if (!file.parent.existsSync()) file.parent.createSync(recursive: true);
+    final creatingFile = siblingOperationFile(file, 'walletaps-creating');
     final baseData = await rootBundle.load('assets/base_wallet/MyWallet.swl');
     final payload = <String, dynamic>{
-      'path': file.path,
+      'path': creatingFile.path,
       'password': password,
       'passwordHint': passwordHint,
       'baseBytes': baseData.buffer.asUint8List(
@@ -3939,25 +4315,40 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         baseData.lengthInBytes,
       ),
     };
-    await compute<Map<String, dynamic>, bool>(
-      createSwlVaultFromBaseFile,
-      payload,
-    );
+    try {
+      await compute<Map<String, dynamic>, bool>(
+        createSwlVaultFromBaseFile,
+        payload,
+      );
+      if (!SpbWalletDatabase.isStructurallyValid(creatingFile.path)) {
+        throw StateError('Созданный файл базы не прошёл проверку SQLite.');
+      }
+      if (file.existsSync()) {
+        throw StateError('Целевой файл появился во время создания базы.');
+      }
+      await creatingFile.rename(file.path);
+    } finally {
+      try {
+        if (creatingFile.existsSync()) await creatingFile.delete();
+      } on FileSystemException {
+        // The final file was either not created or was already committed.
+      }
+    }
 
     spbIconIdByUiIcon.clear();
     await loadSpb64PngIconAssets();
     final wallet = SpbWalletDatabase.open(file.path, password);
     final snapshot = wallet.loadSnapshot();
-    if (spbWallet != null) {
-      await finalizeSessionTrash();
-    }
     clearSessionUndoHistory();
     spbWallet?.close(flush: vaultDirty);
     spbWallet = wallet;
+    if (isDesktopFilePlatform) activeDesktopVaultPath = file.path;
     vaultDirty = false;
     setState(() {
       spbWalletPath = file.path;
       spbWalletUri = null;
+      spbRecoveredWorkingCopy = false;
+      spbWritePending = false;
       spbWalletDisplayPath = file.path;
       applySpbSnapshot(snapshot);
       selectedItemId = items.isEmpty ? null : items.first.id;
@@ -4383,17 +4774,29 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final sourceFile = File(path);
     final suffix = DateTime.now().microsecondsSinceEpoch;
     final temporaryFile = File('$path.password-change-$suffix.tmp');
-    final backupFile = File('$path.password-change-$suffix.backup');
-    await compute<Map<String, dynamic>, bool>(
-      cloneSwlVaultWithPassword,
-      <String, dynamic>{
-        'path': temporaryFile.path,
-        'password': newPassword,
-        'sourcePassword': oldPassword,
-        'passwordHint': passwordHint,
-        'baseBytes': await sourceFile.readAsBytes(),
-      },
+    final backupFile = siblingOperationFile(sourceFile, 'walletaps-backup');
+    final sourceSnapshot = await createTemporaryWalletSnapshot(
+      wallet,
+      'password-source',
     );
+    try {
+      await compute<Map<String, dynamic>, bool>(
+        cloneSwlVaultWithPassword,
+        <String, dynamic>{
+          'path': temporaryFile.path,
+          'password': newPassword,
+          'sourcePassword': oldPassword,
+          'passwordHint': passwordHint,
+          'baseBytes': await sourceSnapshot.readAsBytes(),
+        },
+      );
+    } finally {
+      try {
+        if (sourceSnapshot.existsSync()) await sourceSnapshot.delete();
+      } on FileSystemException {
+        // The validated temporary clone is already independent of the source.
+      }
+    }
     final verification = SpbWalletDatabase.open(
       temporaryFile.path,
       newPassword,
@@ -4415,12 +4818,40 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       if (!written) {
         throw StateError('Не удалось записать базу в исходное хранилище.');
       }
-      if (backupFile.existsSync()) await backupFile.delete();
+      try {
+        if (backupFile.existsSync()) await backupFile.delete();
+      } on FileSystemException {
+        // The password change is complete; retaining the old backup is safe.
+      }
     } catch (_) {
       spbWallet?.close(flush: false);
       spbWallet = null;
-      if (sourceFile.existsSync()) await sourceFile.delete();
-      if (backupFile.existsSync()) await backupFile.rename(sourceFile.path);
+      File? failedReplacement;
+      if (backupFile.existsSync()) {
+        if (sourceFile.existsSync()) {
+          failedReplacement = siblingOperationFile(
+            sourceFile,
+            'password-change-failed',
+          );
+          await sourceFile.rename(failedReplacement.path);
+        }
+        try {
+          await backupFile.rename(sourceFile.path);
+        } catch (_) {
+          if (!sourceFile.existsSync() &&
+              (failedReplacement?.existsSync() ?? false)) {
+            await failedReplacement!.rename(sourceFile.path);
+          }
+          rethrow;
+        }
+        try {
+          if (failedReplacement?.existsSync() ?? false) {
+            await failedReplacement!.delete();
+          }
+        } on FileSystemException {
+          // The original wallet has already been restored.
+        }
+      }
       spbWallet = SpbWalletDatabase.open(path, oldPassword);
       if (temporaryFile.existsSync()) await temporaryFile.delete();
       rethrow;
@@ -4642,28 +5073,32 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         if (localPath == null || localPath.isEmpty) {
           throw StateError('Не удалось открыть выбранную .swl базу.');
         }
-        await closeCurrentVaultForPasswordPrompt();
-        if (!mounted) return;
+        final closed = await closeCurrentVaultForPasswordPrompt();
+        if (!closed || !mounted) return;
         setState(() {
           entryMode = EntryMode.openSwl;
           message = null;
           spbWalletPath = localPath;
           spbWalletUri = vault.uri;
           spbWalletWritable = copied?['writable'] != false;
+          spbRecoveredWorkingCopy = copied?['recovered'] == true;
+          spbWritePending = spbRecoveredWorkingCopy;
           spbWalletDisplayPath =
               copied?['displayPath']?.toString() ?? vault.displayPath;
           vaultNameController.text =
               copied?['displayName']?.toString() ?? vault.title;
         });
       } else {
-        await closeCurrentVaultForPasswordPrompt();
-        if (!mounted) return;
+        final closed = await closeCurrentVaultForPasswordPrompt();
+        if (!closed || !mounted) return;
         setState(() {
           entryMode = EntryMode.openSwl;
           message = null;
           spbWalletPath = vault.path;
           spbWalletUri = null;
           spbWalletWritable = true;
+          spbRecoveredWorkingCopy = false;
+          spbWritePending = false;
           spbWalletDisplayPath = vault.displayPath ?? vault.path;
           vaultNameController.text = vault.title;
         });
@@ -4677,6 +5112,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           displayPath: spbWalletDisplayPath,
         ),
       );
+      if (Platform.isAndroid && spbRecoveredWorkingCopy) {
+        showSpbOperationMessage(
+          'Исходный файл пуст или повреждён. Открыта последняя внутренняя резервная копия.',
+        );
+      }
     } catch (error) {
       setState(
         () => message = 'Не удалось открыть последнюю .swl базу: $error',
@@ -4684,12 +5124,51 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
-  Future<bool> writeBackSpbWallet({bool force = false}) async {
-    if (!force && !vaultDirty) {
-      spbWritePending = false;
-      return true;
+  Future<bool> writeBackSpbWallet({bool force = false}) {
+    if (force) _spbForceWriteQueued = true;
+    final inFlight = _spbWriteInFlight;
+    if (inFlight != null) return inFlight;
+
+    final operation = _drainSpbWalletWrites();
+    _spbWriteInFlight = operation;
+    void clearInFlight() {
+      if (identical(_spbWriteInFlight, operation)) {
+        _spbWriteInFlight = null;
+      }
     }
-    var ok = true;
+
+    unawaited(
+      operation.then<void>(
+        (_) => clearInFlight(),
+        onError: (Object _, StackTrace __) => clearInFlight(),
+      ),
+    );
+    return operation;
+  }
+
+  Future<bool> _drainSpbWalletWrites() async {
+    while (true) {
+      final forced = _spbForceWriteQueued;
+      _spbForceWriteQueued = false;
+      if (!forced && !vaultDirty && !spbWritePending) return true;
+
+      spbWritePending = true;
+      final generation = _vaultChangeGeneration;
+      final written = await _writeBackSpbWalletOnce();
+      if (!written) {
+        spbWritePending = true;
+        return false;
+      }
+      if (generation == _vaultChangeGeneration && !_spbForceWriteQueued) {
+        vaultDirty = false;
+        spbWritePending = false;
+        return true;
+      }
+    }
+  }
+
+  Future<bool> _writeBackSpbWalletOnce() async {
+    File? androidWriteSnapshot;
     try {
       spbWallet?.saveRecentlyOpenedCardIds(recentlyOpenedItemIds);
       spbWallet?.flushToDisk();
@@ -4699,19 +5178,33 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             'Файл открыт только для чтения. Выберите доступный для записи файл.',
           );
         }
+        final workingCopy = File(spbWalletPath!);
+        if (!FileSystemEntity.isFileSync(workingCopy.path) ||
+            workingCopy.lengthSync() == 0) {
+          throw StateError(
+            'Рабочая копия базы отсутствует или пуста; исходный файл не изменён.',
+          );
+        }
+        androidWriteSnapshot = File(
+          '${Directory.systemTemp.path}${Platform.pathSeparator}'
+          'spbwallet_write_${DateTime.now().microsecondsSinceEpoch}.swl',
+        );
+        await spbWallet!.backupTo(androidWriteSnapshot.path);
+        if (androidWriteSnapshot.lengthSync() == 0) {
+          throw StateError('Не удалось создать снимок базы для записи.');
+        }
         final written = await spbWalletChannel.invokeMethod<bool>(
           'writeSpbWallet',
-          {'uri': spbWalletUri, 'localPath': spbWalletPath},
+          {'uri': spbWalletUri, 'localPath': androidWriteSnapshot.path},
         );
         if (written != true) {
           throw StateError('Android не подтвердил запись файла.');
         }
+      } else if (isDesktopFilePlatform) {
+        await createDesktopRecoveryCopy();
       }
-      spbWritePending = false;
-      vaultDirty = false;
+      return true;
     } catch (error) {
-      ok = false;
-      spbWritePending = true;
       if (mounted) {
         final failure =
             'Изменения сохранены в рабочей копии, но не записаны в исходную '
@@ -4719,8 +5212,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         setState(() => message = failure);
         showSpbOperationMessage(failure);
       }
+      return false;
+    } finally {
+      try {
+        if (androidWriteSnapshot?.existsSync() ?? false) {
+          androidWriteSnapshot!.deleteSync();
+        }
+      } on FileSystemException {
+        // The Android cache directory will eventually discard stale snapshots.
+      }
     }
-    return ok;
   }
 
   bool ensureSpbWalletWritable() {
@@ -4741,6 +5242,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final saved = await writeBackSpbWallet();
     if (!saved || !mounted) return;
     if (Platform.isAndroid) {
+      File? snapshotFile;
       try {
         final now = DateTime.now();
         String two(int value) => value.toString().padLeft(2, '0');
@@ -4748,7 +5250,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           RegExp(r'[\\/:*?"<>|]'),
           '_',
         );
-        final bytes = await File(spbWalletPath!).readAsBytes();
+        snapshotFile = await createTemporaryWalletSnapshot(
+          spbWallet!,
+          'archive',
+        );
+        final bytes = await snapshotFile.readAsBytes();
         final path = await FilePicker.platform.saveFile(
           dialogTitle: 'Сохранить архивную копию',
           fileName: '${baseName}_${now.year}${two(now.month)}'
@@ -4762,6 +5268,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         }
       } catch (error) {
         showSpbOperationMessage('Не удалось сохранить архивную копию: $error');
+      } finally {
+        try {
+          if (snapshotFile?.existsSync() ?? false) {
+            await snapshotFile!.delete();
+          }
+        } on FileSystemException {
+          // Android eventually clears stale cache snapshots.
+        }
       }
       return;
     }
@@ -4783,7 +5297,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final archivePath =
         '${source.parent.path}${Platform.pathSeparator}$archiveName';
     try {
-      await source.copy(archivePath);
+      await backupWalletAtomically(spbWallet!, File(archivePath));
       if (!mounted) return;
       setState(() => message = 'Архивная копия создана: $archivePath');
       ScaffoldMessenger.of(context)
@@ -4811,7 +5325,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     SpbWalletUndoSnapshot? undo;
     try {
       wallet.flushToDisk();
-      await source.copy(backup.path);
+      await wallet.backupTo(backup.path);
       undo = await wallet.createUndoSnapshot();
       final report = wallet.repairLegacyCompatibility();
       markVaultDirty();
@@ -8643,16 +9157,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         fileName: safeSpbFileName(suggestedName),
         type: FileType.custom,
         allowedExtensions: const ['swl'],
-        bytes: data,
+        bytes: Platform.isAndroid || Platform.isIOS ? data : null,
       );
       if (path == null) return;
       if (!Platform.isAndroid && !Platform.isIOS) {
         final outputPath =
             path.toLowerCase().endsWith('.swl') ? path : '$path.swl';
-        final output = File(outputPath);
-        if (!output.existsSync() || output.lengthSync() != data.length) {
-          await output.writeAsBytes(data, flush: true);
-        }
+        ensureTargetIsNotActiveVault(outputPath);
+        await writeBytesAtomically(File(outputPath), data);
       }
     } catch (error) {
       showSpbOperationMessage('Не удалось экспортировать SWL: $error');
@@ -9992,6 +10504,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     clearSessionUndoHistory();
     spbWallet?.close(flush: vaultDirty);
     spbWallet = null;
+    if (isDesktopFilePlatform) activeDesktopVaultPath = null;
     vaultDirty = false;
     spbWalletPath = null;
     spbWalletUri = null;
@@ -10171,11 +10684,21 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     inactivityTimer = null;
     purgeSessionTrashFromDatabase();
     persistVaultState();
-    await writeBackSpbWallet();
+    final saved = await writeBackSpbWallet();
+    if (!saved) {
+      closingForInactivity = false;
+      lastUserActivityAt = DateTime.now();
+      recordUserActivity();
+      showSpbOperationMessage(
+        'Автоблокировка отменена: не удалось безопасно сохранить базу.',
+      );
+      return;
+    }
     await clearClipboardSilently();
     clearSessionUndoHistory();
     spbWallet?.close(flush: vaultDirty);
     spbWallet = null;
+    if (isDesktopFilePlatform) activeDesktopVaultPath = null;
     vaultDirty = false;
     spbWritePending = false;
     passwordController.clear();
@@ -11729,16 +12252,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         fileName: '${safeName.isEmpty ? 'Шаблон' : safeName}.swt',
         type: FileType.custom,
         allowedExtensions: const ['swt'],
-        bytes: data,
+        bytes: Platform.isAndroid || Platform.isIOS ? data : null,
       );
       if (path == null) return;
       if (!Platform.isAndroid && !Platform.isIOS) {
         final outputPath =
             path.toLowerCase().endsWith('.swt') ? path : '$path.swt';
-        final output = File(outputPath);
-        if (!output.existsSync() || output.lengthSync() != data.length) {
-          await output.writeAsBytes(data, flush: true);
-        }
+        ensureTargetIsNotActiveVault(outputPath);
+        await writeBytesAtomically(File(outputPath), data);
       }
       showTemplateActionMessage('Шаблон «${template.name}» экспортирован.');
     } catch (error) {
@@ -11924,12 +12445,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         });
         final uri = document?['uri']?.toString();
         if (uri == null || uri.isEmpty) return;
-        final copied = await spbWalletChannel.invokeMethod<bool>(
-          'writeSpbWallet',
-          {'uri': uri, 'localPath': sourcePath},
+        final snapshot = await createTemporaryWalletSnapshot(
+          spbWallet!,
+          'save-as',
         );
-        if (copied != true) {
-          throw StateError('Системный проводник не записал выбранный файл.');
+        try {
+          final copied = await spbWalletChannel.invokeMethod<bool>(
+            'writeSpbWallet',
+            {'uri': uri, 'localPath': snapshot.path},
+          );
+          if (copied != true) {
+            throw StateError('Системный проводник не записал выбранный файл.');
+          }
+        } finally {
+          try {
+            if (snapshot.existsSync()) await snapshot.delete();
+          } on FileSystemException {
+            // Android eventually clears stale cache snapshots.
+          }
         }
       } else {
         final targetPath = await FilePicker.platform.saveFile(
@@ -11940,10 +12473,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           allowedExtensions: const ['swl'],
         );
         if (targetPath == null || targetPath.trim().isEmpty) return;
-        if (File(targetPath).absolute.path.toLowerCase() !=
-            source.absolute.path.toLowerCase()) {
-          await source.copy(targetPath);
+        if (pathsReferToSameFile(targetPath, source.path)) {
+          throw StateError(
+            'Нельзя сохранять копию поверх открытой базы.',
+          );
         }
+        await backupWalletAtomically(spbWallet!, File(targetPath));
       }
       if (!mounted) return;
       setState(() => message = 'База сохранена.');
@@ -13551,13 +14086,11 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Сохранить вложение',
         fileName: export.fileName,
-        bytes: export.bytes,
+        bytes: Platform.isAndroid || Platform.isIOS ? export.bytes : null,
       );
       if (path != null && !Platform.isAndroid && !Platform.isIOS) {
-        final file = File(path);
-        if (!file.existsSync() || file.lengthSync() != bytes.length) {
-          await file.writeAsBytes(bytes, flush: true);
-        }
+        ensureTargetIsNotActiveVault(path);
+        await writeBytesAtomically(File(path), export.bytes);
       }
     } catch (error) {
       if (!mounted) return;
@@ -15767,13 +16300,11 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Сохранить вложение',
         fileName: export.fileName,
-        bytes: export.bytes,
+        bytes: Platform.isAndroid || Platform.isIOS ? export.bytes : null,
       );
       if (path != null && !Platform.isAndroid && !Platform.isIOS) {
-        final file = File(path);
-        if (!file.existsSync() || file.lengthSync() != data.length) {
-          await file.writeAsBytes(data, flush: true);
-        }
+        ensureTargetIsNotActiveVault(path);
+        await writeBytesAtomically(File(path), export.bytes);
       }
     } catch (error) {
       if (!mounted) return;

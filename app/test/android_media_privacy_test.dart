@@ -77,6 +77,45 @@ void main() {
     expect(appSource, isNot(contains('getExternalStorageDirectories')));
   });
 
+  test('Android wallet writes protect the original file from zero-byte saves',
+      () {
+    final activity = File(
+      'android/app/src/main/kotlin/com/lc200333cmyk/walletaps/MainActivity.kt',
+    ).readAsStringSync();
+    final appSource = File('lib/main.dart').readAsStringSync();
+
+    expect(activity, contains('Executors.newSingleThreadExecutor()'));
+    expect(activity, contains('isValidWalletFile(source)'));
+    expect(activity, contains('createRecoveryWallet(source'));
+    expect(activity, contains('openFileDescriptor(uri, "rw")'));
+    expect(activity, contains('force(true)'));
+    expect(activity, contains('actual.sha256.contentEquals(expected.sha256)'));
+    expect(activity, contains('originalSize == 0L'));
+    expect(
+      activity.indexOf('isValidWalletFile(source)'),
+      lessThan(activity.indexOf('openFileDescriptor(uri, "rw")')),
+    );
+    expect(appSource, contains('_spbWriteInFlight'));
+    expect(appSource, contains('_vaultChangeGeneration'));
+    expect(appSource, contains('spbwallet_write_'));
+    expect(appSource, contains('backupTo(androidWriteSnapshot.path)'));
+    expect(appSource, contains('if (!saved) {'));
+  });
+
+  test('desktop shutdown and exports use guarded save paths', () {
+    final linuxRunner =
+        File('linux/runner/my_application.cc').readAsStringSync();
+    final appSource = File('lib/main.dart').readAsStringSync();
+
+    expect(linuxRunner, contains('window_delete_event_cb'));
+    expect(linuxRunner, contains('"delete-event"'));
+    expect(linuxRunner, contains('"requestClose"'));
+    expect(appSource, contains('Platform.isWindows && !Platform.isLinux'));
+    expect(appSource, contains('backupWalletAtomically'));
+    expect(appSource, contains('ensureTargetIsNotActiveVault'));
+    expect(appSource, contains('writeBytesAtomically'));
+  });
+
   test('Synology-synchronized project and build tree are hidden from Gallery',
       () {
     expect(File('../.nomedia').existsSync(), isTrue);

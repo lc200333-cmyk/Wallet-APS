@@ -8,6 +8,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.view.DragEvent
@@ -18,6 +19,8 @@ import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
     private val channelName = "wallet_aps/spb_wallet"
@@ -358,37 +361,238 @@ class MainActivity : FlutterActivity() {
         persisted: Boolean = contentResolver.persistedUriPermissions.any { it.uri == uri }
     ): Map<String, Any?> {
         val displayName = knownDisplayName?.takeIf { it.isNotBlank() } ?: displayName(uri)
-        val local = File(cacheDir, "spbwallet_${System.currentTimeMillis()}_$displayName")
+        val safeDisplayName = safeWalletName(displayName)
+        val local = File(cacheDir, "spbwallet_${System.currentTimeMillis()}_$safeDisplayName")
         contentResolver.openInputStream(uri).use { input ->
             FileOutputStream(local).use { output ->
                 if (input == null) error("Cannot open selected SPB Wallet file")
                 input.copyTo(output)
+                output.fd.sync()
             }
         }
+        var recovered = false
+        var workingCopy = local
+        if (!isValidWalletFile(local)) {
+            local.delete()
+            val recovery = findRecoveryWallet(uri, displayName)
+                ?: error("Selected SPB Wallet file is empty or damaged")
+            FileOutputStream(local).use { output ->
+                recovery.inputStream().use { input -> input.copyTo(output) }
+                output.fd.sync()
+            }
+            if (!isValidWalletFile(local)) {
+                local.delete()
+                error("Cannot create a valid working copy from recovery")
+            }
+            workingCopy = local
+            recovered = true
+        }
         val sourceLastModified = lastModified(uri)
-        if (sourceLastModified > 0L) local.setLastModified(sourceLastModified)
+        if (!recovered && sourceLastModified > 0L) {
+            workingCopy.setLastModified(sourceLastModified)
+        }
         return mapOf(
             "uri" to uri.toString(),
-            "localPath" to local.absolutePath,
+            "localPath" to workingCopy.absolutePath,
             "displayName" to displayName,
             "displayPath" to displayPath(uri, displayName),
             "writable" to writable,
-            "persisted" to persisted
+            "persisted" to persisted,
+            "recovered" to recovered
         )
     }
 
     private fun writeSpbWallet(uriText: String, localPath: String, result: MethodChannel.Result) {
         try {
-            val uri = Uri.parse(uriText)
-            contentResolver.openOutputStream(uri, "wt").use { output ->
-                if (output == null) error("Cannot open selected SPB Wallet file for writing")
-                File(localPath).inputStream().use { input -> input.copyTo(output) }
-                output.flush()
+            WALLET_IO_EXECUTOR.execute {
+                try {
+                    performSpbWalletWrite(uriText, localPath)
+                    runOnUiThread { result.success(true) }
+                } catch (error: Throwable) {
+                    runOnUiThread { result.error("write_failed", error.message, null) }
+                }
             }
-            result.success(true)
         } catch (error: Throwable) {
             result.error("write_failed", error.message, null)
         }
+    }
+
+    private fun performSpbWalletWrite(uriText: String, localPath: String) {
+        val uri = Uri.parse(uriText)
+        val source = File(localPath)
+        if (!isValidWalletFile(source)) {
+            error("Local SPB Wallet working copy is empty or damaged")
+        }
+
+        createRecoveryWallet(source, uri, displayName(uri))
+        val expected = digest(source)
+        val originalSize = documentSize(uri)
+            ?: runCatching { digest(uri).size }.getOrNull()
+        val safeWriteError = runCatching {
+            val descriptor = contentResolver.openFileDescriptor(uri, "rw")
+                ?: error("Cannot open a seekable SPB Wallet file descriptor")
+            ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
+                output.channel.apply {
+                    position(0L)
+                    source.inputStream().use { input -> input.copyTo(output) }
+                    truncate(expected.size)
+                    force(true)
+                }
+            }
+        }.exceptionOrNull()
+        if (safeWriteError != null && originalSize == 0L) {
+            // Some providers do not expose a seekable descriptor for a newly
+            // created, still-empty document. Truncation is safe only here.
+            contentResolver.openOutputStream(uri, "wt").use { output ->
+                if (output == null) error("Cannot open selected SPB Wallet file for writing")
+                source.inputStream().use { input -> input.copyTo(output) }
+                output.flush()
+            }
+        } else if (safeWriteError != null) {
+            throw safeWriteError
+        }
+
+        val actual = digest(uri)
+        if (actual.size != expected.size || !actual.sha256.contentEquals(expected.sha256)) {
+            error("SPB Wallet write verification failed")
+        }
+    }
+
+    private data class WalletDigest(val size: Long, val sha256: ByteArray)
+
+    private fun digest(file: File): WalletDigest = file.inputStream().use { input ->
+        digest(input)
+    }
+
+    private fun digest(uri: Uri): WalletDigest {
+        val input = contentResolver.openInputStream(uri)
+            ?: error("Cannot reopen SPB Wallet file for verification")
+        return input.use(::digest)
+    }
+
+    private fun digest(input: java.io.InputStream): WalletDigest {
+        val hash = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var size = 0L
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            if (count == 0) continue
+            hash.update(buffer, 0, count)
+            size += count
+        }
+        return WalletDigest(size, hash.digest())
+    }
+
+    private fun isValidWalletFile(file: File): Boolean {
+        if (!file.isFile || file.length() < SQLITE_HEADER.size) return false
+        return try {
+            file.inputStream().use { input ->
+                val header = ByteArray(SQLITE_HEADER.size)
+                input.read(header) == header.size && header.contentEquals(SQLITE_HEADER)
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun createRecoveryWallet(source: File, uri: Uri, displayName: String) {
+        val directory = recoveryDirectory().apply { mkdirs() }
+        val safeName = safeWalletName(displayName)
+        val recoveryKey = recoveryKey(uri)
+        val temporary = File(
+            directory,
+            ".${recoveryKey}_${System.currentTimeMillis()}_${System.nanoTime()}_$safeName.tmp"
+        )
+        FileOutputStream(temporary).use { output ->
+            source.inputStream().use { input -> input.copyTo(output) }
+            output.fd.sync()
+        }
+        if (!isValidWalletFile(temporary)) {
+            temporary.delete()
+            error("Cannot create a valid SPB Wallet recovery copy")
+        }
+        val recovery = File(
+            directory,
+            "${recoveryKey}_${System.currentTimeMillis()}_${System.nanoTime()}_$safeName"
+        )
+        if (!temporary.renameTo(recovery)) {
+            temporary.delete()
+            error("Cannot finalize SPB Wallet recovery copy")
+        }
+        directory.listFiles()
+            ?.filter {
+                it.isFile &&
+                    it.name.startsWith("${recoveryKey}_") &&
+                    it.name.endsWith("_$safeName")
+            }
+            ?.sortedByDescending { it.lastModified() }
+            ?.drop(RECOVERY_COPIES_PER_WALLET)
+            ?.forEach { old -> old.delete() }
+    }
+
+    private fun findRecoveryWallet(uri: Uri, displayName: String): File? {
+        val safeName = safeWalletName(displayName)
+        val recoveryKey = recoveryKey(uri)
+        val keyedRecovery = recoveryDirectory().listFiles()
+            ?.asSequence()
+            ?.filter {
+                it.isFile &&
+                    it.name.startsWith("${recoveryKey}_") &&
+                    it.name.endsWith("_$safeName")
+            }
+            ?.filter(::isValidWalletFile)
+            ?.maxByOrNull { it.lastModified() }
+        if (keyedRecovery != null) return keyedRecovery
+
+        val legacyCandidates = buildList {
+            cacheDir.listFiles()?.filterTo(this) {
+                it.isFile && it.name.endsWith("_$safeName")
+            }
+            File(filesDir, "Wallet APS").listFiles()?.filterTo(this) {
+                it.isFile && it.name.endsWith("_$safeName")
+            }
+        }
+        return legacyCandidates
+            .asSequence()
+            .filter(::isValidWalletFile)
+            .maxByOrNull { it.lastModified() }
+    }
+
+    private fun recoveryDirectory(): File = File(filesDir, "Wallet APS/Recovery")
+
+    private fun recoveryKey(uri: Uri): String = MessageDigest.getInstance("SHA-256")
+        .digest(uri.toString().toByteArray(Charsets.UTF_8))
+        .take(12)
+        .joinToString("") { byte ->
+            (byte.toInt() and 0xff).toString(16).padStart(2, '0')
+        }
+
+    private fun safeWalletName(displayName: String): String = displayName
+        .replace(Regex("[\\\\/:*?\"<>|\\u0000-\\u001f]"), "_")
+        .take(120)
+        .ifBlank { "wallet.swl" }
+
+    private fun documentSize(uri: Uri): Long? {
+        if (uri.scheme == "file") return uri.path?.let { File(it).length() }
+        return try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null).use { cursor ->
+                if (cursor != null && cursor.moveToFirst()) {
+                    val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else null
+                } else {
+                    null
+                }
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    companion object {
+        private val SQLITE_HEADER = "SQLite format 3\u0000".toByteArray(Charsets.US_ASCII)
+        private const val RECOVERY_COPIES_PER_WALLET = 5
+        private val WALLET_IO_EXECUTOR = Executors.newSingleThreadExecutor()
     }
 
     private fun openFile(path: String, mimeType: String, result: MethodChannel.Result) {

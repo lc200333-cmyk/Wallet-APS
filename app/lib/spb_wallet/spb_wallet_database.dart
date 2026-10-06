@@ -45,7 +45,14 @@ class SpbWalletDatabase {
   static SpbWalletDatabase open(String path, String password) {
     Database? db;
     try {
+      final file = File(path);
+      if (!FileSystemEntity.isFileSync(file.path) || file.lengthSync() == 0) {
+        throw const SpbWalletOpenException(
+          'Файл базы SPB Wallet отсутствует или пуст.',
+        );
+      }
       db = sqlite3.open(path);
+      db.execute('PRAGMA synchronous=FULL');
       final wallet = SpbWalletDatabase._(path, db, SpbWalletCrypto(password));
       wallet._validateSchema();
       wallet._validatePassword();
@@ -89,6 +96,7 @@ class SpbWalletDatabase {
       throw const SpbWalletOpenException('База SPB Wallet уже существует.');
     }
     final db = sqlite3.open(path);
+    db.execute('PRAGMA synchronous=FULL');
     final wallet = SpbWalletDatabase._(path, db, SpbWalletCrypto(password));
     wallet._createSchema();
     wallet._seedMeta();
@@ -815,6 +823,59 @@ class SpbWalletDatabase {
 
   void flushToDisk() {
     _db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+  }
+
+  Future<void> backupTo(String targetPath) async {
+    final targetFile = File(targetPath);
+    if (targetFile.existsSync()) {
+      throw StateError('Файл резервной копии уже существует.');
+    }
+    Database? target;
+    try {
+      target = sqlite3.open(targetPath);
+      target.execute('PRAGMA synchronous=FULL');
+      await _db.backup(target, nPage: -1).drain<void>();
+      final check = target.select('PRAGMA quick_check').first.values.first;
+      if (check.toString().toLowerCase() != 'ok') {
+        throw StateError('Проверка резервной копии SQLite не пройдена.');
+      }
+      target.dispose();
+      target = null;
+      final handle = targetFile.openSync(mode: FileMode.append);
+      try {
+        handle.flushSync();
+      } finally {
+        handle.closeSync();
+      }
+    } catch (_) {
+      target?.dispose();
+      try {
+        if (targetFile.existsSync()) targetFile.deleteSync();
+      } catch (_) {}
+      rethrow;
+    }
+  }
+
+  static bool isStructurallyValid(String path) {
+    final file = File(path);
+    if (!FileSystemEntity.isFileSync(file.path) || file.lengthSync() < 16) {
+      return false;
+    }
+    Database? database;
+    try {
+      database = sqlite3.open(path, mode: OpenMode.readOnly);
+      final check = database.select('PRAGMA quick_check').first.values.first;
+      if (check.toString().toLowerCase() != 'ok') return false;
+      return database
+          .select(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='spbwlt_Wallet' LIMIT 1",
+          )
+          .isNotEmpty;
+    } catch (_) {
+      return false;
+    } finally {
+      database?.dispose();
+    }
   }
 
   Future<SpbWalletUndoSnapshot> createUndoSnapshot() async {

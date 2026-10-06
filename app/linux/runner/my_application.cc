@@ -55,6 +55,21 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
+// Give Dart a chance to checkpoint, back up, and close the active wallet.
+// Dart terminates the process after a successful save; returning TRUE keeps
+// GTK from destroying the Flutter engine while that asynchronous work runs.
+static gboolean window_delete_event_cb(GtkWidget* /*widget*/,
+                                       GdkEvent* /*event*/,
+                                       gpointer user_data) {
+  MyApplication* self = MY_APPLICATION(user_data);
+  if (self->window_channel == nullptr) {
+    return FALSE;
+  }
+  fl_method_channel_invoke_method(self->window_channel, "requestClose", nullptr,
+                                  nullptr, nullptr, nullptr);
+  return TRUE;
+}
+
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
@@ -116,6 +131,8 @@ static void my_application_activate(GApplication* application) {
       FL_METHOD_CODEC(codec));
   fl_method_channel_set_method_call_handler(
       self->window_channel, window_channel_method_call_cb, self, nullptr);
+  g_signal_connect(window, "delete-event",
+                   G_CALLBACK(window_delete_event_cb), self);
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
 

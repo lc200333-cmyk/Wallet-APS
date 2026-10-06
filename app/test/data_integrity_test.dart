@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:wallet_aps/main.dart';
 import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
@@ -56,6 +57,76 @@ void main() {
       ),
       isNull,
     );
+  });
+
+  test('opening a missing wallet never creates a zero-byte file', () async {
+    final directory = await Directory.systemTemp.createTemp('missing_wallet_');
+    final path = '${directory.path}${Platform.pathSeparator}missing.swl';
+    addTearDown(() => directory.deleteSync(recursive: true));
+
+    expect(
+      () => SpbWalletDatabase.open(path, 'password'),
+      throwsA(isA<SpbWalletOpenException>()),
+    );
+    expect(File(path).existsSync(), isFalse);
+  });
+
+  test('SQLite backup creates a verified independently openable wallet',
+      () async {
+    final directory = await Directory.systemTemp.createTemp('wallet_backup_');
+    final sourcePath = '${directory.path}${Platform.pathSeparator}source.swl';
+    final backupPath = '${directory.path}${Platform.pathSeparator}backup.swl';
+    addTearDown(() => directory.deleteSync(recursive: true));
+
+    final source = SpbWalletDatabase.create(sourcePath, 'backup-password');
+    source.savePasswordHint('backup-hint');
+    await source.backupTo(backupPath);
+    source.close();
+
+    expect(SpbWalletDatabase.isStructurallyValid(backupPath), isTrue);
+    final backup = SpbWalletDatabase.open(backupPath, 'backup-password');
+    expect(backup.loadPasswordHint(), 'backup-hint');
+    backup.close();
+  });
+
+  test('atomic replacement recovers an interrupted target rename', () async {
+    final directory = await Directory.systemTemp.createTemp('atomic_wallet_');
+    final target = File('${directory.path}${Platform.pathSeparator}wallet.swl');
+    final interrupted = File(
+      '${directory.path}${Platform.pathSeparator}'
+      '.wallet.swl.walletaps-backup-test',
+    );
+    addTearDown(() => directory.deleteSync(recursive: true));
+    interrupted.writeAsBytesSync(<int>[1, 2, 3], flush: true);
+
+    await recoverInterruptedAtomicReplace(target);
+    expect(target.readAsBytesSync(), <int>[1, 2, 3]);
+    await writeBytesAtomically(target, Uint8List.fromList(<int>[4, 5, 6, 7]));
+    expect(target.readAsBytesSync(), <int>[4, 5, 6, 7]);
+    expect(
+      directory
+          .listSync()
+          .whereType<File>()
+          .where((file) => file.path.contains('walletaps-backup-')),
+      isEmpty,
+    );
+  });
+
+  test('desktop export guard rejects the active wallet path', () async {
+    final directory = await Directory.systemTemp.createTemp('active_wallet_');
+    final wallet = File('${directory.path}${Platform.pathSeparator}active.swl')
+      ..writeAsBytesSync(<int>[1, 2, 3], flush: true);
+    addTearDown(() {
+      activeDesktopVaultPath = null;
+      directory.deleteSync(recursive: true);
+    });
+    activeDesktopVaultPath = wallet.path;
+
+    expect(
+      () => ensureTargetIsNotActiveVault(wallet.path),
+      throwsA(isA<StateError>()),
+    );
+    expect(wallet.readAsBytesSync(), <int>[1, 2, 3]);
   });
 
   test('new wallet is cloned from MyWallet and encrypted with new password',
