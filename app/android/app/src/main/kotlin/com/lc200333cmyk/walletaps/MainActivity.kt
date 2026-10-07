@@ -2,6 +2,7 @@ package com.lc200333cmyk.walletaps
 
 import android.app.Activity
 import android.content.ActivityNotFoundException
+import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -101,6 +102,15 @@ class MainActivity : FlutterActivity() {
                         openFile(path, mimeType, result)
                     }
                 }
+                "shareFile" -> {
+                    val path = call.argument<String>("path")
+                    val mimeType = call.argument<String>("mimeType") ?: "*/*"
+                    if (path == null) {
+                        result.error("bad_args", "Missing path", null)
+                    } else {
+                        shareFile(path, mimeType, result)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -121,10 +131,17 @@ class MainActivity : FlutterActivity() {
             clipboardImageChannelName
         )
         clipboardImageChannel!!.setMethodCallHandler { call, result ->
-            if (call.method == "readClipboardImage") {
-                result.success(readClipboardImage())
-            } else {
-                result.notImplemented()
+            when (call.method) {
+                "readClipboardImage" -> result.success(readClipboardImage())
+                "writeClipboardImage" -> {
+                    val bytes = call.arguments as? ByteArray
+                    if (bytes == null || bytes.isEmpty()) {
+                        result.error("invalid_args", "Expected image byte data", null)
+                    } else {
+                        writeClipboardImage(bytes, result)
+                    }
+                }
+                else -> result.notImplemented()
             }
         }
         cacheDir.listFiles()
@@ -155,6 +172,34 @@ class MainActivity : FlutterActivity() {
             }
         }
         return null
+    }
+
+    private fun writeClipboardImage(bytes: ByteArray, result: MethodChannel.Result) {
+        try {
+            val directory = File(cacheDir, "wallet_aps_clipboard")
+            directory.deleteRecursively()
+            if (!directory.mkdirs() && !directory.isDirectory) {
+                error("Could not create clipboard directory")
+            }
+            File(directory, ".nomedia").createNewFile()
+            val file = File(directory, "image.png")
+            FileOutputStream(file).use { output ->
+                output.write(bytes)
+                output.fd.sync()
+            }
+            val uri = FileProvider.getUriForFile(
+                this,
+                "${applicationContext.packageName}.fileprovider",
+                file
+            )
+            val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(
+                ClipData.newUri(contentResolver, "Wallet APS image", uri)
+            )
+            result.success(true)
+        } catch (error: Throwable) {
+            result.error("clipboard_error", error.message, null)
+        }
     }
 
     private fun installAttachmentDropListener() {
@@ -610,6 +655,30 @@ class MainActivity : FlutterActivity() {
             result.error("no_viewer", "No application can open this file", null)
         } catch (error: Throwable) {
             result.error("open_failed", error.message, null)
+        }
+    }
+
+    private fun shareFile(path: String, mimeType: String, result: MethodChannel.Result) {
+        try {
+            val file = File(path)
+            if (!file.isFile || file.length() == 0L) error("File does not exist or is empty")
+            val uri = FileProvider.getUriForFile(
+                this,
+                "${applicationContext.packageName}.fileprovider",
+                file
+            )
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = ClipData.newRawUri(file.name, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(sendIntent, "Поделиться"))
+            result.success(true)
+        } catch (error: ActivityNotFoundException) {
+            result.error("no_share_target", "No application can receive this file", null)
+        } catch (error: Throwable) {
+            result.error("share_failed", error.message, null)
         }
     }
 

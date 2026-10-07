@@ -102,6 +102,23 @@ void main() {
     expect(appSource, contains('if (!saved) {'));
   });
 
+  test('Android attachment copy and share use private FileProvider URIs', () {
+    final activity = File(
+      'android/app/src/main/kotlin/com/lc200333cmyk/walletaps/MainActivity.kt',
+    ).readAsStringSync();
+    final appSource = File('lib/main.dart').readAsStringSync();
+
+    expect(activity, contains('"writeClipboardImage"'));
+    expect(activity, contains('ClipData.newUri'));
+    expect(activity, contains('"shareFile"'));
+    expect(activity, contains('Intent.ACTION_SEND'));
+    expect(activity, contains('Intent.EXTRA_STREAM'));
+    expect(activity, contains('Intent.FLAG_GRANT_READ_URI_PERMISSION'));
+    expect(activity, contains('FileProvider.getUriForFile'));
+    expect(appSource, contains('wallet_aps_share_'));
+    expect(appSource, contains("'Поделиться'"));
+  });
+
   test('desktop shutdown and exports use guarded save paths', () {
     final linuxRunner =
         File('linux/runner/my_application.cc').readAsStringSync();

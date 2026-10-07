@@ -91,6 +91,49 @@ std::optional<std::vector<uint8_t>> ReadClipboardBitmap(HWND owner) {
   CloseClipboard();
   return bitmap;
 }
+
+bool WriteClipboardBitmap(HWND owner, const std::vector<uint8_t>& bitmap) {
+  constexpr size_t kBitmapFileHeaderSize = 14;
+  if (bitmap.size() <= kBitmapFileHeaderSize || bitmap[0] != 'B' ||
+      bitmap[1] != 'M') {
+    return false;
+  }
+
+  const size_t dib_size = bitmap.size() - kBitmapFileHeaderSize;
+  if (dib_size < sizeof(BITMAPINFOHEADER)) {
+    return false;
+  }
+  uint32_t dib_header_size = 0;
+  std::memcpy(&dib_header_size, bitmap.data() + kBitmapFileHeaderSize,
+              sizeof(dib_header_size));
+  const UINT clipboard_format =
+      dib_header_size >= sizeof(BITMAPV5HEADER) ? CF_DIBV5 : CF_DIB;
+  HGLOBAL dib_handle = GlobalAlloc(GMEM_MOVEABLE, dib_size);
+  if (dib_handle == nullptr) {
+    return false;
+  }
+  void* dib = GlobalLock(dib_handle);
+  if (dib == nullptr) {
+    GlobalFree(dib_handle);
+    return false;
+  }
+  std::memcpy(dib, bitmap.data() + kBitmapFileHeaderSize, dib_size);
+  GlobalUnlock(dib_handle);
+
+  if (!OpenClipboard(owner)) {
+    GlobalFree(dib_handle);
+    return false;
+  }
+  if (!EmptyClipboard() ||
+      SetClipboardData(clipboard_format, dib_handle) == nullptr) {
+    CloseClipboard();
+    GlobalFree(dib_handle);
+    return false;
+  }
+  CloseClipboard();
+  // Ownership transfers to the system after SetClipboardData succeeds.
+  return true;
+}
 }  // namespace
 
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
@@ -149,6 +192,17 @@ bool FlutterWindow::OnCreate() {
             result->Success(flutter::EncodableValue(bitmap.value()));
           } else {
             result->Success(flutter::EncodableValue());
+          }
+        } else if (call.method_name() == "writeClipboardImage") {
+          const auto* bitmap =
+              std::get_if<std::vector<uint8_t>>(call.arguments());
+          if (bitmap == nullptr) {
+            result->Error("invalid_args", "Expected BMP byte data.");
+          } else if (!WriteClipboardBitmap(GetHandle(), *bitmap)) {
+            result->Error("clipboard_error",
+                          "Could not copy the image to the clipboard.");
+          } else {
+            result->Success();
           }
         } else {
           result->NotImplemented();

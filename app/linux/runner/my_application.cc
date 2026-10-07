@@ -22,32 +22,69 @@ static void window_channel_method_call_cb(FlMethodChannel* /*channel*/,
                                           FlMethodCall* method_call,
                                           gpointer /*user_data*/) {
   const gchar* method = fl_method_call_get_name(method_call);
-  if (!g_str_equal(method, "readClipboardImage")) {
-    fl_method_call_respond_not_implemented(method_call, nullptr);
+  if (g_str_equal(method, "readClipboardImage")) {
+    GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    g_autoptr(GdkPixbuf) pixbuf = gtk_clipboard_wait_for_image(clipboard);
+    if (pixbuf == nullptr) {
+      fl_method_call_respond_success(method_call, nullptr, nullptr);
+      return;
+    }
+
+    gchar* png_data = nullptr;
+    gsize png_size = 0;
+    g_autoptr(GError) error = nullptr;
+    if (!gdk_pixbuf_save_to_buffer(pixbuf, &png_data, &png_size, "png", &error,
+                                   nullptr)) {
+      g_warning("Failed to encode clipboard image: %s", error->message);
+      fl_method_call_respond_success(method_call, nullptr, nullptr);
+      return;
+    }
+
+    g_autoptr(FlValue) value = fl_value_new_uint8_list(
+        reinterpret_cast<const uint8_t*>(png_data), png_size);
+    g_free(png_data);
+    fl_method_call_respond_success(method_call, value, nullptr);
     return;
   }
 
-  GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
-  g_autoptr(GdkPixbuf) pixbuf = gtk_clipboard_wait_for_image(clipboard);
-  if (pixbuf == nullptr) {
+  if (g_str_equal(method, "writeClipboardImage")) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    if (args == nullptr || fl_value_get_type(args) != FL_VALUE_TYPE_UINT8_LIST) {
+      fl_method_call_respond_error(method_call, "invalid_args",
+                                   "Expected image byte data.", nullptr,
+                                   nullptr);
+      return;
+    }
+
+    const uint8_t* data = fl_value_get_uint8_list(args);
+    const size_t data_size = fl_value_get_length(args);
+    g_autoptr(GdkPixbufLoader) loader = gdk_pixbuf_loader_new();
+    g_autoptr(GError) error = nullptr;
+    if (data_size == 0 ||
+        !gdk_pixbuf_loader_write(loader, data, data_size, &error) ||
+        !gdk_pixbuf_loader_close(loader, &error)) {
+      fl_method_call_respond_error(
+          method_call, "image_decode_error",
+          error == nullptr ? "Could not decode the image." : error->message,
+          nullptr, nullptr);
+      return;
+    }
+    GdkPixbuf* pixbuf = gdk_pixbuf_loader_get_pixbuf(loader);
+    if (pixbuf == nullptr) {
+      fl_method_call_respond_error(method_call, "image_decode_error",
+                                   "Could not decode the image.", nullptr,
+                                   nullptr);
+      return;
+    }
+
+    GtkClipboard* clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    gtk_clipboard_set_image(clipboard, pixbuf);
+    gtk_clipboard_store(clipboard);
     fl_method_call_respond_success(method_call, nullptr, nullptr);
     return;
   }
 
-  gchar* png_data = nullptr;
-  gsize png_size = 0;
-  g_autoptr(GError) error = nullptr;
-  if (!gdk_pixbuf_save_to_buffer(pixbuf, &png_data, &png_size, "png", &error,
-                                 nullptr)) {
-    g_warning("Failed to encode clipboard image: %s", error->message);
-    fl_method_call_respond_success(method_call, nullptr, nullptr);
-    return;
-  }
-
-  g_autoptr(FlValue) value = fl_value_new_uint8_list(
-      reinterpret_cast<const uint8_t*>(png_data), png_size);
-  g_free(png_data);
-  fl_method_call_respond_success(method_call, value, nullptr);
+  fl_method_call_respond_not_implemented(method_call, nullptr);
 }
 
 // Called when first Flutter frame received.

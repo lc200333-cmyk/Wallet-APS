@@ -2362,6 +2362,320 @@ String attachmentMimeType(String fileName) {
   return 'application/octet-stream';
 }
 
+enum AttachmentContextAction { saveAs, copy, share }
+
+bool get usesAttachmentContextMenu =>
+    defaultTargetPlatform == TargetPlatform.windows ||
+    defaultTargetPlatform == TargetPlatform.linux ||
+    defaultTargetPlatform == TargetPlatform.android;
+
+bool get supportsAttachmentSharing =>
+    defaultTargetPlatform == TargetPlatform.android;
+
+bool attachmentIsCopyableText(String fileName) {
+  final lower = fileName.toLowerCase();
+  return attachmentMimeType(fileName).startsWith('text/') ||
+      const <String>[
+        '.cfg',
+        '.conf',
+        '.css',
+        '.dart',
+        '.htm',
+        '.html',
+        '.ini',
+        '.js',
+        '.properties',
+        '.ps1',
+        '.py',
+        '.sh',
+        '.sql',
+        '.toml',
+        '.ts',
+      ].any(lower.endsWith);
+}
+
+bool attachmentIsCopyableImage(String fileName) {
+  final lower = fileName.toLowerCase();
+  return const <String>[
+    '.bmp',
+    '.gif',
+    '.ico',
+    '.jpeg',
+    '.jpg',
+    '.png',
+    '.tif',
+    '.tiff',
+    '.webp',
+  ].any(lower.endsWith);
+}
+
+bool attachmentCanBeCopied(String fileName) =>
+    attachmentIsCopyableText(fileName) || attachmentIsCopyableImage(fileName);
+
+bool attachmentHasInlinePreview(String fileName) =>
+    attachmentIsCopyableText(fileName) || attachmentIsCopyableImage(fileName);
+
+Widget selectableTextAttachmentPreview(
+  String fileName,
+  Uint8List bytes, {
+  required Key key,
+}) {
+  try {
+    final text = decodeTextAttachment(bytes);
+    return Container(
+      key: key,
+      width: double.infinity,
+      constraints: const BoxConstraints(maxHeight: 320),
+      padding: const EdgeInsets.all(8),
+      color: const Color(0x14000000),
+      child: SingleChildScrollView(
+        primary: false,
+        child: SelectableText(
+          text,
+          style: const TextStyle(
+            fontFamily: 'monospace',
+            fontSize: 14,
+            height: 1.35,
+          ),
+        ),
+      ),
+    );
+  } on FormatException catch (error) {
+    return Padding(
+      key: key,
+      padding: const EdgeInsets.all(8),
+      child: Text(
+        'Не удалось показать текст $fileName: ${error.message}',
+        style: const TextStyle(color: Colors.redAccent),
+      ),
+    );
+  }
+}
+
+SecretAttachment? attachmentAtGlobalPosition(
+  BuildContext context,
+  Offset globalPosition,
+  List<SecretAttachment> attachments,
+  List<String> keyPrefixes,
+) {
+  if (context is! Element) return null;
+  SecretAttachment? result;
+  void visit(Element element) {
+    if (result != null) return;
+    final key = element.widget.key;
+    if (key is ValueKey<String>) {
+      for (final attachment in attachments) {
+        if (keyPrefixes.any(
+          (prefix) => key.value == '$prefix${attachment.fileName}',
+        )) {
+          final renderObject = element.renderObject;
+          if (renderObject is RenderBox && renderObject.hasSize) {
+            final bounds =
+                renderObject.localToGlobal(Offset.zero) & renderObject.size;
+            if (bounds.contains(globalPosition)) {
+              result = attachment;
+              return;
+            }
+          }
+        }
+      }
+    }
+    element.visitChildren(visit);
+  }
+
+  context.visitChildren(visit);
+  return result;
+}
+
+bool globalPositionIsInsideKey(
+  BuildContext context,
+  Offset globalPosition,
+  Key targetKey,
+) {
+  if (context is! Element) return false;
+  var inside = false;
+  void visit(Element element) {
+    if (inside) return;
+    if (element.widget.key == targetKey) {
+      final renderObject = element.renderObject;
+      if (renderObject is RenderBox && renderObject.hasSize) {
+        final bounds =
+            renderObject.localToGlobal(Offset.zero) & renderObject.size;
+        inside = bounds.contains(globalPosition);
+      }
+    }
+    if (!inside) element.visitChildren(visit);
+  }
+
+  context.visitChildren(visit);
+  return inside;
+}
+
+bool bytesContainAsciiAt(Uint8List bytes, int offset, String signature) {
+  if (bytes.length < offset + signature.length) return false;
+  for (var index = 0; index < signature.length; index++) {
+    if (bytes[offset + index] != signature.codeUnitAt(index)) return false;
+  }
+  return true;
+}
+
+String imageFileExtension(Uint8List bytes) {
+  if (bytes.length >= 4 &&
+      bytes[0] == 0x89 &&
+      bytes[1] == 0x50 &&
+      bytes[2] == 0x4e &&
+      bytes[3] == 0x47) {
+    return '.png';
+  }
+  if (bytes.length >= 3 &&
+      bytes[0] == 0xff &&
+      bytes[1] == 0xd8 &&
+      bytes[2] == 0xff) {
+    return '.jpg';
+  }
+  if (bytesContainAsciiAt(bytes, 0, 'GIF87a') ||
+      bytesContainAsciiAt(bytes, 0, 'GIF89a')) {
+    return '.gif';
+  }
+  if (bytes.length >= 2 && bytes[0] == 0x42 && bytes[1] == 0x4d) {
+    return '.bmp';
+  }
+  if (bytesContainAsciiAt(bytes, 0, 'RIFF') &&
+      bytesContainAsciiAt(bytes, 8, 'WEBP')) {
+    return '.webp';
+  }
+  return '.png';
+}
+
+String cardBackgroundImageFileName(String title, Uint8List bytes) {
+  final baseName = safeFileComponent(title.trim());
+  return '${baseName.isEmpty ? 'card-image' : baseName}'
+      '${imageFileExtension(bytes)}';
+}
+
+String decodeTextAttachment(Uint8List bytes) {
+  if (bytes.length >= 2 && bytes[0] == 0xff && bytes[1] == 0xfe) {
+    if (bytes.length.isOdd) {
+      throw const FormatException('Повреждённый текст UTF-16.');
+    }
+    return String.fromCharCodes([
+      for (var index = 2; index < bytes.length; index += 2)
+        bytes[index] | (bytes[index + 1] << 8),
+    ]);
+  }
+  if (bytes.length >= 2 && bytes[0] == 0xfe && bytes[1] == 0xff) {
+    if (bytes.length.isOdd) {
+      throw const FormatException('Повреждённый текст UTF-16.');
+    }
+    return String.fromCharCodes([
+      for (var index = 2; index < bytes.length; index += 2)
+        (bytes[index] << 8) | bytes[index + 1],
+    ]);
+  }
+  final offset = bytes.length >= 3 &&
+          bytes[0] == 0xef &&
+          bytes[1] == 0xbb &&
+          bytes[2] == 0xbf
+      ? 3
+      : 0;
+  return utf8.decode(bytes.sublist(offset), allowMalformed: false);
+}
+
+Future<void> copyAttachmentBytesToClipboard(
+  String fileName,
+  Uint8List bytes,
+) async {
+  if (attachmentIsCopyableText(fileName)) {
+    await copySensitiveText(decodeTextAttachment(bytes));
+    return;
+  }
+  if (attachmentIsCopyableImage(fileName)) {
+    final decoded = image.decodeImage(bytes);
+    if (decoded == null) {
+      throw const FormatException('Не удалось распознать изображение.');
+    }
+    final clipboardBytes = Uint8List.fromList(
+      Platform.isWindows
+          ? image.encodeBmp(
+              decoded.convert(
+                format: image.Format.uint8,
+                numChannels: 4,
+              ),
+            )
+          : image.encodePng(decoded),
+    );
+    await windowChannel.invokeMethod<void>(
+      'writeClipboardImage',
+      clipboardBytes,
+    );
+    return;
+  }
+  throw const FormatException('Этот тип вложения нельзя скопировать.');
+}
+
+Future<void> shareAttachmentBytesWithSystem(
+  String fileName,
+  Uint8List bytes,
+) async {
+  final directory = await getTemporaryDirectory();
+  final safeName = fileName
+      .replaceAll(RegExp(r'[\\/:*?<>|]'), '_')
+      .replaceAll(String.fromCharCode(34), '_')
+      .trim();
+  final shareDirectory = Directory(
+    '${directory.path}${Platform.pathSeparator}'
+    'wallet_aps_share_${DateTime.now().microsecondsSinceEpoch}',
+  );
+  await shareDirectory.create(recursive: true);
+  final file = File(
+    '${shareDirectory.path}${Platform.pathSeparator}'
+    '${safeName.isEmpty ? 'attachment' : safeName}',
+  );
+  await file.writeAsBytes(bytes, flush: true);
+  final shared = await spbWalletChannel.invokeMethod<bool>('shareFile', {
+    'path': file.path,
+    'mimeType': attachmentMimeType(fileName),
+  });
+  if (shared != true) {
+    throw StateError('Android не смог передать файл другому приложению.');
+  }
+}
+
+Future<AttachmentContextAction?> showAttachmentContextMenu(
+  BuildContext context,
+  Offset globalPosition, {
+  required bool allowCopy,
+  bool allowShare = false,
+}) {
+  final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+  return showMenu<AttachmentContextAction>(
+    context: context,
+    position: RelativeRect.fromRect(
+      Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+      Offset.zero & overlay.size,
+    ),
+    items: [
+      const PopupMenuItem<AttachmentContextAction>(
+        key: Key('attachmentSaveAsMenuItem'),
+        value: AttachmentContextAction.saveAs,
+        child: Text('Сохранить как'),
+      ),
+      if (allowCopy)
+        const PopupMenuItem<AttachmentContextAction>(
+          key: Key('attachmentCopyMenuItem'),
+          value: AttachmentContextAction.copy,
+          child: Text('Копировать'),
+        ),
+      if (allowShare)
+        const PopupMenuItem<AttachmentContextAction>(
+          key: Key('attachmentShareMenuItem'),
+          value: AttachmentContextAction.share,
+          child: Text('Поделиться'),
+        ),
+    ],
+  );
+}
+
 ({String fileName, Uint8List bytes}) gallerySafeAttachmentExport(
   String originalFileName,
   Uint8List bytes, {
@@ -6842,6 +7156,79 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
+  Widget spbCardIconWithAttachmentMark({
+    required SecretItem item,
+    required CardTemplate template,
+    required double dimension,
+    required Key attachmentMarkKey,
+  }) {
+    final scale = dimension / 50.25;
+    final markSize = 16.33125 * scale;
+    return SizedBox(
+      width: dimension,
+      height: dimension,
+      child: Stack(
+        clipBehavior: Clip.none,
+        alignment: Alignment.center,
+        children: [
+          spbSizedDataIcon(
+            itemIconId(item, template),
+            dimension,
+            fallbackColor: itemPictogramColor(item, template),
+          ),
+          if (item.attachments.any((attachment) => !attachment.deleted))
+            Positioned(
+              key: attachmentMarkKey,
+              right: 2 * scale,
+              bottom: 2 * scale,
+              width: markSize,
+              height: 14.586 * scale,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  for (final offset in const [
+                    Offset(-2, 0),
+                    Offset(2, 0),
+                    Offset(0, -2),
+                    Offset(0, 2),
+                    Offset(-1.414, -1.414),
+                    Offset(1.414, -1.414),
+                    Offset(-1.414, 1.414),
+                    Offset(1.414, 1.414),
+                  ])
+                    Transform.translate(
+                      offset: offset * scale,
+                      child: Icon(
+                        Icons.arrow_downward_rounded,
+                        size: markSize,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ShaderMask(
+                    blendMode: BlendMode.srcIn,
+                    shaderCallback: (bounds) => const LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Color(0xffff4fa3),
+                        Color(0xffe6007e),
+                        Color(0xffa8005b),
+                      ],
+                    ).createShader(bounds),
+                    child: Icon(
+                      Icons.arrow_downward_rounded,
+                      size: markSize,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget buildSpbTreeBody({
     bool compactRows = false,
     bool showWalletRoot = true,
@@ -7056,10 +7443,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   maxWidth: 40,
                   minHeight: 40,
                   maxHeight: 40,
-                  child: spbSizedDataIcon(
-                    itemIconId(item, template),
-                    40,
-                    fallbackColor: itemPictogramColor(item, template),
+                  child: spbCardIconWithAttachmentMark(
+                    item: item,
+                    template: template,
+                    dimension: 40,
+                    attachmentMarkKey: ValueKey(
+                      'treeCardAttachmentArrow-${item.id}',
+                    ),
                   ),
                 ),
               ),
@@ -8030,73 +8420,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         labelWidth: 73.3125,
                         selected: selectedItemIds.contains(item.id) ||
                             selectedItemId == item.id,
-                        icon: SizedBox(
-                          width: 50.25,
-                          height: 50.25,
-                          child: Stack(
-                            clipBehavior: Clip.none,
-                            alignment: Alignment.center,
-                            children: [
-                              spbSizedDataIcon(
-                                itemIconId(item, template),
-                                50.25,
-                                fallbackColor:
-                                    itemPictogramColor(item, template),
-                              ),
-                              if (item.attachments.any(
-                                (attachment) => !attachment.deleted,
-                              ))
-                                Positioned(
-                                  key: ValueKey(
-                                      'cardAttachmentArrow-${item.id}'),
-                                  right: 2,
-                                  bottom: 2,
-                                  width: 16.33125,
-                                  height: 14.586,
-                                  child: Stack(
-                                    clipBehavior: Clip.none,
-                                    children: [
-                                      for (final offset in const [
-                                        Offset(-2, 0),
-                                        Offset(2, 0),
-                                        Offset(0, -2),
-                                        Offset(0, 2),
-                                        Offset(-1.414, -1.414),
-                                        Offset(1.414, -1.414),
-                                        Offset(-1.414, 1.414),
-                                        Offset(1.414, 1.414),
-                                      ])
-                                        Transform.translate(
-                                          offset: offset,
-                                          child: const Icon(
-                                            Icons.arrow_downward_rounded,
-                                            size: 16.33125,
-                                            color: Colors.white,
-                                          ),
-                                        ),
-                                      ShaderMask(
-                                        blendMode: BlendMode.srcIn,
-                                        shaderCallback: (bounds) =>
-                                            const LinearGradient(
-                                          begin: Alignment.topCenter,
-                                          end: Alignment.bottomCenter,
-                                          colors: [
-                                            Color(0xffff4fa3),
-                                            Color(0xffe6007e),
-                                            Color(0xffa8005b),
-                                          ],
-                                        ).createShader(bounds),
-                                        child: const Icon(
-                                          Icons.arrow_downward_rounded,
-                                          size: 16.33125,
-                                          color: Colors.white,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                            ],
-                          ),
+                        icon: spbCardIconWithAttachmentMark(
+                          item: item,
+                          template: template,
+                          dimension: 50.25,
+                          attachmentMarkKey:
+                              ValueKey('cardAttachmentArrow-${item.id}'),
                         ),
                         onTap: () => selectSpbCardFromPrimaryClick(item),
                         onContextMenu: (position) =>
@@ -13970,6 +14299,10 @@ class CardPreviewDialog extends StatefulWidget {
 class _CardPreviewDialogState extends State<CardPreviewDialog> {
   final Set<String> revealedFields = {};
   late SecretItem currentItem;
+  Offset? lastAttachmentPressPosition;
+  Timer? backgroundLongPressTimer;
+  int? backgroundLongPressPointer;
+  Offset? backgroundLongPressOrigin;
 
   ImageProvider? get backgroundImage {
     final encoded = currentItem.backgroundImageBase64;
@@ -13985,6 +14318,12 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
   void initState() {
     super.initState();
     currentItem = widget.item;
+  }
+
+  @override
+  void dispose() {
+    backgroundLongPressTimer?.cancel();
+    super.dispose();
   }
 
   String allCardText() {
@@ -14022,12 +14361,83 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
     return inside;
   }
 
+  SecretAttachment? previewAttachmentAt(Offset globalPosition) =>
+      attachmentAtGlobalPosition(
+        context,
+        globalPosition,
+        availableAttachments,
+        const [
+          'cardPreviewAttachment-',
+          'cardPreviewInlineAttachment-',
+        ],
+      );
+
+  bool get hasBackgroundImage =>
+      currentItem.backgroundImageBase64?.isNotEmpty == true;
+
+  bool pointIsInsidePreviewIcon(Offset globalPosition) =>
+      globalPositionIsInsideKey(
+        context,
+        globalPosition,
+        const Key('cardPreviewIcon'),
+      );
+
+  void cancelBackgroundLongPress() {
+    backgroundLongPressTimer?.cancel();
+    backgroundLongPressTimer = null;
+    backgroundLongPressPointer = null;
+    backgroundLongPressOrigin = null;
+  }
+
   void handlePreviewPointerDown(PointerDownEvent event) {
-    if (event.buttons & kSecondaryMouseButton == 0 ||
-        pointIsInsidePreviewTextField(event.position)) {
+    final attachment = previewAttachmentAt(event.position);
+    if (event.buttons & kSecondaryMouseButton != 0) {
+      if (pointIsInsidePreviewTextField(event.position)) return;
+      if (attachment != null) {
+        lastAttachmentPressPosition = event.position;
+        unawaited(handleAttachmentLongPress(attachment));
+      } else if (hasBackgroundImage &&
+          !pointIsInsidePreviewIcon(event.position)) {
+        unawaited(showBackgroundImageMenu(event.position));
+      } else {
+        unawaited(showCopyAllMenu(event.position));
+      }
       return;
     }
-    showCopyAllMenu(event.position);
+    final isPrimaryPointer = event.buttons & kPrimaryMouseButton != 0 ||
+        event.kind == PointerDeviceKind.touch;
+    if (!usesAttachmentContextMenu ||
+        !isPrimaryPointer ||
+        !hasBackgroundImage ||
+        attachment != null ||
+        pointIsInsidePreviewTextField(event.position) ||
+        pointIsInsidePreviewIcon(event.position)) {
+      return;
+    }
+    cancelBackgroundLongPress();
+    backgroundLongPressPointer = event.pointer;
+    backgroundLongPressOrigin = event.position;
+    backgroundLongPressTimer = Timer(kLongPressTimeout, () {
+      final position = backgroundLongPressOrigin;
+      cancelBackgroundLongPress();
+      if (position != null && mounted) {
+        unawaited(showBackgroundImageMenu(position));
+      }
+    });
+  }
+
+  void handlePreviewPointerMove(PointerMoveEvent event) {
+    if (event.pointer != backgroundLongPressPointer) return;
+    final origin = backgroundLongPressOrigin;
+    if (origin != null && (event.position - origin).distance > kTouchSlop) {
+      cancelBackgroundLongPress();
+    }
+  }
+
+  void handlePreviewPointerEnd(PointerEvent event) {
+    if (event.pointer == backgroundLongPressPointer) {
+      cancelBackgroundLongPress();
+    }
   }
 
   Future<void> showCopyAllMenu(Offset globalPosition) async {
@@ -14087,6 +14497,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
         dialogTitle: 'Сохранить вложение',
         fileName: export.fileName,
         bytes: Platform.isAndroid || Platform.isIOS ? export.bytes : null,
+        lockParentWindow: true,
       );
       if (path != null && !Platform.isAndroid && !Platform.isIOS) {
         ensureTargetIsNotActiveVault(path);
@@ -14097,6 +14508,149 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Не удалось сохранить вложение: $error')),
       );
+    }
+  }
+
+  Future<void> copyAttachment(SecretAttachment attachment) async {
+    try {
+      final bytes = await attachmentBytes(attachment);
+      if (bytes.isEmpty) return;
+      await copyAttachmentBytesToClipboard(attachment.fileName, bytes);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Вложение скопировано')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось скопировать вложение: $error')),
+      );
+    }
+  }
+
+  Future<void> shareAttachment(SecretAttachment attachment) async {
+    try {
+      final bytes = await attachmentBytes(attachment);
+      if (bytes.isEmpty) return;
+      await shareAttachmentBytesWithSystem(attachment.fileName, bytes);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось поделиться вложением: $error')),
+      );
+    }
+  }
+
+  Uint8List backgroundImageBytes() {
+    final encoded = currentItem.backgroundImageBase64;
+    if (encoded == null || encoded.isEmpty) return Uint8List(0);
+    return base64Decode(encoded);
+  }
+
+  Future<void> saveBackgroundImage() async {
+    try {
+      final bytes = backgroundImageBytes();
+      if (bytes.isEmpty) return;
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Сохранить изображение',
+        fileName: cardBackgroundImageFileName(currentItem.title, bytes),
+        bytes: Platform.isAndroid || Platform.isIOS ? bytes : null,
+        lockParentWindow: true,
+      );
+      if (path != null && !Platform.isAndroid && !Platform.isIOS) {
+        ensureTargetIsNotActiveVault(path);
+        await writeBytesAtomically(File(path), bytes);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось сохранить изображение: $error')),
+      );
+    }
+  }
+
+  Future<void> copyBackgroundImage() async {
+    try {
+      final bytes = backgroundImageBytes();
+      if (bytes.isEmpty) return;
+      final fileName = cardBackgroundImageFileName(currentItem.title, bytes);
+      await copyAttachmentBytesToClipboard(fileName, bytes);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Изображение скопировано')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось скопировать изображение: $error')),
+      );
+    }
+  }
+
+  Future<void> shareBackgroundImage() async {
+    try {
+      final bytes = backgroundImageBytes();
+      if (bytes.isEmpty) return;
+      final fileName = cardBackgroundImageFileName(currentItem.title, bytes);
+      await shareAttachmentBytesWithSystem(fileName, bytes);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось поделиться изображением: $error')),
+      );
+    }
+  }
+
+  Future<void> showBackgroundImageMenu(Offset globalPosition) async {
+    final selected = await showAttachmentContextMenu(
+      context,
+      globalPosition,
+      allowCopy: true,
+      allowShare: supportsAttachmentSharing,
+    );
+    if (!mounted) return;
+    switch (selected) {
+      case AttachmentContextAction.saveAs:
+        await saveBackgroundImage();
+        break;
+      case AttachmentContextAction.copy:
+        await copyBackgroundImage();
+        break;
+      case AttachmentContextAction.share:
+        await shareBackgroundImage();
+        break;
+      case null:
+        break;
+    }
+  }
+
+  Future<void> handleAttachmentLongPress(
+    SecretAttachment attachment,
+  ) async {
+    if (!usesAttachmentContextMenu) {
+      await previewAttachment(attachment);
+      return;
+    }
+    final media = MediaQuery.sizeOf(context);
+    final selected = await showAttachmentContextMenu(
+      context,
+      lastAttachmentPressPosition ?? Offset(media.width / 2, media.height / 2),
+      allowCopy: attachmentCanBeCopied(attachment.fileName),
+      allowShare: supportsAttachmentSharing,
+    );
+    if (!mounted) return;
+    switch (selected) {
+      case AttachmentContextAction.saveAs:
+        await saveAttachment(attachment);
+        break;
+      case AttachmentContextAction.copy:
+        await copyAttachment(attachment);
+        break;
+      case AttachmentContextAction.share:
+        await shareAttachment(attachment);
+        break;
+      case null:
+        break;
     }
   }
 
@@ -14125,7 +14679,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
 
   Widget previewAttachmentNames() {
     final files = availableAttachments.where(
-      (attachment) => !isInlineImage(attachment.fileName),
+      (attachment) => !attachmentHasInlinePreview(attachment.fileName),
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -14135,9 +14689,10 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
             key: ValueKey('cardPreviewAttachment-${attachment.fileName}'),
             color: Colors.transparent,
             child: InkWell(
+              onTapDown: (details) =>
+                  lastAttachmentPressPosition = details.globalPosition,
               onTap: () => previewAttachment(attachment),
-              onSecondaryTap: () => previewAttachment(attachment),
-              onLongPress: () => previewAttachment(attachment),
+              onLongPress: () => handleAttachmentLongPress(attachment),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 7),
                 child: Row(
@@ -14163,18 +14718,6 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
     );
   }
 
-  bool isInlineImage(String fileName) {
-    final lower = fileName.toLowerCase();
-    return const [
-      '.png',
-      '.jpg',
-      '.jpeg',
-      '.gif',
-      '.webp',
-      '.bmp',
-    ].any(lower.endsWith);
-  }
-
   Widget inlineAttachmentPreview(
     SecretAttachment attachment,
     Color background,
@@ -14189,7 +14732,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
             height: 72,
             child: Center(child: CircularProgressIndicator()),
           );
-        } else if (isInlineImage(attachment.fileName)) {
+        } else if (attachmentIsCopyableImage(attachment.fileName)) {
           content = ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 320),
             child: Image.memory(
@@ -14200,9 +14743,27 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                   const Center(child: Icon(Icons.broken_image_outlined)),
             ),
           );
+        } else if (attachmentIsCopyableText(attachment.fileName)) {
+          content = selectableTextAttachmentPreview(
+            attachment.fileName,
+            bytes,
+            key: ValueKey(
+              'cardPreviewInlineText-${attachment.fileName}',
+            ),
+          );
         } else {
           return const SizedBox.shrink();
         }
+        final header = Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(
+            attachment.fileName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        );
+        final isText = attachmentIsCopyableText(attachment.fileName);
         return Padding(
           key: ValueKey('cardPreviewInlineAttachment-${attachment.fileName}'),
           padding: const EdgeInsets.only(top: 10),
@@ -14212,25 +14773,46 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
               side: const BorderSide(color: Color(0xff82929d)),
               borderRadius: BorderRadius.circular(4),
             ),
-            child: InkWell(
-              onTap: () => previewAttachment(attachment),
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      attachment.fileName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+            child: isText
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      InkWell(
+                        key: ValueKey(
+                          'cardPreviewInlineHeader-${attachment.fileName}',
+                        ),
+                        onTapDown: (details) => lastAttachmentPressPosition =
+                            details.globalPosition,
+                        onTap: () => previewAttachment(attachment),
+                        onLongPress: () =>
+                            handleAttachmentLongPress(attachment),
+                        child: header,
+                      ),
+                      content,
+                    ],
+                  )
+                : InkWell(
+                    onTapDown: (details) =>
+                        lastAttachmentPressPosition = details.globalPosition,
+                    onTap: () => previewAttachment(attachment),
+                    onLongPress: () => handleAttachmentLongPress(attachment),
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            attachment.fileName,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                          const SizedBox(height: 6),
+                          content,
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 6),
-                    content,
-                  ],
-                ),
-              ),
-            ),
+                  ),
           ),
         );
       },
@@ -14269,15 +14851,14 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
           child: Listener(
             behavior: HitTestBehavior.opaque,
             onPointerDown: handlePreviewPointerDown,
+            onPointerMove: handlePreviewPointerMove,
+            onPointerUp: handlePreviewPointerEnd,
+            onPointerCancel: handlePreviewPointerEnd,
             child: GestureDetector(
               behavior: HitTestBehavior.opaque,
-              // A parent long-press recognizer wins the gesture arena over
-              // EditableText on Android, so the selection toolbar never gets
-              // a chance to open. Desktop keeps this gesture for Copy all;
-              // touch platforms reserve long press for their text fields.
-              onLongPressStart: usesTouchTextSelection
-                  ? null
-                  : (details) => showCopyAllMenu(details.globalPosition),
+              // Do not register a long-press recognizer for the whole card:
+              // it would win the gesture arena over attachments and text.
+              // Copy all remains on the card icon and desktop right-click.
               child: Column(
                 children: [
                   Container(
@@ -14332,11 +14913,9 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                             Center(
                               child: GestureDetector(
                                 behavior: HitTestBehavior.opaque,
-                                onLongPressStart: usesTouchTextSelection
-                                    ? (details) => showCopyAllMenu(
-                                          details.globalPosition,
-                                        )
-                                    : null,
+                                onLongPressStart: (details) => showCopyAllMenu(
+                                  details.globalPosition,
+                                ),
                                 child: Container(
                                   key: const Key('cardPreviewIcon'),
                                   width: 88,
@@ -14453,15 +15032,17 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                 ),
                               ),
                             if (availableAttachments.any(
-                              (attachment) =>
-                                  !isInlineImage(attachment.fileName),
+                              (attachment) => !attachmentHasInlinePreview(
+                                attachment.fileName,
+                              ),
                             )) ...[
                               previewAttachmentNames(),
                               const SizedBox(height: 8),
                             ],
                             for (final attachment in availableAttachments.where(
-                              (attachment) =>
-                                  isInlineImage(attachment.fileName),
+                              (attachment) => attachmentHasInlinePreview(
+                                attachment.fileName,
+                              ),
                             ))
                               inlineAttachmentPreview(attachment, color.bg),
                           ],
@@ -14486,6 +15067,8 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                     'cardPreviewSaveAttachmentButton'),
                                 icon: Icons.folder_outlined,
                                 tooltip: 'Сохранить вложение',
+                                tooltipPreferBelow: defaultTargetPlatform !=
+                                    TargetPlatform.android,
                                 colors: const [
                                   Color(0xff555555),
                                   Color(0xff050505),
@@ -14497,6 +15080,8 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                               key: const Key('cardPreviewEditButton'),
                               icon: Icons.edit,
                               tooltip: 'Редактировать карточку',
+                              tooltipPreferBelow: defaultTargetPlatform !=
+                                  TargetPlatform.android,
                               colors: const [
                                 Color(0xff5bc96d),
                                 Color(0xff08772f),
@@ -14509,6 +15094,8 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                               key: const Key('cardPreviewDeleteButton'),
                               icon: Icons.delete_outline,
                               tooltip: 'Удалить карточку',
+                              tooltipPreferBelow: defaultTargetPlatform !=
+                                  TargetPlatform.android,
                               colors: const [
                                 Color(0xffffdc58),
                                 Color(0xffc58a00),
@@ -14523,6 +15110,8 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                               key: const Key('cardPreviewBackButton'),
                               icon: Icons.close,
                               tooltip: 'Выйти из просмотра',
+                              tooltipPreferBelow: defaultTargetPlatform !=
+                                  TargetPlatform.android,
                               colors: const [
                                 Color(0xffff5a5f),
                                 Color(0xffa90000),
@@ -14551,6 +15140,7 @@ class SpbGradientActionButton extends StatelessWidget {
     required this.tooltip,
     required this.colors,
     required this.onTap,
+    this.tooltipPreferBelow = true,
     super.key,
   });
 
@@ -14558,6 +15148,7 @@ class SpbGradientActionButton extends StatelessWidget {
   final String tooltip;
   final List<Color> colors;
   final VoidCallback? onTap;
+  final bool tooltipPreferBelow;
 
   @override
   Widget build(BuildContext context) {
@@ -14566,6 +15157,7 @@ class SpbGradientActionButton extends StatelessWidget {
       child: Center(
         child: Tooltip(
           message: tooltip,
+          preferBelow: tooltipPreferBelow,
           child: Opacity(
             opacity: onTap == null ? 0.55 : 1,
             child: Material(
@@ -14686,6 +15278,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   final List<CardEditorSnapshot> undoHistory = [];
   final ScrollController editorScrollController = ScrollController();
   bool attachmentDropActive = false;
+  Offset? lastAttachmentPressPosition;
+  Timer? backgroundLongPressTimer;
+  int? backgroundLongPressPointer;
+  Offset? backgroundLongPressOrigin;
 
   Color get editorBackgroundColor => spbColor == null
       ? colorById(colorId).bg
@@ -14764,6 +15360,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
 
   @override
   void dispose() {
+    backgroundLongPressTimer?.cancel();
     title.dispose();
     category.dispose();
     for (final controller in values.values) {
@@ -15032,14 +15629,22 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                       color: editorBackgroundColor,
                       backgroundImage: editorBackgroundImage,
                     ),
-                    child: Scrollbar(
-                      controller: editorScrollController,
-                      thumbVisibility: true,
-                      interactive: true,
-                      child: SingleChildScrollView(
+                    child: Listener(
+                      behavior: HitTestBehavior.translucent,
+                      onPointerDown: handleEditorSurfacePointerDown,
+                      onPointerMove: handleEditorSurfacePointerMove,
+                      onPointerUp: handleEditorSurfacePointerEnd,
+                      onPointerCancel: handleEditorSurfacePointerEnd,
+                      child: Scrollbar(
                         controller: editorScrollController,
-                        padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
-                        child: buildCardEditorContent(wideLayout: !fullScreen),
+                        thumbVisibility: true,
+                        interactive: true,
+                        child: SingleChildScrollView(
+                          controller: editorScrollController,
+                          padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+                          child:
+                              buildCardEditorContent(wideLayout: !fullScreen),
+                        ),
                       ),
                     ),
                   ),
@@ -15062,6 +15667,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                             key: const Key('cardEditorSaveAttachmentButton'),
                             icon: Icons.folder_outlined,
                             tooltip: 'Сохранить вложение',
+                            tooltipPreferBelow:
+                                defaultTargetPlatform != TargetPlatform.android,
                             colors: const [
                               Color(0xff555555),
                               Color(0xff050505),
@@ -15077,6 +15684,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                             key: const Key('cardEditorDeleteAttachmentButton'),
                             icon: Icons.delete,
                             tooltip: 'Удалить вложение',
+                            tooltipPreferBelow:
+                                defaultTargetPlatform != TargetPlatform.android,
                             colors: const [
                               Color(0xffff5a5f),
                               Color(0xffa90000),
@@ -15090,6 +15699,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                         key: const Key('cardUndoButton'),
                         icon: Icons.undo,
                         tooltip: 'Отменить последнее действие',
+                        tooltipPreferBelow:
+                            defaultTargetPlatform != TargetPlatform.android,
                         colors: const [Color(0xffffdc58), Color(0xffc58a00)],
                         onTap: undoHistory.isEmpty ? null : undoLastAction,
                       ),
@@ -15098,6 +15709,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                         key: const Key('cardSaveButton'),
                         icon: Icons.check,
                         tooltip: 'Сохранить карточку',
+                        tooltipPreferBelow:
+                            defaultTargetPlatform != TargetPlatform.android,
                         colors: const [Color(0xff5bc96d), Color(0xff08772f)],
                         onTap: saveCard,
                       ),
@@ -15106,6 +15719,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                         key: const Key('cardCloseButton'),
                         icon: Icons.close,
                         tooltip: 'Закрыть без сохранения',
+                        tooltipPreferBelow:
+                            defaultTargetPlatform != TargetPlatform.android,
                         colors: const [Color(0xffff5a5f), Color(0xffa90000)],
                         onTap: () => Navigator.pop(context),
                       ),
@@ -15672,10 +16287,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     final active = activeAttachments;
     if (active.isEmpty) return const SizedBox.shrink();
     final files = active.where(
-      (attachment) => !isEditorInlineImage(attachment.fileName),
+      (attachment) => !attachmentHasInlinePreview(attachment.fileName),
     );
-    final images = active.where(
-      (attachment) => isEditorInlineImage(attachment.fileName),
+    final inlineAttachments = active.where(
+      (attachment) => attachmentHasInlinePreview(attachment.fileName),
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -15685,9 +16300,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
             key: ValueKey('cardEditorAttachment-${attachment.fileName}'),
             color: Colors.transparent,
             child: InkWell(
+              onTapDown: (details) =>
+                  lastAttachmentPressPosition = details.globalPosition,
               onTap: () => previewEditorAttachment(attachment),
-              onSecondaryTap: () => previewEditorAttachment(attachment),
-              onLongPress: () => previewEditorAttachment(attachment),
+              onLongPress: () => handleEditorAttachmentLongPress(attachment),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 7),
                 child: Row(
@@ -15709,29 +16325,60 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
               ),
             ),
           ),
-        for (final attachment in images)
-          editorInlineImageAttachment(attachment),
+        for (final attachment in inlineAttachments)
+          editorInlineAttachment(attachment),
       ],
     );
   }
 
-  bool isEditorInlineImage(String fileName) {
-    final lower = fileName.toLowerCase();
-    return const [
-      '.png',
-      '.jpg',
-      '.jpeg',
-      '.gif',
-      '.webp',
-      '.bmp',
-    ].any(lower.endsWith);
-  }
-
-  Widget editorInlineImageAttachment(SecretAttachment attachment) {
+  Widget editorInlineAttachment(SecretAttachment attachment) {
     return FutureBuilder<Uint8List>(
       future: editorAttachmentBytes(attachment),
       builder: (context, snapshot) {
         final bytes = snapshot.data;
+        final isText = attachmentIsCopyableText(attachment.fileName);
+        Widget content;
+        if (bytes == null) {
+          content = const SizedBox(
+            height: 72,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        } else if (isText) {
+          content = selectableTextAttachmentPreview(
+            attachment.fileName,
+            bytes,
+            key: ValueKey(
+              'cardEditorInlineText-${attachment.fileName}',
+            ),
+          );
+        } else {
+          content = ConstrainedBox(
+            constraints: const BoxConstraints(maxHeight: 320),
+            child: Image.memory(
+              bytes,
+              width: double.infinity,
+              fit: BoxFit.contain,
+              errorBuilder: (_, __, ___) => const SizedBox(
+                height: 72,
+                child: Center(
+                  child: Icon(Icons.broken_image_outlined),
+                ),
+              ),
+            ),
+          );
+        }
+        final header = Padding(
+          padding: const EdgeInsets.all(8),
+          child: Text(
+            attachment.fileName,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontWeight: FontWeight.w600,
+              decoration: TextDecoration.underline,
+            ),
+          ),
+        );
         return Padding(
           key: ValueKey('cardEditorInlineAttachment-${attachment.fileName}'),
           padding: const EdgeInsets.only(top: 10),
@@ -15741,47 +16388,38 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
               side: const BorderSide(color: Color(0xff82929d)),
               borderRadius: BorderRadius.circular(4),
             ),
-            child: InkWell(
-              onTap: () => previewEditorAttachment(attachment),
-              child: Padding(
-                padding: const EdgeInsets.all(8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      attachment.fileName,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w600,
-                        decoration: TextDecoration.underline,
+            child: isText
+                ? Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      InkWell(
+                        key: ValueKey(
+                          'cardEditorInlineHeader-${attachment.fileName}',
+                        ),
+                        onTapDown: (details) => lastAttachmentPressPosition =
+                            details.globalPosition,
+                        onTap: () => previewEditorAttachment(attachment),
+                        onLongPress: () =>
+                            handleEditorAttachmentLongPress(attachment),
+                        child: header,
+                      ),
+                      content,
+                    ],
+                  )
+                : InkWell(
+                    onTapDown: (details) =>
+                        lastAttachmentPressPosition = details.globalPosition,
+                    onTap: () => previewEditorAttachment(attachment),
+                    onLongPress: () =>
+                        handleEditorAttachmentLongPress(attachment),
+                    child: Padding(
+                      padding: const EdgeInsets.all(8),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [header, const SizedBox(height: 6), content],
                       ),
                     ),
-                    const SizedBox(height: 6),
-                    if (bytes == null)
-                      const SizedBox(
-                        height: 72,
-                        child: Center(child: CircularProgressIndicator()),
-                      )
-                    else
-                      ConstrainedBox(
-                        constraints: const BoxConstraints(maxHeight: 320),
-                        child: Image.memory(
-                          bytes,
-                          width: double.infinity,
-                          fit: BoxFit.contain,
-                          errorBuilder: (_, __, ___) => const SizedBox(
-                            height: 72,
-                            child: Center(
-                              child: Icon(Icons.broken_image_outlined),
-                            ),
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
+                  ),
           ),
         );
       },
@@ -16040,6 +16678,93 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       )
       .toList(growable: false);
 
+  SecretAttachment? editorAttachmentAt(Offset globalPosition) =>
+      attachmentAtGlobalPosition(
+        context,
+        globalPosition,
+        activeAttachments,
+        const [
+          'cardEditorAttachment-',
+          'cardEditorInlineAttachment-',
+        ],
+      );
+
+  bool pointIsInsideEditorTextField(Offset globalPosition) {
+    var inside = false;
+    void visit(Element element) {
+      if (inside) return;
+      if (element.widget is EditableText) {
+        final renderObject = element.renderObject;
+        if (renderObject is RenderBox && renderObject.hasSize) {
+          final bounds =
+              renderObject.localToGlobal(Offset.zero) & renderObject.size;
+          inside = bounds.contains(globalPosition);
+        }
+      }
+      if (!inside) element.visitChildren(visit);
+    }
+
+    (context as Element).visitChildren(visit);
+    return inside;
+  }
+
+  bool get hasEditorBackgroundImage =>
+      backgroundImageBase64?.isNotEmpty == true;
+
+  void cancelEditorBackgroundLongPress() {
+    backgroundLongPressTimer?.cancel();
+    backgroundLongPressTimer = null;
+    backgroundLongPressPointer = null;
+    backgroundLongPressOrigin = null;
+  }
+
+  void handleEditorSurfacePointerDown(PointerDownEvent event) {
+    final attachment = editorAttachmentAt(event.position);
+    if (event.buttons & kSecondaryMouseButton != 0) {
+      if (pointIsInsideEditorTextField(event.position)) return;
+      if (attachment != null) {
+        lastAttachmentPressPosition = event.position;
+        unawaited(handleEditorAttachmentLongPress(attachment));
+      } else if (hasEditorBackgroundImage) {
+        unawaited(showEditorBackgroundImageMenu(event.position));
+      }
+      return;
+    }
+    final isPrimaryPointer = event.buttons & kPrimaryMouseButton != 0 ||
+        event.kind == PointerDeviceKind.touch;
+    if (!usesAttachmentContextMenu ||
+        !isPrimaryPointer ||
+        !hasEditorBackgroundImage ||
+        attachment != null ||
+        pointIsInsideEditorTextField(event.position)) {
+      return;
+    }
+    cancelEditorBackgroundLongPress();
+    backgroundLongPressPointer = event.pointer;
+    backgroundLongPressOrigin = event.position;
+    backgroundLongPressTimer = Timer(kLongPressTimeout, () {
+      final position = backgroundLongPressOrigin;
+      cancelEditorBackgroundLongPress();
+      if (position != null && mounted) {
+        unawaited(showEditorBackgroundImageMenu(position));
+      }
+    });
+  }
+
+  void handleEditorSurfacePointerMove(PointerMoveEvent event) {
+    if (event.pointer != backgroundLongPressPointer) return;
+    final origin = backgroundLongPressOrigin;
+    if (origin != null && (event.position - origin).distance > kTouchSlop) {
+      cancelEditorBackgroundLongPress();
+    }
+  }
+
+  void handleEditorSurfacePointerEnd(PointerEvent event) {
+    if (event.pointer == backgroundLongPressPointer) {
+      cancelEditorBackgroundLongPress();
+    }
+  }
+
   Future<Uint8List> editorAttachmentBytes(SecretAttachment attachment) async {
     if (attachment.pendingBytes != null) {
       return Uint8List.fromList(attachment.pendingBytes!);
@@ -16059,6 +16784,149 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Не удалось открыть вложение: $error')),
       );
+    }
+  }
+
+  Future<void> copyEditorAttachment(SecretAttachment attachment) async {
+    try {
+      final bytes = await editorAttachmentBytes(attachment);
+      if (bytes.isEmpty) return;
+      await copyAttachmentBytesToClipboard(attachment.fileName, bytes);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Вложение скопировано')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось скопировать вложение: $error')),
+      );
+    }
+  }
+
+  Future<void> shareEditorAttachment(SecretAttachment attachment) async {
+    try {
+      final bytes = await editorAttachmentBytes(attachment);
+      if (bytes.isEmpty) return;
+      await shareAttachmentBytesWithSystem(attachment.fileName, bytes);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось поделиться вложением: $error')),
+      );
+    }
+  }
+
+  Uint8List editorBackgroundImageBytes() {
+    final encoded = backgroundImageBase64;
+    if (encoded == null || encoded.isEmpty) return Uint8List(0);
+    return base64Decode(encoded);
+  }
+
+  Future<void> saveEditorBackgroundImage() async {
+    try {
+      final bytes = editorBackgroundImageBytes();
+      if (bytes.isEmpty) return;
+      final path = await FilePicker.platform.saveFile(
+        dialogTitle: 'Сохранить изображение',
+        fileName: cardBackgroundImageFileName(title.text, bytes),
+        bytes: Platform.isAndroid || Platform.isIOS ? bytes : null,
+        lockParentWindow: true,
+      );
+      if (path != null && !Platform.isAndroid && !Platform.isIOS) {
+        ensureTargetIsNotActiveVault(path);
+        await writeBytesAtomically(File(path), bytes);
+      }
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось сохранить изображение: $error')),
+      );
+    }
+  }
+
+  Future<void> copyEditorBackgroundImage() async {
+    try {
+      final bytes = editorBackgroundImageBytes();
+      if (bytes.isEmpty) return;
+      final fileName = cardBackgroundImageFileName(title.text, bytes);
+      await copyAttachmentBytesToClipboard(fileName, bytes);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Изображение скопировано')),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось скопировать изображение: $error')),
+      );
+    }
+  }
+
+  Future<void> shareEditorBackgroundImage() async {
+    try {
+      final bytes = editorBackgroundImageBytes();
+      if (bytes.isEmpty) return;
+      final fileName = cardBackgroundImageFileName(title.text, bytes);
+      await shareAttachmentBytesWithSystem(fileName, bytes);
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось поделиться изображением: $error')),
+      );
+    }
+  }
+
+  Future<void> showEditorBackgroundImageMenu(Offset globalPosition) async {
+    final selected = await showAttachmentContextMenu(
+      context,
+      globalPosition,
+      allowCopy: true,
+      allowShare: supportsAttachmentSharing,
+    );
+    if (!mounted) return;
+    switch (selected) {
+      case AttachmentContextAction.saveAs:
+        await saveEditorBackgroundImage();
+        break;
+      case AttachmentContextAction.copy:
+        await copyEditorBackgroundImage();
+        break;
+      case AttachmentContextAction.share:
+        await shareEditorBackgroundImage();
+        break;
+      case null:
+        break;
+    }
+  }
+
+  Future<void> handleEditorAttachmentLongPress(
+    SecretAttachment attachment,
+  ) async {
+    if (!usesAttachmentContextMenu) {
+      await previewEditorAttachment(attachment);
+      return;
+    }
+    final media = MediaQuery.sizeOf(context);
+    final selected = await showAttachmentContextMenu(
+      context,
+      lastAttachmentPressPosition ?? Offset(media.width / 2, media.height / 2),
+      allowCopy: attachmentCanBeCopied(attachment.fileName),
+      allowShare: supportsAttachmentSharing,
+    );
+    if (!mounted) return;
+    switch (selected) {
+      case AttachmentContextAction.saveAs:
+        await exportAttachment(attachment);
+        break;
+      case AttachmentContextAction.copy:
+        await copyEditorAttachment(attachment);
+        break;
+      case AttachmentContextAction.share:
+        await shareEditorAttachment(attachment);
+        break;
+      case null:
+        break;
     }
   }
 
@@ -16108,6 +16976,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       tooltip: attachmentDropActive
           ? 'Отпустите файл, чтобы прикрепить'
           : 'Загрузить вложение',
+      tooltipPreferBelow: defaultTargetPlatform != TargetPlatform.android,
       colors: attachmentDropActive
           ? const [Color(0xff83bdff), Color(0xff0068dd)]
           : const [Color(0xff5b9dff), Color(0xff0752b5)],
@@ -16301,6 +17170,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         dialogTitle: 'Сохранить вложение',
         fileName: export.fileName,
         bytes: Platform.isAndroid || Platform.isIOS ? export.bytes : null,
+        lockParentWindow: true,
       );
       if (path != null && !Platform.isAndroid && !Platform.isIOS) {
         ensureTargetIsNotActiveVault(path);

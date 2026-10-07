@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -122,6 +123,210 @@ void main() {
     );
     expect(parseGithubReleaseVersion('{"tag_name":"nightly"}'), isNull);
     expect(parseGithubReleaseVersion('offline'), isNull);
+  });
+
+  test('attachment copy support recognizes text and raster images', () {
+    expect(attachmentCanBeCopied('notes.txt'), isTrue);
+    expect(attachmentCanBeCopied('settings.toml'), isTrue);
+    expect(attachmentCanBeCopied('photo.PNG'), isTrue);
+    expect(attachmentCanBeCopied('sound.mp3'), isFalse);
+    expect(attachmentCanBeCopied('document.pdf'), isFalse);
+  });
+
+  test('text attachment decoder supports UTF-8 and UTF-16 byte order marks',
+      () {
+    expect(
+      decodeTextAttachment(Uint8List.fromList([0xef, 0xbb, 0xbf, 0x41])),
+      'A',
+    );
+    expect(
+      decodeTextAttachment(Uint8List.fromList([0xff, 0xfe, 0x41, 0x00])),
+      'A',
+    );
+    expect(
+      decodeTextAttachment(Uint8List.fromList([0xfe, 0xff, 0x00, 0x41])),
+      'A',
+    );
+  });
+
+  testWidgets('text attachment is copied as clipboard text', (tester) async {
+    String? clipboardText;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
+      if (call.method == 'Clipboard.setData') {
+        clipboardText = (call.arguments as Map)['text'] as String?;
+      } else if (call.method == 'Clipboard.getData') {
+        return <String, dynamic>{'text': clipboardText};
+      }
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(SystemChannels.platform, null),
+    );
+
+    await copyAttachmentBytesToClipboard(
+      'notes.txt',
+      Uint8List.fromList([0xd0, 0xa2, 0xd0, 0xb5, 0xd1, 0x81, 0xd1, 0x82]),
+    );
+
+    expect(clipboardText, 'Тест');
+    await SecureClipboardService.clear();
+  });
+
+  testWidgets('image attachment is sent to the native clipboard channel',
+      (tester) async {
+    MethodCall? clipboardCall;
+    final messenger =
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(windowChannel, (call) async {
+      clipboardCall = call;
+      return null;
+    });
+    addTearDown(
+      () => messenger.setMockMethodCallHandler(windowChannel, null),
+    );
+    final sourceImage = image.Image(width: 3, height: 2)
+      ..setPixelRgb(0, 0, 255, 32, 16);
+    final source = Uint8List.fromList(image.encodePng(sourceImage));
+
+    await copyAttachmentBytesToClipboard('photo.png', source);
+
+    expect(clipboardCall?.method, 'writeClipboardImage');
+    final clipboardBytes = clipboardCall!.arguments as Uint8List;
+    if (Platform.isWindows) {
+      expect(clipboardBytes.sublist(0, 2), [0x42, 0x4d]);
+      expect(clipboardBytes.sublist(14, 18), [124, 0, 0, 0]);
+      expect(clipboardBytes.sublist(28, 30), [32, 0]);
+    }
+    final copiedImage = image.decodeImage(clipboardBytes);
+    expect((copiedImage?.width, copiedImage?.height), (3, 2));
+    expect(copiedImage?.getPixel(0, 0).r, 255);
+    expect(copiedImage?.getPixel(0, 0).g, 32);
+    expect(copiedImage?.getPixel(0, 0).b, 16);
+  });
+
+  testWidgets('Android attachment menu offers save copy and share',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Builder(
+          builder: (context) => GestureDetector(
+            key: const Key('androidAttachmentTarget'),
+            behavior: HitTestBehavior.opaque,
+            onLongPressStart: (details) {
+              unawaited(
+                showAttachmentContextMenu(
+                  context,
+                  details.globalPosition,
+                  allowCopy: true,
+                  allowShare: supportsAttachmentSharing,
+                ),
+              );
+            },
+            child: const SizedBox.expand(),
+          ),
+        ),
+      ),
+    );
+
+    await tester.longPress(find.byKey(const Key('androidAttachmentTarget')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Сохранить как'), findsOneWidget);
+    expect(find.text('Копировать'), findsOneWidget);
+    expect(find.text('Поделиться'), findsOneWidget);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('Android inline text attachment supports selection',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final bytes = Uint8List.fromList(utf8.encode('first second'));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: selectableTextAttachmentPreview(
+            'notes.txt',
+            bytes,
+            key: const Key('androidInlineText'),
+          ),
+        ),
+      ),
+    );
+    final selectable = find.byType(SelectableText);
+    await tester.longPressAt(
+      tester.getTopLeft(selectable) + const Offset(20, 10),
+    );
+    await tester.pumpAndSettle();
+
+    final editable = tester.widget<EditableText>(find.byType(EditableText));
+    expect(editable.controller.selection.isCollapsed, isFalse);
+    await tester.pumpWidget(const SizedBox.shrink());
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('Android card bottom tooltips open above their buttons',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    await tester.binding.setSurfaceSize(const Size(360, 640));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final template = builtInTemplates().first;
+    final item = SecretItem(
+      id: 'tooltip-card',
+      templateId: template.id,
+      title: 'Подсказки',
+      category: '',
+      colorId: template.colorId,
+      values: const {},
+      modifiedAt: DateTime(2026),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: CardPreviewDialog(item: item, template: template)),
+    );
+    await tester.pumpAndSettle();
+    final previewTooltip = tester.widget<Tooltip>(
+      find.descendant(
+        of: find.byKey(const Key('cardPreviewBackButton')),
+        matching: find.byType(Tooltip),
+      ),
+    );
+    expect(previewTooltip.preferBelow, isFalse);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ItemEditorDialog(
+          templates: builtInTemplates(),
+          categories: const [],
+          initial: item,
+          supportsAttachments: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    for (final key in const <Key>[
+      Key('cardEditorAddAttachmentButton'),
+      Key('cardSaveButton'),
+      Key('cardCloseButton'),
+    ]) {
+      final tooltip = tester.widget<Tooltip>(
+        find.descendant(
+          of: find.byKey(key),
+          matching: find.byType(Tooltip),
+        ),
+      );
+      expect(tooltip.preferBelow, isFalse);
+    }
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('password header shows current and available GitHub versions',
@@ -1482,6 +1687,8 @@ void main() {
 
   testWidgets('card attachment controls use requested colors and file names',
       (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     await tester.binding.setSurfaceSize(const Size(720, 1000));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     final template = builtInTemplates().first;
@@ -1545,14 +1752,36 @@ void main() {
       findsOneWidget,
     );
     final editorName = find.byKey(
-      const ValueKey('cardEditorAttachment-описание.txt'),
+      const ValueKey('cardEditorInlineHeader-описание.txt'),
     );
-    final editorNameTap = tester.widget<InkWell>(
-      find.descendant(of: editorName, matching: find.byType(InkWell)),
-    );
+    final editorNameTap = tester.widget<InkWell>(editorName);
     expect(editorNameTap.onTap, isNotNull);
-    expect(editorNameTap.onSecondaryTap, isNotNull);
+    expect(editorNameTap.onSecondaryTap, isNull);
     expect(editorNameTap.onLongPress, isNotNull);
+    await tester.ensureVisible(editorName);
+    await tester.pumpAndSettle();
+    await tester.longPress(editorName);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('attachmentSaveAsMenuItem')), findsOneWidget);
+    expect(find.byKey(const Key('attachmentCopyMenuItem')), findsOneWidget);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+    await tester.tap(editorName, buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('attachmentSaveAsMenuItem')), findsOneWidget);
+    expect(find.byKey(const Key('attachmentCopyMenuItem')), findsOneWidget);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(
+        const ValueKey('cardEditorInlineAttachment-описание.txt'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('cardEditorInlineText-описание.txt')),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('cardEditorInlineAttachment-фото.png')),
       findsOneWidget,
@@ -1610,19 +1839,35 @@ void main() {
       ),
     );
     final previewName = find.byKey(
-      const ValueKey('cardPreviewAttachment-описание.txt'),
+      const ValueKey('cardPreviewInlineHeader-описание.txt'),
     );
-    final previewNameTap = tester.widget<InkWell>(
-      find.descendant(of: previewName, matching: find.byType(InkWell)),
-    );
+    final previewNameTap = tester.widget<InkWell>(previewName);
     expect(previewNameTap.onTap, isNotNull);
-    expect(previewNameTap.onSecondaryTap, isNotNull);
+    expect(previewNameTap.onSecondaryTap, isNull);
     expect(previewNameTap.onLongPress, isNotNull);
+    await tester.ensureVisible(previewName);
+    await tester.pumpAndSettle();
+    await tester.longPress(previewName);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('attachmentSaveAsMenuItem')), findsOneWidget);
+    expect(find.byKey(const Key('attachmentCopyMenuItem')), findsOneWidget);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+    final previewAudio =
+        find.byKey(const ValueKey('cardPreviewAttachment-звук.mp3'));
+    await tester.ensureVisible(previewAudio);
+    await tester.pumpAndSettle();
+    await tester.longPress(previewAudio);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('attachmentSaveAsMenuItem')), findsOneWidget);
+    expect(find.byKey(const Key('attachmentCopyMenuItem')), findsNothing);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
     expect(
       find.byKey(
         const ValueKey('cardPreviewInlineAttachment-описание.txt'),
       ),
-      findsNothing,
+      findsOneWidget,
     );
     expect(
       find.byKey(
@@ -1630,14 +1875,118 @@ void main() {
       ),
       findsNothing,
     );
+    final previewImage = find.byKey(
+      const ValueKey('cardPreviewInlineAttachment-фото.png'),
+    );
+    expect(previewImage, findsOneWidget);
+    await tester.ensureVisible(previewImage);
+    await tester.pumpAndSettle();
+    await tester.longPress(previewImage);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('attachmentSaveAsMenuItem')), findsOneWidget);
+    expect(find.byKey(const Key('attachmentCopyMenuItem')), findsOneWidget);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+    expect(find.text('test'), findsOneWidget);
     expect(
-      find.byKey(
-        const ValueKey('cardPreviewInlineAttachment-фото.png'),
-      ),
+      find.byKey(const ValueKey('cardPreviewInlineText-описание.txt')),
       findsOneWidget,
     );
-    expect(find.text('test'), findsNothing);
+    final selectableAttachment = tester.widget<SelectableText>(
+      find.descendant(
+        of: find.byKey(
+          const ValueKey('cardPreviewInlineText-описание.txt'),
+        ),
+        matching: find.byType(SelectableText),
+      ),
+    );
+    expect(selectableAttachment.data, 'test');
+    expect(selectableAttachment.enableInteractiveSelection, isTrue);
+    final selectableFinder = find.descendant(
+      of: find.byKey(
+        const ValueKey('cardPreviewInlineText-описание.txt'),
+      ),
+      matching: find.byType(SelectableText),
+    );
+    await tester.ensureVisible(selectableFinder);
+    await tester.pumpAndSettle();
+    await tester.tap(selectableFinder);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyA);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pumpAndSettle();
+    final editableAttachment = tester.widget<EditableText>(
+      find.descendant(
+        of: selectableFinder,
+        matching: find.byType(EditableText),
+      ),
+    );
+    expect(editableAttachment.controller.selection.isCollapsed, isFalse);
     expect(find.textContaining('MP3 ·'), findsNothing);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets(
+      'card background image uses image context menu in preview and editor',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    await tester.binding.setSurfaceSize(const Size(720, 1000));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final template = builtInTemplates().first;
+    final backgroundBytes = Uint8List.fromList(
+      image.encodePng(image.Image(width: 8, height: 8)),
+    );
+    final item = SecretItem(
+      id: 'background-card',
+      templateId: template.id,
+      title: 'Фото документа',
+      category: '',
+      colorId: template.colorId,
+      values: const {},
+      modifiedAt: DateTime(2026),
+      backgroundImageBase64: base64Encode(backgroundBytes),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(home: CardPreviewDialog(item: item, template: template)),
+    );
+    await tester.pumpAndSettle();
+    final previewSurface = find.byKey(const Key('cardPreviewSurface'));
+    final previewBackgroundPoint =
+        tester.getTopLeft(previewSurface) + const Offset(7, 120);
+    await tester.tapAt(
+      previewBackgroundPoint,
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('attachmentSaveAsMenuItem')), findsOneWidget);
+    expect(find.byKey(const Key('attachmentCopyMenuItem')), findsOneWidget);
+    expect(find.byKey(const Key('copyAllCardFieldsAction')), findsNothing);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ItemEditorDialog(
+          templates: builtInTemplates(),
+          categories: const [],
+          initial: item,
+          supportsAttachments: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final editorSurface = find.byKey(const Key('cardEditorSurface'));
+    final editorBackgroundPoint =
+        tester.getTopLeft(editorSurface) + const Offset(7, 120);
+    await tester.longPressAt(editorBackgroundPoint);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('attachmentSaveAsMenuItem')), findsOneWidget);
+    expect(find.byKey(const Key('attachmentCopyMenuItem')), findsOneWidget);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+    debugDefaultTargetPlatformOverride = null;
   });
 
   testWidgets('category editor uses template design and fills narrow screen',
@@ -2625,6 +2974,77 @@ void main() {
     );
     expect(tile.selected, isTrue);
     expect(tile.selectedTileColor, const Color(0xffcfe9fb));
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
+  });
+
+  testWidgets('left tree card shows the central attachment mark',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final template = builtInTemplates().first;
+    final attachedCard = SecretItem(
+      id: 'attached-card',
+      templateId: template.id,
+      title: 'Карточка с вложением',
+      category: 'Работа',
+      colorId: template.colorId,
+      values: const {},
+      attachments: const [
+        SecretAttachment(
+          id: 'attachment-id',
+          fileName: 'notes.txt',
+          size: 4,
+        ),
+      ],
+      modifiedAt: DateTime.utc(2026),
+    );
+    final plainCard = SecretItem(
+      id: 'plain-card',
+      templateId: template.id,
+      title: 'Карточка без вложения',
+      category: 'Работа',
+      colorId: template.colorId,
+      values: const {},
+      modifiedAt: DateTime.utc(2026),
+    );
+    state.setState(() {
+      state.templates = [template];
+      state.items = [attachedCard, plainCard];
+      state.itemsById[attachedCard.id] = attachedCard;
+      state.itemsById[plainCard.id] = plainCard;
+      state.categoryPaths.add('Работа');
+      state.categoryIdsByPath['Работа'] = 'work-folder';
+      state.expandedCategoryPaths.add('Работа');
+      state.selectedCategoryPath = 'Работа';
+    });
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('treeCardAttachmentArrow-attached-card')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('cardAttachmentArrow-attached-card')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('treeCardAttachmentArrow-plain-card')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('cardAttachmentArrow-plain-card')),
+      findsNothing,
+    );
     debugDefaultTargetPlatformOverride = null;
     await tester.binding.setSurfaceSize(null);
   });
