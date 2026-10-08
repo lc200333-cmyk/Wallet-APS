@@ -29,6 +29,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/branding/wallet_android.png
+    - assets/ui/attachment_mark.png
     # All SPB Wallet card, folder and UI pictograms are packed into one
     # non-media asset so Android gallery applications cannot index them.
     - assets/spb_icons.bundle

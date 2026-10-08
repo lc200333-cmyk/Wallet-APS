@@ -2170,6 +2170,61 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
+  testWidgets('wallet title and My cards open the root creation menu',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('spbVaultTitle')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('createFolderRootContextAction')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('createCardRootContextAction')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('importRootContextAction')),
+      findsOneWidget,
+    );
+    await tester.tapAt(const Offset(1100, 800));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(const Key('spbMyCardsModeButton')),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('createFolderRootContextAction')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('createCardRootContextAction')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('importRootContextAction')),
+      findsOneWidget,
+    );
+    await tester.tapAt(const Offset(1100, 800));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
+  });
+
   testWidgets('mobile center pane shows a persistent folder grid scrollbar',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -2273,6 +2328,220 @@ void main() {
       ),
       findsOneWidget,
     );
+  });
+
+  testWidgets('folders drag into folders and both left root targets',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    final temp = Directory.systemTemp.createTempSync('wallet-folder-drag-');
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+      if (temp.existsSync()) temp.deleteSync(recursive: true);
+    });
+
+    final wallet = SpbWalletDatabase.create(
+      '${temp.path}${Platform.pathSeparator}folder-drag.swl',
+      '1234',
+    );
+    wallet.createCategory('Source', '');
+    wallet.createCategory('Target', '');
+    wallet.createCategory('Target / To wallet title', '');
+    wallet.createCategory('Target / To my cards', '');
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    state.setState(() {
+      state.spbWallet = wallet;
+      state.spbWalletPath = wallet.path;
+      state.spbWalletDisplayPath = wallet.path;
+      state.spbWalletWritable = true;
+      state.applySpbSnapshot(wallet.loadSnapshot());
+      state.selectedCategoryPath = '';
+      state.selectedCategoryId = null;
+    });
+    await tester.pumpAndSettle();
+
+    Finder centralFolder(String path) =>
+        find.byKey(ValueKey('spbCentralFolder-$path'));
+    Future<void> dragBetween(
+      Finder source,
+      Finder target, {
+      required String expectedPath,
+    }) async {
+      final draggable = find.descendant(
+        of: source,
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Draggable<CategoryTreeNode>,
+        ),
+      );
+      final dragHandle = draggable.evaluate().length == 1 ? draggable : source;
+      final start = tester.getCenter(dragHandle);
+      final dropTarget = find.descendant(
+        of: target,
+        matching: find.byWidgetPredicate(
+          (widget) => widget is DragTarget<Object>,
+        ),
+      );
+      final targetHandle =
+          dropTarget.evaluate().length == 1 ? dropTarget : target;
+      final targetCenter = tester.getCenter(targetHandle);
+      final gesture = await tester.startGesture(
+        start,
+        kind: PointerDeviceKind.mouse,
+      );
+      await gesture.moveBy(const Offset(24, 0));
+      await tester.pump();
+      expect(
+        find.byKey(
+          ValueKey(
+            'spbFolderDragFeedback-${(tester.widget<Draggable<CategoryTreeNode>>(draggable)).data!.path}',
+          ),
+        ),
+        findsOneWidget,
+      );
+      await gesture.moveTo(targetCenter);
+      await tester.pump();
+      final targetHighlights = find.descendant(
+        of: target,
+        matching: find.byWidgetPredicate(
+          (widget) => widget is AnimatedContainer && widget.decoration != null,
+        ),
+      );
+      if (dropTarget.evaluate().isNotEmpty) {
+        expect(targetHighlights, findsWidgets);
+      }
+      await gesture.up();
+      await tester.runAsync(() async {
+        for (var attempt = 0;
+            attempt < 100 && !state.categoryPaths.contains(expectedPath);
+            attempt++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pumpAndSettle();
+    }
+
+    final sourceDraggableFinder = find.descendant(
+      of: centralFolder('Source'),
+      matching: find.byWidgetPredicate(
+        (widget) => widget is Draggable<CategoryTreeNode>,
+      ),
+    );
+    expect(sourceDraggableFinder, findsOneWidget);
+    final sourceDraggable =
+        tester.widget<Draggable<CategoryTreeNode>>(sourceDraggableFinder);
+    expect(sourceDraggable.maxSimultaneousDrags, 1);
+    expect(state.canMoveSpbFolderTo(sourceDraggable.data!, ''), isFalse);
+    expect(
+      state.canMoveSpbFolderTo(
+        sourceDraggable.data!,
+        'Source / Descendant',
+      ),
+      isFalse,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const ValueKey('spbTreeFolder-Source')),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Draggable<CategoryTreeNode>,
+        ),
+      ),
+      findsOneWidget,
+    );
+    final targetDropFinder = find.descendant(
+      of: centralFolder('Target'),
+      matching: find.byWidgetPredicate(
+        (widget) => widget is DragTarget<Object>,
+      ),
+    );
+    expect(targetDropFinder, findsOneWidget);
+    final targetDrop = tester.widget<DragTarget<Object>>(targetDropFinder);
+    expect(
+      targetDrop.onWillAcceptWithDetails!(
+        DragTargetDetails<Object>(
+          data: sourceDraggable.data!,
+          offset: tester.getCenter(centralFolder('Target')),
+        ),
+      ),
+      isTrue,
+    );
+    await dragBetween(
+      centralFolder('Source'),
+      centralFolder('Target'),
+      expectedPath: 'Target / Source',
+    );
+    expect(state.categoryPaths, isNot(contains('Source')));
+    expect(state.categoryPaths, contains('Target / Source'));
+
+    state.setState(() {
+      state.selectedCategoryPath = 'Target';
+      state.selectedCategoryId = state.categoryIdsByPath['Target'];
+    });
+    await tester.pumpAndSettle();
+    await dragBetween(
+      centralFolder('Target / To wallet title'),
+      find.byKey(const Key('spbVaultTitle')),
+      expectedPath: 'To wallet title',
+    );
+    expect(state.categoryPaths, contains('To wallet title'));
+    expect(state.categoryPaths, isNot(contains('Target / To wallet title')));
+    ScaffoldMessenger.of(
+      tester.element(find.byType(VaultShell)),
+    ).hideCurrentSnackBar();
+    await tester.pumpAndSettle();
+
+    state.setState(() {
+      state.selectedCategoryPath = 'Target';
+      state.selectedCategoryId = state.categoryIdsByPath['Target'];
+    });
+    await tester.pumpAndSettle();
+    final myCardsSourceDraggable = tester.widget<Draggable<CategoryTreeNode>>(
+      find.descendant(
+        of: centralFolder('Target / To my cards'),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Draggable<CategoryTreeNode>,
+        ),
+      ),
+    );
+    final myCardsDropTarget = tester.widget<DragTarget<Object>>(
+      find.descendant(
+        of: find.byKey(const Key('spbMyCardsModeButton')),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is DragTarget<Object>,
+        ),
+      ),
+    );
+    expect(
+      myCardsDropTarget.onWillAcceptWithDetails!(
+        DragTargetDetails<Object>(
+          data: myCardsSourceDraggable.data!,
+          offset: tester.getCenter(
+            find.byKey(const Key('spbMyCardsModeButton')),
+          ),
+        ),
+      ),
+      isTrue,
+    );
+    await dragBetween(
+      centralFolder('Target / To my cards'),
+      find.byKey(const Key('spbMyCardsModeButton')),
+      expectedPath: 'To my cards',
+    );
+    expect(state.categoryPaths, contains('To my cards'));
+    expect(state.categoryPaths, isNot(contains('Target / To my cards')));
+    expect(tester.takeException(), isNull);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
   });
 
   testWidgets('wide card grid supports mouse marquee selection',
@@ -2389,6 +2658,66 @@ void main() {
     }
     await tester.pumpAndSettle();
     expect(state.selectedTemplateIds, templateIds.toSet());
+  });
+
+  testWidgets('Delete key uses card delete actions in wide center pane',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final CardTemplate template = state.templates.firstWhere(
+      (CardTemplate entry) => entry.id != 'tpl_note',
+    ) as CardTemplate;
+    final cards = <SecretItem>[
+      for (final id in const ['delete-key-card-1', 'delete-key-card-2'])
+        SecretItem(
+          id: id,
+          templateId: template.id,
+          title: id,
+          category: '',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+        ),
+    ];
+    state.setState(() {
+      state.items = cards;
+      state.itemsById = {for (final card in cards) card.id: card};
+      state.selectedItemIds
+        ..clear()
+        ..addAll(cards.map((card) => card.id));
+      state.selectedItemId = cards.first.id;
+    });
+    state.spbCentralWorkspaceFocusNode.requestFocus();
+    await tester.pump();
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    await tester.pumpAndSettle();
+    expect(find.text('Удалить карточки'), findsOneWidget);
+    expect(find.textContaining('Выбранные карточки (2)'), findsOneWidget);
+    await tester.tap(find.text('Отмена'));
+    await tester.pumpAndSettle();
+
+    state.setState(() {
+      state.selectedItemIds
+        ..clear()
+        ..add(cards.first.id);
+      state.selectedItemId = cards.first.id;
+    });
+    state.spbCentralWorkspaceFocusNode.requestFocus();
+    await tester.pump();
+    await tester.sendKeyEvent(LogicalKeyboardKey.delete);
+    await tester.pumpAndSettle();
+    expect(find.text('Удалить карточку'), findsOneWidget);
+    expect(find.byKey(const Key('confirmDeleteCardButton')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('cancelDeleteCardButton')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('central card reacts only on its icon and label', (tester) async {
@@ -2691,6 +3020,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(
       find.byKey(const Key('deleteFolderContextAction')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const Key('createInFolderContextAction')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('createFolderInFolderContextAction')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('createCardInFolderContextAction')),
       findsOneWidget,
     );
     await tester.tapAt(const Offset(8, 8));
@@ -3086,6 +3425,52 @@ void main() {
     await tester.pumpAndSettle();
   });
 
+  testWidgets('successful password change removes dialog dependencies cleanly',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+
+    state.openChangePasswordDialog(
+      replacePassword: ({
+        required String oldPassword,
+        required String newPassword,
+        required String passwordHint,
+      }) async {
+        expect(oldPassword, 'old-password');
+        expect(newPassword, 'new-password');
+        expect(passwordHint, isEmpty);
+      },
+    );
+    await tester.pumpAndSettle();
+    Future<void> enterPassword(Key key, String value) => tester.enterText(
+          find.descendant(
+            of: find.byKey(key),
+            matching: find.byType(TextField),
+          ),
+          value,
+        );
+    await enterPassword(const Key('changePasswordOld'), 'old-password');
+    await enterPassword(const Key('changePasswordNew'), 'new-password');
+    await enterPassword(const Key('changePasswordRepeat'), 'new-password');
+
+    final confirm = find.byKey(const Key('confirmChangePassword'));
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    addTearDown(mouse.removePointer);
+    await mouse.addPointer(location: tester.getCenter(confirm));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.tap(confirm);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('changePasswordDialog')), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('change password fits narrow Android screen and keyboard',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
@@ -3221,6 +3606,68 @@ void main() {
     final delegate =
         grid.gridDelegate as SliverGridDelegateWithMaxCrossAxisExtent;
     expect(delegate.mainAxisSpacing, 11.36);
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
+  });
+
+  testWidgets('Android card labels stay two lines at large system text scales',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    await tester.binding.setSurfaceSize(const Size(390, 800));
+    final systemTextScale = ValueNotifier<double>(1);
+    addTearDown(() {
+      systemTextScale.dispose();
+      debugDefaultTargetPlatformOverride = null;
+      tester.binding.setSurfaceSize(null);
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final dynamic state = tester.state(find.byType(VaultShell));
+    final Widget gridEntry = state.buildSpbGridEntry(
+      label: 'Очень длинное название карточки для двух строк',
+      labelKey: const ValueKey('stable-android-label'),
+      icon: const SizedBox.square(dimension: 50.25),
+      onTap: () {},
+      onContextMenu: (Offset _) {},
+    ) as Widget;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        builder: (context, child) => ValueListenableBuilder<double>(
+          valueListenable: systemTextScale,
+          builder: (context, scale, _) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: TextScaler.linear(scale),
+            ),
+            child: child!,
+          ),
+        ),
+        home: Scaffold(body: Center(child: gridEntry)),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final label = find.byKey(const ValueKey('stable-android-label'));
+    final labelWidget = tester.widget<Text>(label);
+    final sizeAtNormalScale = tester.getSize(label);
+    expect(labelWidget.maxLines, 2);
+    expect(labelWidget.overflow, TextOverflow.ellipsis);
+    expect(labelWidget.textScaler, isNotNull);
+    expect(labelWidget.textScaler!.scale(14.3), closeTo(14.3, 0.001));
+    expect(sizeAtNormalScale.height, greaterThan(25));
+    expect(sizeAtNormalScale.height, lessThanOrEqualTo(31));
+
+    systemTextScale.value = 3.2;
+    await tester.pumpAndSettle();
+    final sizeAtLargeScale = tester.getSize(label);
+    expect(sizeAtLargeScale.width, closeTo(sizeAtNormalScale.width, 0.01));
+    expect(sizeAtLargeScale.height, closeTo(sizeAtNormalScale.height, 0.01));
+    expect(tester.takeException(), isNull);
+
     debugDefaultTargetPlatformOverride = null;
     await tester.binding.setSurfaceSize(null);
   });
