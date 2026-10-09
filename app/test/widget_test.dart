@@ -125,6 +125,28 @@ void main() {
     expect(parseGithubReleaseVersion('offline'), isNull);
   });
 
+  test('semantic versions are compared component by component', () {
+    expect(isVersionNewer('0.10.0', '0.9.9'), isTrue);
+    expect(isVersionNewer('1.0.0', '0.99.99'), isTrue);
+    expect(isVersionNewer('0.6.3', '0.6.3'), isFalse);
+    expect(isVersionNewer('0.6.2', '0.6.3'), isFalse);
+    expect(isVersionNewer('nightly', '0.6.3'), isFalse);
+  });
+
+  test('update package matches Android Windows and Linux', () {
+    final android = updatePackageForPlatform(TargetPlatform.android, '1.2.3')!;
+    final windows = updatePackageForPlatform(TargetPlatform.windows, '1.2.3')!;
+    final linux = updatePackageForPlatform(TargetPlatform.linux, '1.2.3')!;
+
+    expect(android.assetName, 'Wallet-APS-android.apk');
+    expect(android.fileName, endsWith('.apk'));
+    expect(windows.assetName, 'Wallet-APS-Setup.exe');
+    expect(windows.fileName, endsWith('.exe'));
+    expect(linux.assetName, 'Wallet-APS-linux-amd64.deb');
+    expect(linux.fileName, endsWith('.deb'));
+    expect(android.downloadUri.path, contains('/download/v1.2.3/'));
+  });
+
   test('attachment copy support recognizes text and raster images', () {
     expect(attachmentCanBeCopied('notes.txt'), isTrue);
     expect(attachmentCanBeCopied('settings.toml'), isTrue);
@@ -331,18 +353,37 @@ void main() {
 
   testWidgets('password header shows current and available GitHub versions',
       (tester) async {
+    UpdatePackage? requestedPackage;
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
           body: PasswordVersionLabel(
-            latestVersionLoader: () async => '0.5.10',
+            latestVersionLoader: () async => '99.0.0',
+            updateDownloader: (package) async {
+              requestedPackage = package;
+              return r'C:\Downloads\Wallet-APS-Setup-99.0.0.exe';
+            },
           ),
         ),
       ),
     );
     await tester.pump();
 
-    expect(find.text('v. $currentAppVersion / 0.5.10'), findsOneWidget);
+    expect(find.text('v. $currentAppVersion'), findsOneWidget);
+    final available = tester.widget<Text>(find.text('99.0.0'));
+    expect(available.style?.color, const Color(0xffff3b30));
+    expect(available.style?.fontWeight, FontWeight.bold);
+
+    await tester.tap(find.byKey(const Key('availableGithubVersion')));
+    await tester.pumpAndSettle();
+    expect(find.text('Доступно обновление'), findsOneWidget);
+    expect(find.byKey(const Key('cancelUpdateDownload')), findsOneWidget);
+    expect(find.byKey(const Key('confirmUpdateDownload')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('confirmUpdateDownload')));
+    await tester.pumpAndSettle();
+    expect(requestedPackage?.assetName, 'Wallet-APS-android.apk');
+    expect(find.textContaining('Скачивание начато:'), findsOneWidget);
   });
 
   testWidgets('password header hides GitHub version while offline',
@@ -359,7 +400,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('v. $currentAppVersion'), findsOneWidget);
-    expect(find.textContaining(' / '), findsNothing);
+    expect(find.byKey(const Key('availableGithubVersion')), findsNothing);
   });
 
   test('Windows pointer hit testing ignores inactive keyed elements', () {
@@ -393,7 +434,7 @@ void main() {
     }
   });
 
-  test('dropped icons preserve proportions with a 128 pixel longest side', () {
+  test('dropped icons use a proportion-preserving 128 square canvas', () {
     final landscape = image.decodePng(
       normalizeDroppedIconPng(image.Image(width: 400, height: 200)),
     )!;
@@ -401,8 +442,20 @@ void main() {
       normalizeDroppedIconPng(image.Image(width: 150, height: 300)),
     )!;
 
-    expect((landscape.width, landscape.height), (128, 64));
-    expect((portrait.width, portrait.height), (64, 128));
+    expect((landscape.width, landscape.height), (128, 128));
+    expect((portrait.width, portrait.height), (128, 128));
+  });
+
+  test('icon file names allow a literal percent sign', () {
+    const literalName = 'sale 50%.png';
+
+    expect(decodeUriComponentOrOriginal(literalName), literalName);
+    expect(decodeUriComponentOrOriginal('sale%2050.png'), 'sale 50.png');
+    expect(
+      fileNameFromPath(r'C:\icons\sale 50%.png'),
+      literalName,
+    );
+    expect(fileNameFromPath('/icons/sale 50%.png'), literalName);
   });
 
   testWidgets('card folder and template icons are external image drop targets',
@@ -504,7 +557,89 @@ void main() {
     await tester.pumpAndSettle();
 
     final pasted = image.decodePng(pastedBytes!);
-    expect((pasted!.width, pasted.height), (128, 64));
+    expect((pasted!.width, pasted.height), (128, 128));
+  });
+
+  test('user third-party icons are stored at 128x128 without duplicates',
+      () async {
+    final directory = Directory.systemTemp.createTempSync('wallet-icons-');
+    final previousAssets = thirdPartyIconAssets;
+    final previousFuture = thirdPartyIconAssetsFuture;
+    final previousPngs = thirdPartyIconPngs;
+    final previousComparable = thirdPartyComparablePngs;
+    final previousDirectoryOverride = userThirdPartyIconDirectoryOverride;
+    addTearDown(() {
+      thirdPartyIconAssets = previousAssets;
+      thirdPartyIconAssetsFuture = previousFuture;
+      thirdPartyIconPngs = previousPngs;
+      thirdPartyComparablePngs = previousComparable;
+      userThirdPartyIconDirectoryOverride = previousDirectoryOverride;
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
+
+    final firstImage = image.Image(width: 40, height: 20)
+      ..setPixelRgb(20, 10, 255, 0, 0);
+    final secondImage = image.Image(width: 20, height: 40)
+      ..setPixelRgb(10, 20, 0, 0, 255);
+    final firstBytes = Uint8List.fromList(image.encodePng(firstImage));
+    final secondBytes = Uint8List.fromList(image.encodePng(secondImage));
+    final existingBytes = normalizeUserIconPng(firstImage);
+    const existingId = 'third-party://NewIcons/existing.png';
+    thirdPartyIconAssets = const [existingId];
+    thirdPartyIconPngs = <String, Uint8List>{existingId: existingBytes};
+    thirdPartyComparablePngs = <String, Uint8List>{};
+    thirdPartyIconAssetsFuture = Future.value(thirdPartyIconAssets);
+
+    final duplicate = await registerUserThirdPartyIcon(
+      firstBytes,
+      'duplicate.png',
+      storageDirectory: directory,
+      ensureCatalogLoaded: false,
+    );
+    final added = await registerUserThirdPartyIcon(
+      secondBytes,
+      'new icon.jpg',
+      storageDirectory: directory,
+      ensureCatalogLoaded: false,
+    );
+    final duplicateAgain = await registerUserThirdPartyIcon(
+      secondBytes,
+      'same pixels.png',
+      storageDirectory: directory,
+      ensureCatalogLoaded: false,
+    );
+    final thirdImage = image.Image(width: 16, height: 16)
+      ..setPixelRgb(8, 8, 0, 255, 0);
+    final thirdBytes = Uint8List.fromList(image.encodePng(thirdImage));
+    final concurrent = await Future.wait([
+      registerUserThirdPartyIcon(
+        thirdBytes,
+        'concurrent-a.png',
+        storageDirectory: directory,
+        ensureCatalogLoaded: false,
+      ),
+      registerUserThirdPartyIcon(
+        thirdBytes,
+        'concurrent-b.png',
+        storageDirectory: directory,
+        ensureCatalogLoaded: false,
+      ),
+    ]);
+
+    expect(duplicate.added, isFalse);
+    expect(duplicate.iconId, existingId);
+    expect(added.added, isTrue);
+    expect(duplicateAgain.added, isFalse);
+    expect(duplicateAgain.iconId, added.iconId);
+    expect(concurrent.where((result) => result.added), hasLength(1));
+    expect(concurrent.where((result) => !result.added), hasLength(1));
+    expect(thirdPartyIconAssets, hasLength(3));
+    final files = directory.listSync().whereType<File>().toList();
+    expect(files, hasLength(2));
+    for (final file in files) {
+      final stored = image.decodePng(file.readAsBytesSync());
+      expect((stored?.width, stored?.height), (128, 128));
+    }
   });
 
   test('SUBST paths resolve to their stable backing directory', () {
@@ -523,17 +658,49 @@ void main() {
 
   testWidgets('replacement third-party icon bundle is available',
       (tester) async {
+    final directory =
+        Directory.systemTemp.createTempSync('wallet-icons-empty-');
+    final previousDirectoryOverride = userThirdPartyIconDirectoryOverride;
+    userThirdPartyIconDirectoryOverride = directory;
     addTearDown(() {
       thirdPartyIconAssetsFuture = null;
       thirdPartyIconAssets = [];
       thirdPartyIconPngs = {};
+      thirdPartyComparablePngs = {};
+      userThirdPartyIconDirectoryOverride = previousDirectoryOverride;
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
     });
-    final icons = await loadThirdPartyIconAssets();
+    final icons = (await tester.runAsync(loadThirdPartyIconAssets))!;
 
     expect(icons, hasLength(1012));
     expect(icons, contains('third-party://NewIcons/1.2-Discover-4.png'));
     expect(icons, contains('third-party://NewIcons/Ziraat_Bank_3.png'));
     expect(thirdPartyIconPngs[icons.first], isNotEmpty);
+  });
+
+  testWidgets('SPB icon bundle collapses Android density duplicates',
+      (tester) async {
+    final previousFuture = spb64PngIconAssetsFuture;
+    final previousAssets = spb64PngIconAssets;
+    final previousPngs = spbBundledIconPngs;
+    spb64PngIconAssetsFuture = null;
+    spb64PngIconAssets = [];
+    spbBundledIconPngs = {};
+    addTearDown(() {
+      spb64PngIconAssetsFuture = previousFuture;
+      spb64PngIconAssets = previousAssets;
+      spbBundledIconPngs = previousPngs;
+    });
+
+    final icons = (await tester.runAsync(loadSpb64PngIconAssets))!;
+    final logicalKeys = icons.map(spbPickerLogicalIconKey).toSet();
+
+    expect(icons, hasLength(108));
+    expect(logicalKeys, hasLength(icons.length));
+    expect(
+      icons.where((iconId) => iconId.endsWith('/icon_add.png')),
+      ['spb://apk_icons/res/drawable-hdpi/icon_add.png'],
+    );
   });
 
   testWidgets('brand icon bundle is available', (tester) async {
@@ -748,6 +915,7 @@ void main() {
       thirdPartyIconAssetsFuture = null;
       thirdPartyIconAssets = [];
       thirdPartyIconPngs = {};
+      thirdPartyComparablePngs = {};
       brandIconAssetsFuture = null;
       brandIconAssets = [];
       brandIconPngs = {};
@@ -1028,7 +1196,9 @@ void main() {
     expect(find.byKey(const Key('brandIconPickerDialog')), findsOneWidget);
     await tester.tap(find.byKey(const Key('iconPickerCloseButton')));
     await tester.pumpAndSettle();
+    await tester.runAsync(loadThirdPartyIconAssets);
     await tester.tap(find.byKey(const Key('cardThirdPartyPicker')));
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('thirdPartyIconSearch')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -2166,6 +2336,371 @@ void main() {
     await tester.tapAt(const Offset(2, 2));
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+    await tester.binding.setSurfaceSize(null);
+  });
+
+  testWidgets('desktop main panes have persistent interactive scrollbars',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    await tester.binding.setSurfaceSize(const Size(1280, 700));
+    try {
+      await tester.pumpWidget(
+        const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+      );
+      await tester.pumpAndSettle();
+
+      final dynamic state = tester.state(find.byType(VaultShell));
+      final CardTemplate template = state.templates.first as CardTemplate;
+      final cards = List<SecretItem>.generate(
+        40,
+        (index) => SecretItem(
+          id: 'three-pane-scroll-$index',
+          templateId: template.id,
+          title: 'Scroll card $index',
+          category: '',
+          colorId: template.colorId,
+          values: const <String, String>{},
+          modifiedAt: DateTime(2026),
+          hitCount: 40 - index,
+        ),
+      );
+      state.setState(() {
+        state.categoryPaths = <String>{
+          for (var index = 0; index < 35; index++) 'Folder $index',
+        };
+        state.items = cards;
+        state.recentlyOpenedItemIds
+          ..clear()
+          ..addAll(cards.map((item) => item.id));
+      });
+      await tester.pumpAndSettle();
+
+      for (final key in const <Key>[
+        Key('spbNavigatorScrollbar'),
+        Key('spbFolderGridScrollbar'),
+        Key('spbActionsPanelScrollbar'),
+      ]) {
+        final scrollbar = tester.widget<Scrollbar>(find.byKey(key));
+        expect(scrollbar.thumbVisibility, isTrue);
+        expect(scrollbar.trackVisibility, isTrue);
+        expect(scrollbar.interactive, isTrue);
+      }
+      for (final ScrollController controller in <ScrollController>[
+        state.spbNavigatorScrollController as ScrollController,
+        state.spbFolderGridScrollController as ScrollController,
+        state.spbActionsPanelScrollController as ScrollController,
+      ]) {
+        expect(controller.hasClients, isTrue);
+        expect(controller.position.maxScrollExtent, greaterThan(0));
+      }
+    } finally {
+      await tester.pumpWidget(const SizedBox.shrink());
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+    }
+  });
+
+  testWidgets(
+      'desktop icon library opens four folders and manages custom icons',
+      (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    final temp = Directory.systemTemp.createTempSync('wallet-icon-library-');
+    final userDirectory = Directory(
+      '${temp.path}${Platform.pathSeparator}user-icons',
+    )..createSync(recursive: true);
+    final stateDirectory = Directory(
+      '${temp.path}${Platform.pathSeparator}state',
+    )..createSync(recursive: true);
+    final previousManagedFuture = managedIconLibraryFuture;
+    final previousLocations = managedIconLocations;
+    final previousHidden = hiddenManagedIconIds;
+    final previousStateOverride = managedIconCatalogStateDirectoryOverride;
+    final previousUserOverride = userThirdPartyIconDirectoryOverride;
+    final previousThirdPartyAssets = List<String>.from(thirdPartyIconAssets);
+    final previousThirdPartyPngs =
+        Map<String, Uint8List>.from(thirdPartyIconPngs);
+    final previousThirdPartyComparable =
+        Map<String, Uint8List>.from(thirdPartyComparablePngs);
+    managedIconLibraryFuture = null;
+    managedIconLocations = <String, IconCatalogKind>{};
+    hiddenManagedIconIds = <String>{};
+    managedIconCatalogStateDirectoryOverride = stateDirectory;
+    userThirdPartyIconDirectoryOverride = userDirectory;
+    addTearDown(() async {
+      await tester.pumpWidget(const SizedBox.shrink());
+      managedIconLibraryFuture = previousManagedFuture;
+      managedIconLocations = previousLocations;
+      hiddenManagedIconIds = previousHidden;
+      managedIconCatalogStateDirectoryOverride = previousStateOverride;
+      userThirdPartyIconDirectoryOverride = previousUserOverride;
+      thirdPartyIconAssets = previousThirdPartyAssets;
+      thirdPartyIconPngs = previousThirdPartyPngs;
+      thirdPartyComparablePngs = previousThirdPartyComparable;
+      thirdPartyIconAssetsFuture = null;
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+      if (temp.existsSync()) temp.deleteSync(recursive: true);
+    });
+
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+    await tester.runAsync(loadManagedIconLibrary);
+    await tester.tap(find.byKey(const Key('spbIconsModeButton')));
+    await tester.pump();
+    await tester.runAsync(() => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('spbMyCardsModeButton')), findsOneWidget);
+    expect(find.byKey(const Key('spbTemplatesModeButton')), findsOneWidget);
+    expect(find.byKey(const Key('spbIconsModeButton')), findsOneWidget);
+    expect(
+      tester.getCenter(find.byKey(const Key('spbMyCardsModeButton'))).dy,
+      lessThan(
+        tester.getCenter(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      ),
+    );
+    expect(
+      tester.getCenter(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      lessThan(
+        tester.getCenter(find.byKey(const ValueKey('spbIconCatalog-spb'))).dy,
+      ),
+    );
+    expect(
+      tester
+          .getCenter(find.byKey(const ValueKey('spbIconCatalog-thirdParty')))
+          .dy,
+      lessThan(
+        tester.getCenter(find.byKey(const Key('spbIconsModeButton'))).dy,
+      ),
+    );
+    for (final kind in IconCatalogKind.values) {
+      expect(
+        find.byKey(ValueKey('spbIconCatalog-${kind.storageKey}')),
+        findsOneWidget,
+      );
+    }
+    expect(find.text('Иконки SPB'), findsWidgets);
+    expect(find.byKey(const Key('uploadManagedIconButton')), findsOneWidget);
+    expect(find.byKey(const Key('pasteManagedIconButton')), findsOneWidget);
+    expect(find.byKey(const Key('managedIconUploadTaskIcon')), findsOneWidget);
+    expect(find.byKey(const Key('managedIconMoveTaskIcon')), findsOneWidget);
+    expect(find.byKey(const Key('managedIconExitTaskIcon')), findsOneWidget);
+    final deleteTaskIcon = tester.widget<Icon>(
+      find.byKey(const Key('managedIconDeleteTaskIcon')),
+    );
+    expect(deleteTaskIcon.color, const Color(0xffc62828));
+    final firstManagedIconEntry = find
+        .byWidgetPredicate(
+          (widget) =>
+              widget is KeyedSubtree &&
+              widget.key is ValueKey<String> &&
+              ((widget.key! as ValueKey<String>).value)
+                  .startsWith('managedIcon-'),
+        )
+        .first;
+    expect(
+      find.descendant(of: firstManagedIconEntry, matching: find.byType(Text)),
+      findsNothing,
+    );
+    final firstEntryWidget = tester.widget<KeyedSubtree>(firstManagedIconEntry);
+    final firstIconId =
+        (firstEntryWidget.key! as ValueKey<String>).value.substring(
+              'managedIcon-'.length,
+            );
+    final firstIconTooltip = tester.widget<Tooltip>(
+      find.descendant(
+        of: firstManagedIconEntry,
+        matching: find.byType(Tooltip),
+      ),
+    );
+    expect(firstIconTooltip.message, contains('/drawable-large-hdpi/'));
+    final firstFrame = tester.widget<DecoratedBox>(
+      find.byKey(ValueKey('managedIconFrame-$firstIconId')),
+    );
+    final firstFrameDecoration = firstFrame.decoration as BoxDecoration;
+    expect(firstFrameDecoration.border, isNotNull);
+    expect(firstFrameDecoration.borderRadius, BorderRadius.circular(8));
+    final dynamic state = tester.state(find.byType(VaultShell));
+    expect(state.managedIconPickerContentSize, 40.32);
+    expect(state.managedIconPickerImageScale, 1.2);
+    final iconGrid = find.descendant(
+      of: find.byKey(const Key('spbIconGridScrollbar')),
+      matching: find.byType(GridView),
+    );
+    var gridDelegate = tester.widget<GridView>(iconGrid).gridDelegate
+        as SliverGridDelegateWithMaxCrossAxisExtent;
+    expect(gridDelegate.maxCrossAxisExtent, 62.4);
+    expect(gridDelegate.childAspectRatio, 1);
+    expect(gridDelegate.mainAxisSpacing, 6);
+    expect(gridDelegate.crossAxisSpacing, 6);
+
+    for (final kind in const [
+      IconCatalogKind.pictograms,
+      IconCatalogKind.brands,
+      IconCatalogKind.thirdParty,
+    ]) {
+      await tester.tap(
+        find.byKey(ValueKey('spbIconCatalog-${kind.storageKey}')),
+      );
+      await tester.pumpAndSettle();
+      gridDelegate = tester.widget<GridView>(iconGrid).gridDelegate
+          as SliverGridDelegateWithMaxCrossAxisExtent;
+      expect(gridDelegate.maxCrossAxisExtent, 62.4);
+      expect(gridDelegate.childAspectRatio, 1);
+      expect(gridDelegate.mainAxisSpacing, 6);
+      expect(gridDelegate.crossAxisSpacing, 6);
+      expect(
+        state.managedIconPickerContentSize,
+        kind == IconCatalogKind.pictograms ? 30 : 40.32,
+      );
+      expect(
+        state.managedIconPickerImageScale,
+        kind == IconCatalogKind.pictograms ? 1 : 1.2,
+      );
+    }
+
+    final customImage = image.Image(width: 31, height: 17)
+      ..setPixelRgb(15, 8, 210, 20, 30);
+    final customBytes = Uint8List.fromList(image.encodePng(customImage));
+    await tester.runAsync(
+      () => state.addManagedIcon(
+        customBytes,
+        '000-manager-test.png',
+        IconCatalogKind.brands,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final customId = thirdPartyIconAssets.singleWhere(
+      (entry) => entry.endsWith('/000-manager-test.png'),
+    );
+    expect(managedIconCatalogFor(customId), IconCatalogKind.brands);
+    final storedFiles = userDirectory.listSync().whereType<File>().toList();
+    expect(storedFiles, hasLength(1));
+    final stored = image.decodePng(storedFiles.single.readAsBytesSync());
+    expect((stored?.width, stored?.height), (128, 128));
+
+    final customEntry = find.byKey(ValueKey('managedIcon-$customId'));
+    expect(customEntry, findsOneWidget);
+    expect(
+      find.descendant(
+        of: customEntry,
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Draggable<ManagedIconDragData>,
+        ),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(customEntry, buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('deleteManagedIconContextAction')),
+        findsOneWidget);
+    await tester.tapAt(const Offset(2, 2));
+    await tester.pumpAndSettle();
+
+    final dragHandle = find.descendant(
+      of: customEntry,
+      matching: find.byWidgetPredicate(
+        (widget) => widget is Draggable<ManagedIconDragData>,
+      ),
+    );
+    final target = find.byKey(const ValueKey('spbIconCatalog-spb'));
+    final gesture = await tester.startGesture(
+      tester.getCenter(dragHandle),
+      kind: PointerDeviceKind.mouse,
+    );
+    await gesture.moveBy(const Offset(20, 0));
+    await tester.pump();
+    await gesture.moveTo(tester.getCenter(target));
+    await tester.pump();
+    await gesture.up();
+    await tester.pump();
+    final manifestFile = File(
+      '${stateDirectory.path}${Platform.pathSeparator}catalog.json',
+    );
+    for (var attempt = 0; attempt < 100; attempt++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+      if (managedIconCatalogFor(customId) == IconCatalogKind.spb &&
+          manifestFile.existsSync()) {
+        try {
+          final saved = jsonDecode(manifestFile.readAsStringSync())
+              as Map<String, dynamic>;
+          if ((saved['locations'] as Map<String, dynamic>)[customId] ==
+              IconCatalogKind.spb.storageKey) {
+            break;
+          }
+        } on FormatException {
+          // Continue until the preceding write has completed.
+        }
+      }
+    }
+    await tester.pumpAndSettle();
+    expect(managedIconCatalogFor(customId), IconCatalogKind.spb);
+    final manifest = jsonDecode(
+      File(
+        '${stateDirectory.path}${Platform.pathSeparator}catalog.json',
+      ).readAsStringSync(),
+    ) as Map<String, dynamic>;
+    expect(
+      (manifest['locations'] as Map<String, dynamic>)[customId],
+      IconCatalogKind.spb.storageKey,
+    );
+    managedIconLocations = <String, IconCatalogKind>{};
+    hiddenManagedIconIds = <String>{};
+    managedIconLibraryFuture = null;
+    await tester.runAsync(loadManagedIconLibrary);
+    state.setState(() => state.selectedIconCatalog = IconCatalogKind.spb);
+    await tester.pumpAndSettle();
+    expect(managedIconCatalogFor(customId), IconCatalogKind.spb);
+    expect(managedIconIdsFor(IconCatalogKind.spb), contains(customId));
+    final ScrollController iconGridController =
+        state.spbIconGridScrollController as ScrollController;
+    if (iconGridController.hasClients) iconGridController.jumpTo(0);
+    await tester.pumpAndSettle();
+
+    final movedEntry = find.byKey(ValueKey('managedIcon-$customId'));
+    expect(movedEntry, findsOneWidget);
+    await tester.tap(movedEntry, buttons: kSecondaryMouseButton);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('deleteManagedIconContextAction')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('confirmDeleteManagedIconButton')),
+        findsOneWidget);
+    await tester.tap(find.byKey(const Key('confirmDeleteManagedIconButton')));
+    await tester.pump();
+    for (var attempt = 0; attempt < 100; attempt++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+      final filesAreGone = userDirectory.listSync().whereType<File>().isEmpty;
+      var stateIsSaved = false;
+      if (manifestFile.existsSync()) {
+        try {
+          final saved = jsonDecode(manifestFile.readAsStringSync())
+              as Map<String, dynamic>;
+          stateIsSaved =
+              !(saved['locations'] as Map<String, dynamic>).containsKey(
+            customId,
+          );
+        } on FormatException {
+          stateIsSaved = false;
+        }
+      }
+      if (filesAreGone && stateIsSaved) break;
+    }
+    await tester.pumpAndSettle();
+    expect(userDirectory.listSync().whereType<File>(), isEmpty);
+    expect(thirdPartyIconAssets, isNot(contains(customId)));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
     debugDefaultTargetPlatformOverride = null;
     await tester.binding.setSurfaceSize(null);
   });
@@ -4844,7 +5379,7 @@ void main() {
       const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
     );
     await tester.pumpAndSettle();
-    await loadThirdPartyIconAssets();
+    await tester.runAsync(loadThirdPartyIconAssets);
     final bytes = thirdPartyIconPngs.values.first;
     final dialogResult = showUserIconUploadConfirmation(
       tester.element(find.byType(VaultShell)),

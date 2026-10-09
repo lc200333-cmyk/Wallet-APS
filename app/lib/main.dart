@@ -77,8 +77,33 @@ Rect? activeGlobalRectForKey(GlobalKey key) {
 const latestGithubReleaseUri =
     'https://api.github.com/repos/lc200333-cmyk/Wallet-APS/releases/latest';
 const githubVersionRequestTimeout = Duration(seconds: 4);
+const githubUpdateDownloadTimeout = Duration(minutes: 10);
 
 typedef LatestGithubVersionLoader = Future<String?> Function();
+typedef UpdatePackageDownloader = Future<String> Function(
+  UpdatePackage package,
+);
+
+class UpdatePackage {
+  const UpdatePackage({
+    required this.version,
+    required this.assetName,
+    required this.fileName,
+    required this.mimeType,
+    required this.platformLabel,
+  });
+
+  final String version;
+  final String assetName;
+  final String fileName;
+  final String mimeType;
+  final String platformLabel;
+
+  Uri get downloadUri => Uri.https(
+        'github.com',
+        '/lc200333-cmyk/Wallet-APS/releases/download/v$version/$assetName',
+      );
+}
 
 String? parseGithubReleaseVersion(String responseBody) {
   try {
@@ -122,10 +147,159 @@ Future<String?> fetchLatestGithubVersion() async {
   }
 }
 
+List<int>? _numericVersionParts(String version) {
+  final match = RegExp(r'^v?(\d+)\.(\d+)\.(\d+)$').firstMatch(version.trim());
+  if (match == null) return null;
+  return <int>[
+    int.parse(match.group(1)!),
+    int.parse(match.group(2)!),
+    int.parse(match.group(3)!),
+  ];
+}
+
+bool isVersionNewer(String candidate, String installed) {
+  final candidateParts = _numericVersionParts(candidate);
+  final installedParts = _numericVersionParts(installed);
+  if (candidateParts == null || installedParts == null) return false;
+  for (var index = 0; index < candidateParts.length; index++) {
+    if (candidateParts[index] != installedParts[index]) {
+      return candidateParts[index] > installedParts[index];
+    }
+  }
+  return false;
+}
+
+UpdatePackage? updatePackageForPlatform(
+  TargetPlatform platform,
+  String version,
+) {
+  switch (platform) {
+    case TargetPlatform.android:
+      return UpdatePackage(
+        version: version,
+        assetName: 'Wallet-APS-android.apk',
+        fileName: 'Wallet-APS-android-$version.apk',
+        mimeType: 'application/vnd.android.package-archive',
+        platformLabel: 'Android',
+      );
+    case TargetPlatform.windows:
+      return UpdatePackage(
+        version: version,
+        assetName: 'Wallet-APS-Setup.exe',
+        fileName: 'Wallet-APS-Setup-$version.exe',
+        mimeType: 'application/vnd.microsoft.portable-executable',
+        platformLabel: 'Windows',
+      );
+    case TargetPlatform.linux:
+      return UpdatePackage(
+        version: version,
+        assetName: 'Wallet-APS-linux-amd64.deb',
+        fileName: 'Wallet-APS-linux-amd64-$version.deb',
+        mimeType: 'application/vnd.debian.binary-package',
+        platformLabel: 'Linux',
+      );
+    case TargetPlatform.fuchsia:
+    case TargetPlatform.iOS:
+    case TargetPlatform.macOS:
+      return null;
+  }
+}
+
+Future<File> _availableDownloadFile(
+  Directory directory,
+  String fileName,
+) async {
+  final dot = fileName.lastIndexOf('.');
+  final baseName = dot > 0 ? fileName.substring(0, dot) : fileName;
+  final extension = dot > 0 ? fileName.substring(dot) : '';
+  for (var suffix = 0; suffix < 1000; suffix++) {
+    final candidateName =
+        suffix == 0 ? fileName : '$baseName ($suffix)$extension';
+    final candidate =
+        File('${directory.path}${Platform.pathSeparator}$candidateName');
+    if (!await candidate.exists()) return candidate;
+  }
+  throw const FileSystemException('Не удалось выбрать имя файла обновления');
+}
+
+Future<String> _downloadDesktopUpdate(UpdatePackage package) async {
+  final directory =
+      await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
+  await directory.create(recursive: true);
+  final destination = await _availableDownloadFile(directory, package.fileName);
+  final temporary = File(
+    '${destination.path}.${DateTime.now().microsecondsSinceEpoch}.part',
+  );
+  final client = HttpClient()..connectionTimeout = githubVersionRequestTimeout;
+  try {
+    await (() async {
+      final request = await client.getUrl(package.downloadUri);
+      request
+        ..followRedirects = true
+        ..maxRedirects = 8
+        ..headers.set(HttpHeaders.acceptHeader, 'application/octet-stream')
+        ..headers.set(
+          HttpHeaders.userAgentHeader,
+          'Wallet-APS/$currentAppVersion',
+        );
+      final response = await request.close();
+      if (response.statusCode != HttpStatus.ok) {
+        await response.drain<void>();
+        throw HttpException(
+          'GitHub вернул код ${response.statusCode}',
+          uri: package.downloadUri,
+        );
+      }
+      final output = temporary.openWrite();
+      try {
+        await output.addStream(response);
+        await output.flush();
+      } finally {
+        await output.close();
+      }
+      if (!await temporary.exists() || await temporary.length() == 0) {
+        throw const FileSystemException('Скачан пустой файл обновления');
+      }
+      await temporary.rename(destination.path);
+    })()
+        .timeout(githubUpdateDownloadTimeout);
+    return destination.path;
+  } finally {
+    client.close(force: true);
+    if (await temporary.exists()) {
+      await temporary.delete();
+    }
+  }
+}
+
+Future<String> downloadUpdatePackage(UpdatePackage package) async {
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    await spbWalletChannel.invokeMethod<int>(
+      'downloadUpdate',
+      <String, String>{
+        'url': package.downloadUri.toString(),
+        'fileName': package.fileName,
+        'mimeType': package.mimeType,
+      },
+    );
+    return 'Загрузки/${package.fileName}';
+  }
+  if (defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.linux) {
+    return _downloadDesktopUpdate(package);
+  }
+  throw UnsupportedError('Обновления для этой платформы не поддерживаются');
+}
+
 class PasswordVersionLabel extends StatefulWidget {
-  const PasswordVersionLabel({this.latestVersionLoader, super.key});
+  const PasswordVersionLabel({
+    this.latestVersionLoader,
+    this.updateDownloader,
+    super.key,
+  });
 
   final LatestGithubVersionLoader? latestVersionLoader;
+  final UpdatePackageDownloader? updateDownloader;
 
   @override
   State<PasswordVersionLabel> createState() => _PasswordVersionLabelState();
@@ -133,6 +307,7 @@ class PasswordVersionLabel extends StatefulWidget {
 
 class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
   String? latestGithubVersion;
+  bool downloadStarting = false;
 
   @override
   void initState() {
@@ -156,21 +331,136 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
     setState(() => latestGithubVersion = latest!.trim());
   }
 
+  Future<void> offerUpdate() async {
+    final latest = latestGithubVersion;
+    if (latest == null ||
+        downloadStarting ||
+        !isVersionNewer(latest, currentAppVersion)) {
+      return;
+    }
+    final package = updatePackageForPlatform(defaultTargetPlatform, latest);
+    if (package == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Обновления для этой системы пока недоступны'),
+        ),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Доступно обновление'),
+        content: Text(
+          'Доступна версия $latest для ${package.platformLabel}. '
+          'Скачать установочный файл?',
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          SizedBox(
+            width: 54,
+            child: FilledButton(
+              key: const Key('cancelUpdateDownload'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xffc62828),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Icon(Icons.close),
+            ),
+          ),
+          SizedBox(
+            width: 54,
+            child: FilledButton(
+              key: const Key('confirmUpdateDownload'),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xff2e7d32),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 10),
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Icon(Icons.check),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() => downloadStarting = true);
+    try {
+      final savedTo = await (widget.updateDownloader ?? downloadUpdatePackage)(
+        package,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('Скачивание начато: $savedTo')),
+        );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(content: Text('Не удалось скачать обновление: $error')),
+        );
+    } finally {
+      if (mounted) setState(() => downloadStarting = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final latest = latestGithubVersion;
-    return Text(
-      latest == null
-          ? 'v. $currentAppVersion'
-          : 'v. $currentAppVersion / $latest',
-      maxLines: 1,
-      softWrap: false,
-      overflow: TextOverflow.fade,
-      style: const TextStyle(
-        color: Color(0xffeeeeee),
-        fontSize: 11,
-        fontWeight: FontWeight.normal,
-      ),
+    final updateAvailable = latest != null &&
+        isVersionNewer(latest, currentAppVersion) &&
+        updatePackageForPlatform(defaultTargetPlatform, latest) != null;
+    const versionStyle = TextStyle(
+      color: Color(0xffeeeeee),
+      fontSize: 11,
+      fontWeight: FontWeight.normal,
+    );
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Text('v. $currentAppVersion', style: versionStyle),
+        if (latest != null) ...[
+          const Text(' / ', style: versionStyle),
+          Semantics(
+            button: updateAvailable,
+            label: updateAvailable
+                ? 'Скачать обновление Wallet APS $latest'
+                : 'Последняя версия Wallet APS $latest',
+            child: Tooltip(
+              message: updateAvailable
+                  ? 'Скачать обновление'
+                  : 'Установлена актуальная версия',
+              child: InkWell(
+                key: const Key('availableGithubVersion'),
+                onTap: updateAvailable ? offerUpdate : null,
+                borderRadius: BorderRadius.circular(3),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 2),
+                  child: Text(
+                    latest,
+                    maxLines: 1,
+                    softWrap: false,
+                    style: versionStyle.copyWith(
+                      color: updateAvailable
+                          ? const Color(0xffff3b30)
+                          : versionStyle.color,
+                      fontWeight:
+                          updateAvailable ? FontWeight.bold : FontWeight.normal,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -185,9 +475,218 @@ Map<String, Uint8List> spbEmbeddedIconPngs = {};
 List<String> thirdPartyIconAssets = [];
 Future<List<String>>? thirdPartyIconAssetsFuture;
 Map<String, Uint8List> thirdPartyIconPngs = {};
+Map<String, Uint8List> thirdPartyComparablePngs = {};
+Directory? userThirdPartyIconDirectoryOverride;
 List<String> brandIconAssets = [];
 Future<List<String>>? brandIconAssetsFuture;
 Map<String, Uint8List> brandIconPngs = {};
+
+enum IconCatalogKind { spb, pictograms, brands, thirdParty }
+
+extension IconCatalogKindUi on IconCatalogKind {
+  String get storageKey => switch (this) {
+        IconCatalogKind.spb => 'spb',
+        IconCatalogKind.pictograms => 'pictograms',
+        IconCatalogKind.brands => 'brands',
+        IconCatalogKind.thirdParty => 'thirdParty',
+      };
+
+  String get label => switch (this) {
+        IconCatalogKind.spb => 'Иконки SPB',
+        IconCatalogKind.pictograms => 'Пиктограммы',
+        IconCatalogKind.brands => 'Бренды',
+        IconCatalogKind.thirdParty => 'Сторонние',
+      };
+
+  IconData get icon => switch (this) {
+        IconCatalogKind.spb => Icons.account_balance_wallet_outlined,
+        IconCatalogKind.pictograms => Icons.category_outlined,
+        IconCatalogKind.brands => Icons.storefront_outlined,
+        IconCatalogKind.thirdParty => Icons.public_outlined,
+      };
+}
+
+IconCatalogKind? iconCatalogKindFromStorageKey(String value) {
+  for (final kind in IconCatalogKind.values) {
+    if (kind.storageKey == value) return kind;
+  }
+  return null;
+}
+
+class ManagedIconDragData {
+  const ManagedIconDragData(this.iconId);
+
+  final String iconId;
+}
+
+Map<String, IconCatalogKind> managedIconLocations = {};
+Set<String> hiddenManagedIconIds = {};
+Future<void>? managedIconLibraryFuture;
+Directory? managedIconCatalogStateDirectoryOverride;
+Future<void> _managedIconStateWriteQueue = Future<void>.value();
+
+Future<Directory> managedIconCatalogStateDirectory({
+  bool create = false,
+}) async {
+  final override = managedIconCatalogStateDirectoryOverride;
+  final directory = override ??
+      Directory(
+        '${(await getApplicationSupportDirectory()).path}'
+        '${Platform.pathSeparator}Wallet APS'
+        '${Platform.pathSeparator}IconCatalog',
+      );
+  if (create && !await directory.exists()) {
+    await directory.create(recursive: true);
+  }
+  return directory;
+}
+
+Future<File> managedIconCatalogStateFile({bool create = false}) async {
+  final directory = await managedIconCatalogStateDirectory(create: create);
+  return File(
+    '${directory.path}${Platform.pathSeparator}catalog.json',
+  );
+}
+
+IconCatalogKind defaultManagedIconCatalog(String iconId) {
+  if (iconId.startsWith('spb://')) return IconCatalogKind.spb;
+  if (iconId.startsWith('brand://')) return IconCatalogKind.brands;
+  if (iconId.startsWith('third-party://')) {
+    return IconCatalogKind.thirdParty;
+  }
+  return IconCatalogKind.pictograms;
+}
+
+IconCatalogKind managedIconCatalogFor(String iconId) =>
+    managedIconLocations[iconId] ?? defaultManagedIconCatalog(iconId);
+
+Set<String> allManagedIconIds() => <String>{
+      ...spb64PngIconAssets,
+      ...templateIcons.map((entry) => entry.id),
+      ...brandIconAssets,
+      ...thirdPartyIconAssets,
+    };
+
+List<String> managedIconIdsFor(IconCatalogKind kind) => allManagedIconIds()
+    .where(
+      (iconId) =>
+          !hiddenManagedIconIds.contains(iconId) &&
+          managedIconCatalogFor(iconId) == kind,
+    )
+    .toList(growable: false);
+
+Future<void> loadManagedIconLibrary() {
+  return managedIconLibraryFuture ??= () async {
+    if (spb64PngIconAssets.isEmpty) await loadSpb64PngIconAssets();
+    if (brandIconAssets.isEmpty) await loadBrandIconAssets();
+    if (thirdPartyIconAssets.isEmpty) await loadThirdPartyIconAssets();
+    final locations = <String, IconCatalogKind>{};
+    final hidden = <String>{};
+    try {
+      final stateFile = await managedIconCatalogStateFile();
+      if (await stateFile.exists()) {
+        final decoded = jsonDecode(await stateFile.readAsString());
+        if (decoded is Map) {
+          final rawLocations = decoded['locations'];
+          if (rawLocations is Map) {
+            for (final entry in rawLocations.entries) {
+              final iconId = entry.key.toString();
+              final kind = iconCatalogKindFromStorageKey(
+                entry.value.toString(),
+              );
+              if (iconId.isNotEmpty && kind != null) {
+                locations[iconId] = kind;
+              }
+            }
+          }
+          final rawHidden = decoded['hidden'];
+          if (rawHidden is List) {
+            hidden.addAll(
+              rawHidden.map((entry) => entry.toString()).where(
+                    (entry) => entry.isNotEmpty,
+                  ),
+            );
+          }
+        }
+      }
+    } catch (_) {
+      // The bundled catalogs remain usable when the optional state is bad.
+    }
+    managedIconLocations = locations;
+    hiddenManagedIconIds = hidden;
+  }();
+}
+
+Future<void> saveManagedIconLibraryState() {
+  final operation = _managedIconStateWriteQueue.then(
+    (_) => _writeManagedIconLibraryState(),
+  );
+  _managedIconStateWriteQueue = operation.then<void>(
+    (_) {},
+    onError: (Object _, StackTrace __) {},
+  );
+  return operation;
+}
+
+Future<void> _writeManagedIconLibraryState() async {
+  final stateFile = await managedIconCatalogStateFile(create: true);
+  final locations = managedIconLocations.entries.toList()
+    ..sort((a, b) => a.key.compareTo(b.key));
+  final hidden = hiddenManagedIconIds.toList()..sort();
+  final temporary = File(
+    '${stateFile.path}.${DateTime.now().microsecondsSinceEpoch}.part',
+  );
+  try {
+    await temporary.writeAsString(
+      const JsonEncoder.withIndent('  ').convert({
+        'version': 1,
+        'locations': {
+          for (final entry in locations) entry.key: entry.value.storageKey,
+        },
+        'hidden': hidden,
+      }),
+      flush: true,
+    );
+    if (await stateFile.exists()) await stateFile.delete();
+    await temporary.rename(stateFile.path);
+  } finally {
+    if (await temporary.exists()) await temporary.delete();
+  }
+}
+
+String spbPickerLogicalIconKey(String iconId) => iconId
+    .replaceFirst(RegExp(r'/res/drawable[^/]*/'), '/res/drawable/')
+    .toLowerCase();
+
+int spbPickerVariantPriority(String iconId) {
+  if (iconId.contains('/drawable-hdpi/')) return 0;
+  if (iconId.contains('/drawable-large-hdpi/')) return 1;
+  if (iconId.contains('/drawable-large-mdpi/')) return 2;
+  return 3;
+}
+
+const managedSpbPreviewDrawableDirectory = 'drawable-large-hdpi';
+
+String spbIconIdForDrawableDirectory(String iconId, String directory) {
+  if (!iconId.startsWith('spb://')) return iconId;
+  return iconId.replaceFirst(
+    RegExp(r'/res/drawable[^/]*/'),
+    '/res/$directory/',
+  );
+}
+
+List<String> deduplicateSpbPickerIconIds(Iterable<String> iconIds) {
+  final selectedByLogicalIcon = <String, String>{};
+  for (final iconId in iconIds) {
+    final key = spbPickerLogicalIconKey(iconId);
+    final selected = selectedByLogicalIcon[key];
+    if (selected == null ||
+        spbPickerVariantPriority(iconId) < spbPickerVariantPriority(selected)) {
+      selectedByLogicalIcon[key] = iconId;
+    }
+  }
+  return selectedByLogicalIcon.values.toList(growable: false);
+}
 
 Future<List<String>> loadSpb64PngIconAssets() {
   return spb64PngIconAssetsFuture ??= () async {
@@ -210,18 +709,242 @@ Future<List<String>> loadSpb64PngIconAssets() {
     }
     spbBundledIconPngs = packedIcons;
     final manifest = pickerManifest ?? '';
-    spb64PngIconAssets = manifest
-        .split(RegExp(r'\r?\n'))
-        .map((path) => normalizeSpbPackedIconId(path.trim()))
-        .where(
-          (path) =>
-              path.toLowerCase().endsWith('.png') &&
-              packedIcons.containsKey(path),
-        )
-        .toSet()
-        .toList(growable: false);
+    spb64PngIconAssets = deduplicateSpbPickerIconIds(
+      manifest
+          .split(RegExp(r'\r?\n'))
+          .map((path) => normalizeSpbPackedIconId(path.trim()))
+          .where(
+            (path) =>
+                path.toLowerCase().endsWith('.png') &&
+                packedIcons.containsKey(path),
+          ),
+    );
     return spb64PngIconAssets;
   }();
+}
+
+const userThirdPartyIconPrefix = 'third-party://User/';
+Future<void> _thirdPartyIconRegistrationQueue = Future<void>.value();
+
+class ThirdPartyIconRegistration {
+  const ThirdPartyIconRegistration({
+    required this.iconId,
+    required this.bytes,
+    required this.fileName,
+    required this.added,
+  });
+
+  final String iconId;
+  final Uint8List bytes;
+  final String fileName;
+  final bool added;
+}
+
+Future<Directory> userThirdPartyIconDirectory({bool create = false}) async {
+  final override = userThirdPartyIconDirectoryOverride;
+  final directory = override ??
+      Directory(
+        '${(await getApplicationSupportDirectory()).path}'
+        '${Platform.pathSeparator}Wallet APS'
+        '${Platform.pathSeparator}ThirdPartyIcons',
+      );
+  if (create && !await directory.exists()) {
+    await directory.create(recursive: true);
+  }
+  return directory;
+}
+
+bool _sameBytes(Uint8List first, Uint8List second) {
+  if (identical(first, second)) return true;
+  if (first.length != second.length) return false;
+  for (var index = 0; index < first.length; index++) {
+    if (first[index] != second[index]) return false;
+  }
+  return true;
+}
+
+Uint8List? comparableThirdPartyIconPng(Uint8List bytes) {
+  final decoded = decodeUserIconImage(bytes);
+  return decoded == null ? null : normalizeUserIconPng(decoded);
+}
+
+String? matchingThirdPartyIconId(Uint8List normalizedPng) {
+  return matchingThirdPartyIconIdIn(
+    thirdPartyIconPngs,
+    thirdPartyComparablePngs,
+    normalizedPng,
+  );
+}
+
+String? matchingThirdPartyIconIdIn(
+  Map<String, Uint8List> icons,
+  Map<String, Uint8List> comparableIcons,
+  Uint8List normalizedPng,
+) {
+  for (final entry in icons.entries) {
+    final comparable = comparableIcons[entry.key] ??=
+        comparableThirdPartyIconPng(entry.value) ?? entry.value;
+    if (_sameBytes(comparable, normalizedPng)) return entry.key;
+  }
+  return null;
+}
+
+String thirdPartyIconFileName(String originalName) {
+  final pngName = pngIconFileName(originalName);
+  final dot = pngName.lastIndexOf('.');
+  final rawBase = dot > 0 ? pngName.substring(0, dot) : pngName;
+  final safeBase = rawBase
+      .replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_')
+      .replaceAll(RegExp(r'[. ]+$'), '')
+      .trim();
+  return '${safeBase.isEmpty ? 'icon' : safeBase}.png';
+}
+
+String fileNameFromPath(String path) {
+  final segments = path.split(RegExp(r'[\\/]'));
+  return segments.isEmpty ? path : segments.last;
+}
+
+String decodeUriComponentOrOriginal(String value) {
+  try {
+    return Uri.decodeComponent(value);
+  } on ArgumentError {
+    return value;
+  }
+}
+
+Future<File> availableThirdPartyIconFile(
+  Directory directory,
+  String requestedName,
+) async {
+  final safeName = thirdPartyIconFileName(requestedName);
+  final baseName = safeName.substring(0, safeName.length - 4);
+  for (var suffix = 0; suffix < 10000; suffix++) {
+    final name = suffix == 0 ? safeName : '$baseName ($suffix).png';
+    final candidate = File('${directory.path}${Platform.pathSeparator}$name');
+    if (!await candidate.exists()) return candidate;
+  }
+  throw const FileSystemException(
+    'Не удалось выбрать имя файла сторонней иконки',
+  );
+}
+
+Future<ThirdPartyIconRegistration> registerUserThirdPartyIcon(
+  Uint8List sourceBytes,
+  String sourceName, {
+  Directory? storageDirectory,
+  bool ensureCatalogLoaded = true,
+}) {
+  final operation = _thirdPartyIconRegistrationQueue.then(
+    (_) => _registerUserThirdPartyIcon(
+      sourceBytes,
+      sourceName,
+      storageDirectory: storageDirectory,
+      ensureCatalogLoaded: ensureCatalogLoaded,
+    ),
+  );
+  _thirdPartyIconRegistrationQueue = operation.then<void>(
+    (_) {},
+    onError: (Object _, StackTrace __) {},
+  );
+  return operation;
+}
+
+Future<ThirdPartyIconRegistration> _registerUserThirdPartyIcon(
+  Uint8List sourceBytes,
+  String sourceName, {
+  Directory? storageDirectory,
+  required bool ensureCatalogLoaded,
+}) async {
+  final decoded = decodeUserIconImage(sourceBytes);
+  if (decoded == null) {
+    throw const FormatException('Формат изображения не поддерживается.');
+  }
+  final normalized = normalizeUserIconPng(decoded);
+  if (ensureCatalogLoaded) await loadThirdPartyIconAssets();
+
+  final duplicateId = matchingThirdPartyIconId(normalized);
+  if (duplicateId != null) {
+    return ThirdPartyIconRegistration(
+      iconId: duplicateId,
+      bytes: normalized,
+      fileName: duplicateId.split('/').last,
+      added: false,
+    );
+  }
+
+  final directory =
+      storageDirectory ?? await userThirdPartyIconDirectory(create: true);
+  if (!await directory.exists()) await directory.create(recursive: true);
+  final destination = await availableThirdPartyIconFile(directory, sourceName);
+  final temporary = File(
+    '${destination.path}.${DateTime.now().microsecondsSinceEpoch}.part',
+  );
+  try {
+    await temporary.writeAsBytes(normalized, flush: true);
+    await temporary.rename(destination.path);
+  } finally {
+    if (await temporary.exists()) await temporary.delete();
+  }
+
+  final storedFileName = fileNameFromPath(destination.path);
+  final iconId = '$userThirdPartyIconPrefix$storedFileName';
+  thirdPartyIconPngs[iconId] = normalized;
+  thirdPartyComparablePngs[iconId] = normalized;
+  thirdPartyIconAssets = thirdPartyIconPngs.keys.toList(growable: false)
+    ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+  thirdPartyIconAssetsFuture = Future.value(thirdPartyIconAssets);
+  return ThirdPartyIconRegistration(
+    iconId: iconId,
+    bytes: normalized,
+    fileName: storedFileName,
+    added: true,
+  );
+}
+
+void showThirdPartyIconRegistrationMessage(
+  BuildContext context,
+  ThirdPartyIconRegistration registration,
+) {
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(
+      SnackBar(
+        content: Text(
+          registration.added
+              ? 'Иконка добавлена в каталог «Сторонние».'
+              : 'Такая иконка уже есть в каталоге «Сторонние».',
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+}
+
+Future<ThirdPartyIconRegistration?> registerUserThirdPartyIconWithFeedback(
+  BuildContext context,
+  Uint8List bytes,
+  String fileName,
+) async {
+  try {
+    final registration = await registerUserThirdPartyIcon(bytes, fileName);
+    if (context.mounted) {
+      showThirdPartyIconRegistrationMessage(context, registration);
+    }
+    return registration;
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              'Не удалось добавить иконку в каталог «Сторонние»: $error',
+            ),
+          ),
+        );
+    }
+    return null;
+  }
 }
 
 Future<List<String>> loadThirdPartyIconAssets() {
@@ -240,6 +963,45 @@ Future<List<String>> loadThirdPartyIconAssets() {
       packedIcons['third-party://$normalizedName'] = Uint8List.fromList(
         file.content,
       );
+    }
+    thirdPartyComparablePngs = {};
+    try {
+      final directory = await userThirdPartyIconDirectory();
+      if (await directory.exists()) {
+        final files = await directory
+            .list(followLinks: false)
+            .where((entry) =>
+                entry is File && entry.path.toLowerCase().endsWith('.png'))
+            .cast<File>()
+            .toList();
+        files.sort(
+          (a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()),
+        );
+        for (final file in files) {
+          try {
+            final normalized = comparableThirdPartyIconPng(
+              await file.readAsBytes(),
+            );
+            if (normalized == null) continue;
+            if (matchingThirdPartyIconIdIn(
+                  packedIcons,
+                  thirdPartyComparablePngs,
+                  normalized,
+                ) !=
+                null) {
+              continue;
+            }
+            final name = fileNameFromPath(file.path);
+            final iconId = '$userThirdPartyIconPrefix$name';
+            packedIcons[iconId] = normalized;
+            thirdPartyComparablePngs[iconId] = normalized;
+          } catch (_) {
+            // An unreadable file must not hide the bundled icon catalog.
+          }
+        }
+      }
+    } catch (_) {
+      // The bundled catalog remains available if app storage is inaccessible.
     }
     thirdPartyIconPngs = packedIcons;
     thirdPartyIconAssets = packedIcons.keys.toList(growable: false)
@@ -1825,30 +2587,21 @@ Uint8List normalizeUserIconPng(image.Image source, {int size = 128}) {
         cornerY != null &&
         ((x - cornerX) * (x - cornerX) + (y - cornerY) * (y - cornerY) >
             radiusSquared);
+    final alpha = outsideRoundedCorner ? 0 : pixel.a.toInt();
     canvas.setPixelRgba(
       offsetX + x,
       offsetY + y,
-      pixel.r,
-      pixel.g,
-      pixel.b,
-      outsideRoundedCorner ? 0 : pixel.a,
+      alpha == 0 ? 0 : pixel.r,
+      alpha == 0 ? 0 : pixel.g,
+      alpha == 0 ? 0 : pixel.b,
+      alpha,
     );
   }
   return Uint8List.fromList(image.encodePng(canvas));
 }
 
-Uint8List normalizeDroppedIconPng(image.Image source, {int maxSide = 128}) {
-  final scale = maxSide / max(source.width, source.height);
-  final width = max(1, (source.width * scale).round());
-  final height = max(1, (source.height * scale).round());
-  final resized = image.copyResize(
-    source,
-    width: width,
-    height: height,
-    interpolation: image.Interpolation.cubic,
-  );
-  return Uint8List.fromList(image.encodePng(resized));
-}
+Uint8List normalizeDroppedIconPng(image.Image source, {int maxSide = 128}) =>
+    normalizeUserIconPng(source, size: maxSide);
 
 image.Image? decodeUserIconImage(Uint8List bytes) {
   try {
@@ -2051,7 +2804,7 @@ class ExternalImageDropTarget extends StatefulWidget {
   });
 
   final Widget child;
-  final void Function(Uint8List pngBytes, String fileName) onImage;
+  final FutureOr<void> Function(Uint8List pngBytes, String fileName) onImage;
   final bool enableClipboardPaste;
 
   @override
@@ -2072,8 +2825,10 @@ class _ExternalImageDropTargetState extends State<ExternalImageDropTarget> {
       if (decoded == null) {
         throw const FormatException('Формат изображения не поддерживается.');
       }
-      widget.onImage(
-          normalizeDroppedIconPng(decoded), pngIconFileName(sourceName));
+      await widget.onImage(
+        normalizeDroppedIconPng(decoded),
+        pngIconFileName(sourceName),
+      );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3694,6 +4449,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   String selectedCategoryPath = '';
   String? selectedCategoryId;
   bool mobileTemplatesOpen = false;
+  bool iconLibraryOpen = false;
+  bool iconLibraryLoading = false;
+  Object? iconLibraryLoadError;
+  IconCatalogKind selectedIconCatalog = IconCatalogKind.spb;
+  String? selectedManagedIconId;
   String? selectedTemplateId;
   final Set<String> selectedTemplateIds = {};
   int mobilePane = 0;
@@ -3710,14 +4470,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   bool spbContextMenuOpen = false;
   final GlobalKey spbSessionUndoButtonKey = GlobalKey();
   final GlobalKey spbSessionTrashButtonKey = GlobalKey();
+  final ScrollController spbNavigatorScrollController = ScrollController();
   final ScrollController spbFolderGridScrollController = ScrollController();
+  final ScrollController spbTemplateGridScrollController = ScrollController();
+  final ScrollController spbIconGridScrollController = ScrollController();
   final GlobalKey spbCardMarqueeWorkspaceKey = GlobalKey();
   final Map<String, GlobalKey> spbGridEntryKeys = {};
   Offset? spbCardMarqueeStartGlobal;
   Offset? spbCardMarqueeCurrentGlobal;
   final Set<String> spbCardMarqueeBaseSelection = {};
   final ScrollController spbFoundScrollController = ScrollController();
-  final ScrollController spbFrequentScrollController = ScrollController();
+  final ScrollController spbActionsPanelScrollController = ScrollController();
   final ScrollController spbMobileActionsScrollController = ScrollController();
   Timer? inactivityTimer;
   Timer? inactivityCountdownTimer;
@@ -3975,9 +4738,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     passwordController.dispose();
     confirmController.dispose();
     searchController.dispose();
+    spbNavigatorScrollController.dispose();
     spbFolderGridScrollController.dispose();
+    spbTemplateGridScrollController.dispose();
+    spbIconGridScrollController.dispose();
     spbFoundScrollController.dispose();
-    spbFrequentScrollController.dispose();
+    spbActionsPanelScrollController.dispose();
     spbMobileActionsScrollController.dispose();
     passwordFocusNode.dispose();
     spbCentralWorkspaceFocusNode.dispose();
@@ -4312,6 +5078,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     setState(() {
       unlocked = false;
       entryMode = EntryMode.openSwl;
+      mobileTemplatesOpen = false;
+      iconLibraryOpen = false;
+      mobilePane = 0;
       message = null;
     });
     return true;
@@ -6129,6 +6898,22 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       key: const Key('spbFolderGridScrollbar'),
       controller: spbFolderGridScrollController,
       thumbVisibility: true,
+      trackVisibility: true,
+      interactive: true,
+      child: child,
+    );
+  }
+
+  Widget spbTemplateGridScrollbar({
+    required bool enabled,
+    required Widget child,
+  }) {
+    if (!enabled) return child;
+    return Scrollbar(
+      key: const Key('spbTemplateGridScrollbar'),
+      controller: spbTemplateGridScrollController,
+      thumbVisibility: true,
+      trackVisibility: true,
       interactive: true,
       child: child,
     );
@@ -6531,7 +7316,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       spbExactSearch = false;
       if (query.isNotEmpty &&
           (defaultTargetPlatform == TargetPlatform.android || narrowLayout)) {
-        mobileTemplatesOpen = false;
+        if (!iconLibraryOpen) mobileTemplatesOpen = false;
         mobilePane = 1;
       }
     });
@@ -6792,9 +7577,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                               focusNode: spbCentralWorkspaceFocusNode,
                               onKeyEvent: handleSpbCentralWorkspaceKeyEvent,
                               child: spbWorkspaceScrollbarTheme(
-                                mobileTemplatesOpen
-                                    ? buildSpbTemplateWorkspace()
-                                    : buildSpbFolderGrid(),
+                                iconLibraryOpen
+                                    ? buildSpbIconWorkspace(
+                                        showPersistentScrollbar: true,
+                                      )
+                                    : mobileTemplatesOpen
+                                        ? buildSpbTemplateWorkspace(
+                                            showPersistentScrollbar: true,
+                                          )
+                                        : buildSpbFolderGrid(
+                                            showPersistentScrollbar: true,
+                                          ),
                               ),
                             ),
                           ),
@@ -6929,7 +7722,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               ),
             ),
             buildSpbSearchBar(mobile: true),
-            if (mobilePane == 0 && mobileTemplatesOpen)
+            if (mobilePane == 0 && (mobileTemplatesOpen || iconLibraryOpen))
               buildSpbModeButton(
                 key: const Key('spbMyCardsModeButton'),
                 label: 'Мои карточки',
@@ -6938,26 +7731,45 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 onTap: showSpbCardsMode,
                 opensRootCreationMenu: true,
               ),
+            if (mobilePane == 0 && iconLibraryOpen)
+              buildSpbModeButton(
+                key: const Key('spbTemplatesModeButton'),
+                label: 'Шаблоны',
+                iconFile: 'icon_templates.png',
+                selected: false,
+                onTap: showSpbTemplatesMode,
+              ),
             Expanded(
               child: spbWorkspaceScrollbarTheme(
-                mobileTemplatesOpen
+                iconLibraryOpen
                     ? switch (mobilePane) {
-                        1 => buildSpbTemplateWorkspace(showHeader: false),
-                        2 => buildSpbActionsPanel(),
-                        _ => buildSpbTemplateTree(),
-                      }
-                    : switch (mobilePane) {
-                        1 => buildSpbFolderGrid(
+                        1 => buildSpbIconWorkspace(
                             showPersistentScrollbar: true,
-                            allowItemDragging: false,
                           ),
                         2 => buildSpbActionsPanel(),
-                        _ => buildSpbTreeBody(showWalletRoot: false),
-                      },
+                        _ => buildSpbIconCatalogTree(),
+                      }
+                    : mobileTemplatesOpen
+                        ? switch (mobilePane) {
+                            1 => buildSpbTemplateWorkspace(
+                                showHeader: false,
+                                showPersistentScrollbar: true,
+                              ),
+                            2 => buildSpbActionsPanel(),
+                            _ => buildSpbTemplateTree(),
+                          }
+                        : switch (mobilePane) {
+                            1 => buildSpbFolderGrid(
+                                showPersistentScrollbar: true,
+                                allowItemDragging: false,
+                              ),
+                            2 => buildSpbActionsPanel(),
+                            _ => buildSpbTreeBody(showWalletRoot: false),
+                          },
               ),
             ),
             if (mobilePane == 0) ...[
-              if (!mobileTemplatesOpen)
+              if (!mobileTemplatesOpen && !iconLibraryOpen)
                 buildSpbModeButton(
                   key: const Key('spbMyCardsModeButton'),
                   label: 'Мои карточки',
@@ -6966,11 +7778,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   onTap: showSpbCardsMode,
                   opensRootCreationMenu: true,
                 ),
+              if (!iconLibraryOpen)
+                buildSpbModeButton(
+                  key: const Key('spbTemplatesModeButton'),
+                  label: 'Шаблоны',
+                  iconFile: 'icon_templates.png',
+                  selected: mobileTemplatesOpen,
+                  onTap: showSpbTemplatesMode,
+                ),
               buildSpbModeButton(
-                label: 'Шаблоны',
-                iconFile: 'icon_templates.png',
-                selected: mobileTemplatesOpen,
-                onTap: showSpbTemplatesMode,
+                key: const Key('spbIconsModeButton'),
+                label: 'Иконки',
+                icon: Icons.collections_outlined,
+                selected: iconLibraryOpen,
+                onTap: showSpbIconsMode,
               ),
             ],
             buildSpbMobileArrows(
@@ -7006,6 +7827,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             key: const Key('mobileFolderUp'),
             icon: Icons.arrow_drop_up,
             onPressed: !mobileTemplatesOpen &&
+                    !iconLibraryOpen &&
                     mobilePane == 1 &&
                     selectedCategoryPath.isNotEmpty
                 ? openParentSpbFolder
@@ -7033,6 +7855,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ? size.height >= size.width
         : size.width < 700;
     setState(() {
+      iconLibraryOpen = false;
       selectedCategoryPath = path;
       selectedCategoryId = categoryIdsByPath[path];
       if (mobile) mobilePane = 1;
@@ -7042,6 +7865,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   void showSpbCardsMode() {
     setState(() {
       mobileTemplatesOpen = false;
+      iconLibraryOpen = false;
       mobilePane = 0;
     });
   }
@@ -7050,6 +7874,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     searchController.clear();
     setState(() {
       mobileTemplatesOpen = true;
+      iconLibraryOpen = false;
       mobilePane = 0;
       spbSubmittedSearchQuery = '';
       if (templates.isNotEmpty &&
@@ -7057,6 +7882,40 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         selectedTemplateId = templates.first.id;
       }
     });
+  }
+
+  void showSpbIconsMode() {
+    searchController.clear();
+    setState(() {
+      mobileTemplatesOpen = false;
+      iconLibraryOpen = true;
+      mobilePane = 0;
+      spbSubmittedSearchQuery = '';
+    });
+    unawaited(ensureManagedIconLibraryLoaded());
+  }
+
+  Future<void> ensureManagedIconLibraryLoaded() async {
+    if (iconLibraryLoading) return;
+    setState(() {
+      iconLibraryLoading = true;
+      iconLibraryLoadError = null;
+    });
+    try {
+      await loadManagedIconLibrary();
+      if (!mounted) return;
+      setState(() {
+        iconLibraryLoading = false;
+        iconLibraryLoadError = null;
+      });
+    } catch (error) {
+      managedIconLibraryFuture = null;
+      if (!mounted) return;
+      setState(() {
+        iconLibraryLoading = false;
+        iconLibraryLoadError = error;
+      });
+    }
   }
 
   Widget buildSpbNavigator() {
@@ -7096,7 +7955,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               ),
             ),
           ),
-          if (mobileTemplatesOpen)
+          if (mobileTemplatesOpen || iconLibraryOpen)
             buildSpbModeButton(
               key: const Key('spbMyCardsModeButton'),
               label: 'Мои карточки',
@@ -7105,12 +7964,39 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               onTap: showSpbCardsMode,
               opensRootCreationMenu: true,
             ),
+          if (iconLibraryOpen)
+            buildSpbModeButton(
+              key: const Key('spbTemplatesModeButton'),
+              label: 'Шаблоны',
+              iconFile: 'icon_templates.png',
+              selected: false,
+              onTap: showSpbTemplatesMode,
+            ),
           Expanded(
-            child: mobileTemplatesOpen
-                ? buildSpbTemplateTree(compactRows: true)
-                : buildSpbTreeBody(compactRows: true, showWalletRoot: false),
+            child: Scrollbar(
+              key: const Key('spbNavigatorScrollbar'),
+              controller: spbNavigatorScrollController,
+              thumbVisibility: true,
+              trackVisibility: true,
+              interactive: true,
+              child: iconLibraryOpen
+                  ? buildSpbIconCatalogTree(
+                      compactRows: true,
+                      scrollController: spbNavigatorScrollController,
+                    )
+                  : mobileTemplatesOpen
+                      ? buildSpbTemplateTree(
+                          compactRows: true,
+                          scrollController: spbNavigatorScrollController,
+                        )
+                      : buildSpbTreeBody(
+                          compactRows: true,
+                          showWalletRoot: false,
+                          scrollController: spbNavigatorScrollController,
+                        ),
+            ),
           ),
-          if (!mobileTemplatesOpen)
+          if (!mobileTemplatesOpen && !iconLibraryOpen)
             buildSpbModeButton(
               key: const Key('spbMyCardsModeButton'),
               label: 'Мои карточки',
@@ -7119,11 +8005,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               onTap: showSpbCardsMode,
               opensRootCreationMenu: true,
             ),
+          if (!iconLibraryOpen)
+            buildSpbModeButton(
+              key: const Key('spbTemplatesModeButton'),
+              label: 'Шаблоны',
+              iconFile: 'icon_templates.png',
+              selected: mobileTemplatesOpen,
+              onTap: showSpbTemplatesMode,
+            ),
           buildSpbModeButton(
-            label: 'Шаблоны',
-            iconFile: 'icon_templates.png',
-            selected: mobileTemplatesOpen,
-            onTap: showSpbTemplatesMode,
+            key: const Key('spbIconsModeButton'),
+            label: 'Иконки',
+            icon: Icons.collections_outlined,
+            selected: iconLibraryOpen,
+            onTap: showSpbIconsMode,
           ),
         ],
       ),
@@ -7133,7 +8028,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Widget buildSpbModeButton({
     Key? key,
     required String label,
-    required String iconFile,
+    String? iconFile,
+    IconData? icon,
     required bool selected,
     required VoidCallback onTap,
     bool opensRootCreationMenu = false,
@@ -7146,7 +8042,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       ),
       child: Row(
         children: [
-          spbResourceIcon(iconFile, 40),
+          iconFile == null
+              ? Icon(
+                  icon ?? Icons.folder_outlined,
+                  size: 37,
+                  color: const Color(0xff33434f),
+                )
+              : spbResourceIcon(iconFile, 40),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -7199,6 +8101,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     searchController.clear();
     setState(() {
       mobileTemplatesOpen = false;
+      iconLibraryOpen = false;
       mobilePane = 0;
       spbSubmittedSearchQuery = '';
       selectedCategoryPath = '';
@@ -7285,6 +8188,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Widget buildSpbTreeBody({
     bool compactRows = false,
     bool showWalletRoot = true,
+    ScrollController? scrollController,
   }) {
     final query = searchController.text.trim();
     final root = buildCategoryTree(
@@ -7293,7 +8197,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       additionalPaths: query.isEmpty ? const [] : spbMatchingFolderPaths(query),
     );
     return ListView(
-      padding: const EdgeInsets.fromLTRB(5, 10, 5, 12),
+      controller: scrollController,
+      padding: EdgeInsets.fromLTRB(
+        5,
+        10,
+        scrollController == null ? 5 : 18,
+        12,
+      ),
       children: [
         if (showWalletRoot)
           Theme(
@@ -7677,11 +8587,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     if (event is KeyRepeatEvent) return KeyEventResult.handled;
     if (event is! KeyDownEvent ||
         !spbWideMultiSelectEnabled ||
-        mobileTemplatesOpen ||
         spbContextMenuOpen ||
         ModalRoute.of(context)?.isCurrent != true) {
       return KeyEventResult.ignored;
     }
+    if (iconLibraryOpen) {
+      final iconId = selectedManagedIconId;
+      if (iconId == null) return KeyEventResult.ignored;
+      unawaited(deleteManagedIconWithConfirmation(iconId));
+      return KeyEventResult.handled;
+    }
+    if (mobileTemplatesOpen) return KeyEventResult.ignored;
     final selectedCards = selectedSpbCardsForKeyboardDelete();
     if (selectedCards.isEmpty) return KeyEventResult.ignored;
     if (selectedCards.length == 1) {
@@ -7735,7 +8651,614 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     ];
   }
 
-  Widget buildSpbTemplateTree({bool compactRows = false}) {
+  String managedIconLabel(String iconId) {
+    for (final icon in templateIcons) {
+      if (icon.id == iconId) return icon.label;
+    }
+    final rawName = iconId.split('/').last;
+    final decodedName = iconId.startsWith(userThirdPartyIconPrefix)
+        ? rawName
+        : decodeUriComponentOrOriginal(rawName);
+    return decodedName.replaceFirst(RegExp(r'\.[^.]+$'), '');
+  }
+
+  Widget managedIconWidget(String iconId, double size) {
+    final bytes = brandIconPngs[iconId] ?? thirdPartyIconPngs[iconId];
+    if (bytes != null) {
+      return Image.memory(
+        bytes,
+        width: size,
+        height: size,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, __, ___) =>
+            Icon(Icons.broken_image_outlined, size: size),
+      );
+    }
+    return spbSizedDataIcon(
+      managedIconPreviewId(iconId),
+      size,
+      fallbackColor: const Color(0xff6f7f89),
+    );
+  }
+
+  String managedIconPreviewId(String iconId) {
+    if (!iconId.startsWith('spb://')) return iconId;
+    final preferred = spbIconIdForDrawableDirectory(
+      iconId,
+      managedSpbPreviewDrawableDirectory,
+    );
+    return spbBundledIconPngs.containsKey(preferred) ? preferred : iconId;
+  }
+
+  void selectManagedIconCatalog(IconCatalogKind kind) {
+    final size = MediaQuery.sizeOf(context);
+    final mobile = defaultTargetPlatform == TargetPlatform.android
+        ? size.height >= size.width
+        : size.width < 700;
+    setState(() {
+      selectedIconCatalog = kind;
+      selectedManagedIconId = null;
+      if (mobile) mobilePane = 1;
+    });
+  }
+
+  Widget buildSpbIconCatalogTree({
+    bool compactRows = false,
+    ScrollController? scrollController,
+  }) {
+    return ListView(
+      controller: scrollController,
+      padding: EdgeInsets.fromLTRB(
+        0,
+        8,
+        scrollController == null ? 0 : 13,
+        8,
+      ),
+      children: [
+        for (final kind in IconCatalogKind.values)
+          DragTarget<ManagedIconDragData>(
+            key: ValueKey('spbIconCatalog-${kind.storageKey}'),
+            onWillAcceptWithDetails: (details) =>
+                managedIconCatalogFor(details.data.iconId) != kind,
+            onAcceptWithDetails: (details) =>
+                unawaited(moveManagedIconTo(details.data.iconId, kind)),
+            builder: (context, candidates, rejected) => Material(
+              color: candidates.isNotEmpty
+                  ? const Color(0xffcce9cf)
+                  : selectedIconCatalog == kind
+                      ? const Color(0xffdbeaf5)
+                      : Colors.transparent,
+              child: ListTile(
+                dense: true,
+                minTileHeight: compactRows ? 43 : null,
+                leading:
+                    Icon(kind.icon, size: 32, color: const Color(0xff33434f)),
+                title: Text(
+                  kind.label,
+                  style: const TextStyle(fontSize: 15),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                trailing: iconLibraryLoading
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Text('${managedIconIdsFor(kind).length}'),
+                onTap: () => selectManagedIconCatalog(kind),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> uploadManagedIcon() async {
+    final picked = await pickUserIconFile(context);
+    if (picked == null || !mounted) return;
+    await addManagedIcon(
+      picked.bytes,
+      picked.fileName,
+      selectedIconCatalog,
+    );
+  }
+
+  Future<void> pasteManagedIcon() async {
+    Uint8List? bytes;
+    try {
+      bytes = await windowChannel.invokeMethod<Uint8List>('readClipboardImage');
+    } catch (_) {}
+    if (!mounted) return;
+    if (bytes == null || bytes.isEmpty) {
+      showSpbOperationMessage('В буфере обмена нет изображения.');
+      return;
+    }
+    final now = DateTime.now();
+    String twoDigits(int value) => value.toString().padLeft(2, '0');
+    await addManagedIcon(
+      bytes,
+      'paste-${now.year}-${twoDigits(now.month)}-${twoDigits(now.day)}-'
+      '${twoDigits(now.hour)}-${twoDigits(now.minute)}.png',
+      selectedIconCatalog,
+    );
+  }
+
+  Future<void> addManagedIcon(
+    Uint8List bytes,
+    String fileName,
+    IconCatalogKind target,
+  ) async {
+    try {
+      final registration = await registerUserThirdPartyIcon(bytes, fileName);
+      if (!registration.added) {
+        final existingCatalog = managedIconCatalogFor(registration.iconId);
+        showSpbOperationMessage(
+          'Такая иконка уже есть в папке «${existingCatalog.label}».',
+        );
+        return;
+      }
+      hiddenManagedIconIds.remove(registration.iconId);
+      if (target == defaultManagedIconCatalog(registration.iconId)) {
+        managedIconLocations.remove(registration.iconId);
+      } else {
+        managedIconLocations[registration.iconId] = target;
+      }
+      await saveManagedIconLibraryState();
+      if (!mounted) return;
+      setState(() {
+        selectedManagedIconId = registration.iconId;
+        selectedIconCatalog = target;
+      });
+      showSpbOperationMessage(
+        'Иконка добавлена в папку «${target.label}».',
+      );
+    } catch (error) {
+      showSpbOperationMessage('Не удалось добавить иконку: $error');
+    }
+  }
+
+  Future<void> moveManagedIconTo(
+    String iconId,
+    IconCatalogKind target,
+  ) async {
+    if (hiddenManagedIconIds.contains(iconId) ||
+        managedIconCatalogFor(iconId) == target) {
+      return;
+    }
+    final previousLocation = managedIconLocations[iconId];
+    try {
+      if (target == defaultManagedIconCatalog(iconId)) {
+        managedIconLocations.remove(iconId);
+      } else {
+        managedIconLocations[iconId] = target;
+      }
+      await saveManagedIconLibraryState();
+      if (!mounted) return;
+      setState(() {
+        selectedIconCatalog = target;
+        selectedManagedIconId = iconId;
+      });
+      showSpbOperationMessage('Иконка перемещена в «${target.label}».');
+    } catch (error) {
+      if (previousLocation == null) {
+        managedIconLocations.remove(iconId);
+      } else {
+        managedIconLocations[iconId] = previousLocation;
+      }
+      if (mounted) setState(() {});
+      showSpbOperationMessage('Не удалось переместить иконку: $error');
+    }
+  }
+
+  Future<void> moveSelectedManagedIcon() async {
+    final iconId = selectedManagedIconId;
+    if (iconId == null) {
+      showSpbOperationMessage('Сначала выберите иконку.');
+      return;
+    }
+    final current = managedIconCatalogFor(iconId);
+    final target = await showDialog<IconCatalogKind>(
+      context: context,
+      builder: (dialogContext) => SimpleDialog(
+        title: const Text('Переместить иконку'),
+        children: [
+          for (final kind in IconCatalogKind.values)
+            if (kind != current)
+              SimpleDialogOption(
+                key: ValueKey('moveManagedIconTo-${kind.storageKey}'),
+                onPressed: () => Navigator.pop(dialogContext, kind),
+                child: ListTile(
+                  leading: Icon(kind.icon),
+                  title: Text(kind.label),
+                ),
+              ),
+        ],
+      ),
+    );
+    if (target != null && mounted) await moveManagedIconTo(iconId, target);
+  }
+
+  Future<void> deleteSelectedManagedIcon() async {
+    final iconId = selectedManagedIconId;
+    if (iconId == null) {
+      showSpbOperationMessage('Сначала выберите иконку.');
+      return;
+    }
+    await deleteManagedIconWithConfirmation(iconId);
+  }
+
+  Future<void> deleteManagedIconWithConfirmation(String iconId) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        title: const Text('Удалить иконку'),
+        content: Text(
+          'Иконка «${managedIconLabel(iconId)}» будет удалена из каталога.',
+        ),
+        actions: [
+          SpbGradientActionButton(
+            key: const Key('confirmDeleteManagedIconButton'),
+            icon: Icons.check,
+            tooltip: 'Удалить',
+            colors: const [Color(0xff43a047), Color(0xff1b5e20)],
+            onTap: () => Navigator.pop(dialogContext, true),
+          ),
+          const SizedBox(width: 8),
+          SpbGradientActionButton(
+            key: const Key('cancelDeleteManagedIconButton'),
+            icon: Icons.close,
+            tooltip: 'Отмена',
+            colors: const [Color(0xffd32b31), Color(0xff7f0609)],
+            onTap: () => Navigator.pop(dialogContext, false),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      if (iconId.startsWith(userThirdPartyIconPrefix)) {
+        final storedFileName =
+            iconId.substring(userThirdPartyIconPrefix.length);
+        final decodedFileName = decodeUriComponentOrOriginal(storedFileName);
+        final candidateNames = <String>[
+          storedFileName,
+          if (decodedFileName != storedFileName) decodedFileName,
+        ];
+        final directory = await userThirdPartyIconDirectory();
+        for (final fileName in candidateNames) {
+          if (fileName != thirdPartyIconFileName(fileName)) continue;
+          final file = File(
+            '${directory.path}${Platform.pathSeparator}$fileName',
+          );
+          if (await file.exists()) {
+            await file.delete();
+            break;
+          }
+        }
+        thirdPartyIconPngs.remove(iconId);
+        thirdPartyComparablePngs.remove(iconId);
+        thirdPartyIconAssets = thirdPartyIconPngs.keys.toList(growable: false)
+          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        thirdPartyIconAssetsFuture = Future.value(thirdPartyIconAssets);
+        managedIconLocations.remove(iconId);
+        hiddenManagedIconIds.remove(iconId);
+      } else {
+        hiddenManagedIconIds.add(iconId);
+        managedIconLocations.remove(iconId);
+      }
+      await saveManagedIconLibraryState();
+      if (!mounted) return;
+      setState(() => selectedManagedIconId = null);
+      showSpbOperationMessage('Иконка удалена из каталога.');
+    } catch (error) {
+      showSpbOperationMessage('Не удалось удалить иконку: $error');
+    }
+  }
+
+  Future<void> showManagedIconMenu(
+    String iconId,
+    Offset globalPosition,
+  ) async {
+    setState(() => selectedManagedIconId = iconId);
+    final current = managedIconCatalogFor(iconId);
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    spbContextMenuOpen = true;
+    final selected = await showMenu<String>(
+      context: context,
+      position: RelativeRect.fromRect(
+        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: [
+        for (final kind in IconCatalogKind.values)
+          if (kind != current)
+            PopupMenuItem(
+              value: 'move:${kind.storageKey}',
+              child: ListTile(
+                dense: true,
+                leading: Icon(kind.icon),
+                title: Text('Переместить в «${kind.label}»'),
+              ),
+            ),
+        const PopupMenuDivider(),
+        const PopupMenuItem(
+          key: Key('deleteManagedIconContextAction'),
+          value: 'delete',
+          child: ListTile(
+            dense: true,
+            leading: Icon(Icons.delete_outline),
+            title: Text('Удалить'),
+          ),
+        ),
+      ],
+    );
+    spbContextMenuOpen = false;
+    if (!mounted || selected == null) return;
+    if (selected == 'delete') {
+      await deleteManagedIconWithConfirmation(iconId);
+      return;
+    }
+    if (selected.startsWith('move:')) {
+      final target = iconCatalogKindFromStorageKey(selected.substring(5));
+      if (target != null) await moveManagedIconTo(iconId, target);
+    }
+  }
+
+  bool get managedIconUsesCompactPickerFrame => true;
+
+  double get managedIconPickerContentSize =>
+      selectedIconCatalog == IconCatalogKind.pictograms ? 30 : 40.32;
+
+  double get managedIconPickerImageScale =>
+      selectedIconCatalog == IconCatalogKind.pictograms ? 1 : 1.2;
+
+  String managedIconPickerTooltip(String iconId) {
+    if (selectedIconCatalog == IconCatalogKind.pictograms) {
+      return managedIconLabel(iconId);
+    }
+    if (iconId.startsWith('spb://')) {
+      return managedIconPreviewId(iconId).substring(6);
+    }
+    return iconId.split('/').last;
+  }
+
+  Widget managedIconPickerFrame(
+    String iconId, {
+    required bool selected,
+    Key? key,
+  }) {
+    final compact = managedIconUsesCompactPickerFrame;
+    final theme = Theme.of(context);
+    final baseColor = selectedIconCatalog == IconCatalogKind.brands ||
+            selectedIconCatalog == IconCatalogKind.thirdParty
+        ? Colors.white
+        : theme.colorScheme.surface;
+    final frame = DecoratedBox(
+      key: key,
+      decoration: BoxDecoration(
+        color: selected ? theme.colorScheme.primaryContainer : baseColor,
+        border: Border.all(
+          color: selected ? theme.colorScheme.primary : theme.dividerColor,
+        ),
+        borderRadius: BorderRadius.circular(compact ? 8 : 7),
+      ),
+      child: compact
+          ? Center(
+              child: Transform.scale(
+                scale: managedIconPickerImageScale,
+                child: managedIconWidget(iconId, managedIconPickerContentSize),
+              ),
+            )
+          : Padding(
+              padding: const EdgeInsets.all(8),
+              child: managedIconWidget(iconId, 56),
+            ),
+    );
+    return frame;
+  }
+
+  Widget buildManagedIconPickerEntry(String iconId) {
+    final radius = BorderRadius.circular(
+      managedIconUsesCompactPickerFrame ? 8 : 7,
+    );
+    return Tooltip(
+      message: managedIconPickerTooltip(iconId),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onSecondaryTapDown: (details) => openSpbObjectContextMenu(
+          (position) => unawaited(showManagedIconMenu(iconId, position)),
+          details.globalPosition,
+        ),
+        onLongPressStart: (details) => openSpbObjectContextMenu(
+          (position) => unawaited(showManagedIconMenu(iconId, position)),
+          details.globalPosition,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: radius,
+            onTap: () {
+              spbCentralWorkspaceFocusNode.requestFocus();
+              setState(() => selectedManagedIconId = iconId);
+            },
+            child: managedIconPickerFrame(
+              iconId,
+              key: ValueKey('managedIconFrame-$iconId'),
+              selected: selectedManagedIconId == iconId,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget managedIconDragFeedback(String iconId) {
+    final dimension = managedIconUsesCompactPickerFrame ? 62.4 : 82.0;
+    return Material(
+      color: Colors.transparent,
+      child: SizedBox.square(
+        dimension: dimension,
+        child: managedIconPickerFrame(iconId, selected: true),
+      ),
+    );
+  }
+
+  Widget buildManagedIconDraggable(String iconId, Widget child) {
+    final data = ManagedIconDragData(iconId);
+    if (spbWideMultiSelectEnabled) {
+      return Draggable<ManagedIconDragData>(
+        data: data,
+        maxSimultaneousDrags: 1,
+        feedback: managedIconDragFeedback(iconId),
+        childWhenDragging: Opacity(opacity: 0.35, child: child),
+        child: child,
+      );
+    }
+    return LongPressDraggable<ManagedIconDragData>(
+      data: data,
+      maxSimultaneousDrags: 1,
+      feedback: managedIconDragFeedback(iconId),
+      childWhenDragging: Opacity(opacity: 0.35, child: child),
+      child: child,
+    );
+  }
+
+  Widget buildSpbIconWorkspace({
+    bool showHeader = true,
+    bool showPersistentScrollbar = false,
+  }) {
+    final compactPickerGrid = managedIconUsesCompactPickerFrame;
+    final SliverGridDelegate pickerGridDelegate = compactPickerGrid
+        ? const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 62.4,
+            childAspectRatio: 1,
+            mainAxisSpacing: 6,
+            crossAxisSpacing: 6,
+          )
+        : const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 82,
+            childAspectRatio: 1,
+            mainAxisSpacing: 7,
+            crossAxisSpacing: 7,
+          );
+    final query = searchController.text.trim().toLowerCase();
+    final visible = managedIconIdsFor(selectedIconCatalog)
+        .where(
+          (iconId) =>
+              query.isEmpty ||
+              managedIconLabel(iconId).toLowerCase().contains(query),
+        )
+        .toList()
+      ..sort(
+        (a, b) => managedIconLabel(a)
+            .toLowerCase()
+            .compareTo(managedIconLabel(b).toLowerCase()),
+      );
+    final error = iconLibraryLoadError;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (showHeader)
+          spbSectionHeader(
+            selectedIconCatalog.label,
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  key: const Key('pasteManagedIconButton'),
+                  tooltip: 'Вставить иконку из буфера',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 32,
+                    height: 32,
+                  ),
+                  icon: const Icon(Icons.content_paste, size: 20),
+                  onPressed: pasteManagedIcon,
+                ),
+                IconButton(
+                  key: const Key('uploadManagedIconButton'),
+                  tooltip: 'Загрузить иконку',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 32,
+                    height: 32,
+                  ),
+                  icon: const Icon(Icons.upload_file, size: 21),
+                  onPressed: uploadManagedIcon,
+                ),
+              ],
+            ),
+          ),
+        Expanded(
+          child: iconLibraryLoading
+              ? const Center(child: CircularProgressIndicator())
+              : error != null
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.error_outline, size: 42),
+                          const SizedBox(height: 8),
+                          const Text('Не удалось загрузить каталог иконок.'),
+                          TextButton(
+                            onPressed: ensureManagedIconLibraryLoaded,
+                            child: const Text('Повторить'),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ExternalImageDropTarget(
+                      key: const Key('managedIconDropTarget'),
+                      onImage: (bytes, fileName) => addManagedIcon(
+                        bytes,
+                        fileName,
+                        selectedIconCatalog,
+                      ),
+                      child: visible.isEmpty
+                          ? const Center(
+                              child: Text(
+                                'В этой папке пока нет иконок.\n'
+                                'Загрузите файл или перетащите его сюда.',
+                                textAlign: TextAlign.center,
+                              ),
+                            )
+                          : Scrollbar(
+                              key: const Key('spbIconGridScrollbar'),
+                              controller: spbIconGridScrollController,
+                              thumbVisibility: showPersistentScrollbar,
+                              trackVisibility: showPersistentScrollbar,
+                              interactive: true,
+                              child: GridView.builder(
+                                controller: spbIconGridScrollController,
+                                padding: const EdgeInsets.only(right: 12),
+                                gridDelegate: pickerGridDelegate,
+                                itemCount: visible.length,
+                                itemBuilder: (context, index) {
+                                  final iconId = visible[index];
+                                  return KeyedSubtree(
+                                    key: ValueKey('managedIcon-$iconId'),
+                                    child: buildManagedIconDraggable(
+                                      iconId,
+                                      buildManagedIconPickerEntry(iconId),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                    ),
+        ),
+      ],
+    );
+  }
+
+  Widget buildSpbTemplateTree({
+    bool compactRows = false,
+    ScrollController? scrollController,
+  }) {
     final query = searchController.text.trim().toLowerCase();
     final visible = templates
         .where(
@@ -7746,7 +9269,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
       );
     return ListView.builder(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+      controller: scrollController,
+      padding: EdgeInsets.fromLTRB(
+        0,
+        8,
+        scrollController == null ? 0 : 13,
+        8,
+      ),
       itemCount: visible.length,
       itemBuilder: (context, index) {
         final template = visible[index];
@@ -7976,7 +9505,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
-  Widget buildSpbTemplateWorkspace({bool showHeader = true}) {
+  Widget buildSpbTemplateWorkspace({
+    bool showHeader = true,
+    bool showPersistentScrollbar = false,
+  }) {
     final query = searchController.text.trim().toLowerCase();
     final visible = templates
         .where(
@@ -8003,35 +9535,44 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 showSpbTemplateImportMenu(details.globalPosition),
             onLongPressStart: (details) =>
                 showSpbTemplateImportMenu(details.globalPosition),
-            child: GridView.builder(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
-              gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                maxCrossAxisExtent: 89.04,
-                mainAxisExtent: 83.475,
-                crossAxisSpacing: 3.975,
-                mainAxisSpacing: 6.36,
-              ),
-              itemCount: visible.length,
-              itemBuilder: (context, index) {
-                final template = visible[index];
-                return KeyedSubtree(
-                  key: ValueKey('spbCentralTemplate-${template.id}'),
-                  child: buildSpbGridEntry(
-                    label: template.name,
-                    icon: spbSizedDataIcon(
-                      template.iconId,
-                      50.25,
-                      fallbackColor: templateDisplayPictogramColor(template),
+            child: spbTemplateGridScrollbar(
+              enabled: showPersistentScrollbar,
+              child: GridView.builder(
+                controller: spbTemplateGridScrollController,
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  10,
+                  showPersistentScrollbar ? 28 : 16,
+                  16,
+                ),
+                gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                  maxCrossAxisExtent: 89.04,
+                  mainAxisExtent: 83.475,
+                  crossAxisSpacing: 3.975,
+                  mainAxisSpacing: 6.36,
+                ),
+                itemCount: visible.length,
+                itemBuilder: (context, index) {
+                  final template = visible[index];
+                  return KeyedSubtree(
+                    key: ValueKey('spbCentralTemplate-${template.id}'),
+                    child: buildSpbGridEntry(
+                      label: template.name,
+                      icon: spbSizedDataIcon(
+                        template.iconId,
+                        50.25,
+                        fallbackColor: templateDisplayPictogramColor(template),
+                      ),
+                      onTap: () => selectSpbTemplateFromPrimaryClick(template),
+                      onDoubleTap: () => openTemplatePreview(template),
+                      onContextMenu: (position) =>
+                          showSpbTemplateMenu(template, position),
+                      selected: selectedTemplateIds.contains(template.id) ||
+                          selectedTemplateId == template.id,
                     ),
-                    onTap: () => selectSpbTemplateFromPrimaryClick(template),
-                    onDoubleTap: () => openTemplatePreview(template),
-                    onContextMenu: (position) =>
-                        showSpbTemplateMenu(template, position),
-                    selected: selectedTemplateIds.contains(template.id) ||
-                        selectedTemplateId == template.id,
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
         ),
@@ -9363,6 +10904,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool selected = false,
     double labelWidth = 63.75,
     bool boldLabel = false,
+    bool showLabel = true,
   }) {
     final stabilizeAndroidLabel =
         defaultTargetPlatform == TargetPlatform.android;
@@ -9391,8 +10933,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       alignment: Alignment.topCenter,
       minWidth: 112,
       maxWidth: 112,
-      minHeight: 105,
-      maxHeight: 105,
+      minHeight: showLabel ? 105 : 67,
+      maxHeight: showLabel ? 105 : 67,
       child: Column(
         children: [
           interactiveRegion(
@@ -9407,40 +10949,42 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               ),
             ),
           ),
-          const SizedBox(height: 2),
-          interactiveRegion(
-            SizedBox(
-              width: labelWidth,
-              height: stabilizeAndroidLabel ? 31 : null,
-              child: Center(
-                child: Container(
-                  decoration: selected ? selectedDecoration : null,
-                  child: Text(
-                    label,
-                    key: labelKey,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.center,
-                    textScaler:
-                        stabilizeAndroidLabel ? TextScaler.noScaling : null,
-                    strutStyle: stabilizeAndroidLabel
-                        ? const StrutStyle(
-                            fontSize: 14.3,
-                            height: 1.05,
-                            forceStrutHeight: true,
-                          )
-                        : null,
-                    style: TextStyle(
-                      fontSize: 14.3,
-                      height: 1.05,
-                      fontWeight:
-                          boldLabel ? FontWeight.bold : FontWeight.normal,
+          if (showLabel) ...[
+            const SizedBox(height: 2),
+            interactiveRegion(
+              SizedBox(
+                width: labelWidth,
+                height: stabilizeAndroidLabel ? 31 : null,
+                child: Center(
+                  child: Container(
+                    decoration: selected ? selectedDecoration : null,
+                    child: Text(
+                      label,
+                      key: labelKey,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      textScaler:
+                          stabilizeAndroidLabel ? TextScaler.noScaling : null,
+                      strutStyle: stabilizeAndroidLabel
+                          ? const StrutStyle(
+                              fontSize: 14.3,
+                              height: 1.05,
+                              forceStrutHeight: true,
+                            )
+                          : null,
+                      style: TextStyle(
+                        fontSize: 14.3,
+                        height: 1.05,
+                        fontWeight:
+                            boldLabel ? FontWeight.bold : FontWeight.normal,
+                      ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
+          ],
         ],
       ),
     );
@@ -10337,6 +11881,44 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   List<(Widget, String, VoidCallback)> spbTasksForCurrentMode() {
+    if (iconLibraryOpen) {
+      return [
+        (
+          KeyedSubtree(
+            key: const Key('managedIconUploadTaskIcon'),
+            child: spbResourceIcon('icon_import.png', 40),
+          ),
+          'Загрузить иконку',
+          uploadManagedIcon,
+        ),
+        (
+          KeyedSubtree(
+            key: const Key('managedIconMoveTaskIcon'),
+            child: spbResourceIcon('icon_folders.png', 40),
+          ),
+          'Переместить',
+          moveSelectedManagedIcon,
+        ),
+        (
+          const Icon(
+            Icons.delete_outline,
+            key: Key('managedIconDeleteTaskIcon'),
+            size: 36,
+            color: Color(0xffc62828),
+          ),
+          'Удалить',
+          deleteSelectedManagedIcon,
+        ),
+        (
+          KeyedSubtree(
+            key: const Key('managedIconExitTaskIcon'),
+            child: spbResourceIcon('icon_exit.png', 40),
+          ),
+          'Выйти',
+          exitToPasswordPrompt,
+        ),
+      ];
+    }
     if (mobileTemplatesOpen) {
       return [
         (
@@ -10520,91 +12102,86 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final matchingFolders = spbMatchingFolderPaths(query);
     final matchingCards = spbMatchingCards(query);
     final foundCount = matchingFolders.length + matchingCards.length;
-    final maximizeFound = spbFrequentExpanded == false && spbFoundExpanded;
     if (desktop) {
       return wrapSpbTemplateRightContextMenu(
         Material(
           color: Colors.white,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              buildSpbActionGroup(
-                'Задачи',
-                spbTasksForCurrentMode(),
-                shellStyle: true,
-                sectionExpanded: spbTasksExpanded,
-                onExpand: () => setState(() => spbTasksExpanded = true),
-                onCollapse: () => setState(() => spbTasksExpanded = false),
-              ),
-              buildSpbCollapsibleHeader(
-                'Найдено',
-                expanded: spbFoundExpanded,
-                onExpand: () => setState(() => spbFoundExpanded = true),
-                onCollapse: () => setState(() => spbFoundExpanded = false),
-                shellStyle: true,
-                trailing: Text(
-                  '$foundCount',
-                  key: const Key('spbFoundCount'),
-                  style: const TextStyle(fontSize: 17),
-                ),
-              ),
-              if (maximizeFound)
-                Expanded(
-                  child: query.isEmpty
-                      ? const SizedBox.expand()
-                      : buildSpbSearchResults(
-                          matchingFolders,
-                          matchingCards,
-                          controller: spbFoundScrollController,
-                        ),
-                )
-              else if (spbFoundExpanded && query.isNotEmpty)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 240),
-                  child: buildSpbSearchResults(
-                    matchingFolders,
-                    matchingCards,
-                    controller: spbFoundScrollController,
-                  ),
-                ),
-              if (spbFrequentExpanded)
-                Expanded(
-                  child: buildSpbActionGroup(
-                    'Часто используемые',
-                    [
-                      for (final item in frequent.take(10))
-                        (
-                          spbSizedDataIcon(
-                            itemIconId(item, templateFor(item.templateId)),
-                            40,
-                            fallbackColor: itemPictogramColor(
-                              item,
-                              templateFor(item.templateId),
-                            ),
-                          ),
-                          item.title,
-                          () => openFrequentCard(item),
-                        ),
-                    ],
-                    expand: true,
+          child: Scrollbar(
+            key: const Key('spbActionsPanelScrollbar'),
+            controller: spbActionsPanelScrollController,
+            thumbVisibility: true,
+            trackVisibility: true,
+            interactive: true,
+            child: SingleChildScrollView(
+              controller: spbActionsPanelScrollController,
+              padding: const EdgeInsets.only(right: 13),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  buildSpbActionGroup(
+                    'Задачи',
+                    spbTasksForCurrentMode(),
                     shellStyle: true,
-                    sectionExpanded: true,
-                    onExpand: () => setState(() => spbFrequentExpanded = true),
-                    onCollapse: () =>
-                        setState(() => spbFrequentExpanded = false),
-                    scrollController: spbFrequentScrollController,
+                    sectionExpanded: spbTasksExpanded,
+                    onExpand: () => setState(() => spbTasksExpanded = true),
+                    onCollapse: () => setState(() => spbTasksExpanded = false),
                   ),
-                )
-              else
-                buildSpbActionGroup(
-                  'Часто используемые',
-                  const [],
-                  shellStyle: true,
-                  sectionExpanded: false,
-                  onExpand: () => setState(() => spbFrequentExpanded = true),
-                  onCollapse: () => setState(() => spbFrequentExpanded = false),
-                ),
-            ],
+                  buildSpbCollapsibleHeader(
+                    'Найдено',
+                    expanded: spbFoundExpanded,
+                    onExpand: () => setState(() => spbFoundExpanded = true),
+                    onCollapse: () => setState(() => spbFoundExpanded = false),
+                    shellStyle: true,
+                    trailing: Text(
+                      '$foundCount',
+                      key: const Key('spbFoundCount'),
+                      style: const TextStyle(fontSize: 17),
+                    ),
+                  ),
+                  if (spbFoundExpanded && query.isNotEmpty)
+                    buildSpbSearchResults(
+                      matchingFolders,
+                      matchingCards,
+                    ),
+                  if (spbFrequentExpanded)
+                    buildSpbActionGroup(
+                      'Часто используемые',
+                      [
+                        for (final item in frequent.take(10))
+                          (
+                            spbSizedDataIcon(
+                              itemIconId(item, templateFor(item.templateId)),
+                              40,
+                              fallbackColor: itemPictogramColor(
+                                item,
+                                templateFor(item.templateId),
+                              ),
+                            ),
+                            item.title,
+                            () => openFrequentCard(item),
+                          ),
+                      ],
+                      shellStyle: true,
+                      sectionExpanded: true,
+                      onExpand: () =>
+                          setState(() => spbFrequentExpanded = true),
+                      onCollapse: () =>
+                          setState(() => spbFrequentExpanded = false),
+                    )
+                  else
+                    buildSpbActionGroup(
+                      'Часто используемые',
+                      const [],
+                      shellStyle: true,
+                      sectionExpanded: false,
+                      onExpand: () =>
+                          setState(() => spbFrequentExpanded = true),
+                      onCollapse: () =>
+                          setState(() => spbFrequentExpanded = false),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
       );
@@ -10615,6 +12192,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         controller: spbMobileActionsScrollController,
         thumbVisibility: true,
         trackVisibility: true,
+        interactive: true,
         child: SingleChildScrollView(
           controller: spbMobileActionsScrollController,
           child: Container(
@@ -10753,6 +12331,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final results = ListView(
       key: const Key('spbSearchResults'),
       controller: controller,
+      physics: controller == null ? const NeverScrollableScrollPhysics() : null,
       shrinkWrap: true,
       padding: EdgeInsets.zero,
       children: [
@@ -12378,6 +13957,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     searchController.clear();
     setState(() {
       mobileTemplatesOpen = false;
+      iconLibraryOpen = false;
       mobilePane = 1;
       spbSubmittedSearchQuery = '';
       selectedCategoryPath = categoryPath;
@@ -14517,9 +16097,7 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
   Widget buildCategoryBoundIcon() {
     return ExternalImageDropTarget(
       enableClipboardPaste: true,
-      onImage: (pngBytes, _) {
-        setState(() => iconId = registerEmbeddedIcon(pngBytes));
-      },
+      onImage: applyImportedIcon,
       child: Container(
         key: const Key('categoryBoundIcon'),
         width: 112,
@@ -14575,7 +16153,17 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
   Future<void> pickCustomIconFile() async {
     final picked = await pickUserIconFile(context);
     if (picked == null || !mounted) return;
-    setState(() => iconId = registerEmbeddedIcon(picked.bytes));
+    await applyImportedIcon(picked.bytes, picked.fileName);
+  }
+
+  Future<void> applyImportedIcon(Uint8List pngBytes, String fileName) async {
+    final registration = await registerUserThirdPartyIconWithFeedback(
+      context,
+      pngBytes,
+      fileName,
+    );
+    if (registration == null || !mounted) return;
+    setState(() => iconId = registerEmbeddedIcon(registration.bytes));
   }
 }
 
@@ -15855,8 +17443,21 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   Future<void> pickCardCustomIconFile() async {
     final picked = await pickUserIconFile(context);
     if (picked == null || !mounted) return;
+    await applyImportedCardIcon(picked.bytes, picked.fileName);
+  }
+
+  Future<void> applyImportedCardIcon(
+    Uint8List pngBytes,
+    String fileName,
+  ) async {
+    final registration = await registerUserThirdPartyIconWithFeedback(
+      context,
+      pngBytes,
+      fileName,
+    );
+    if (registration == null || !mounted) return;
     rememberCurrentAction();
-    setState(() => iconId = registerEmbeddedIcon(picked.bytes));
+    setState(() => iconId = registerEmbeddedIcon(registration.bytes));
   }
 
   @override
@@ -16216,10 +17817,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   }) {
     return ExternalImageDropTarget(
       enableClipboardPaste: true,
-      onImage: (pngBytes, _) {
-        rememberCurrentAction();
-        setState(() => iconId = registerEmbeddedIcon(pngBytes));
-      },
+      onImage: applyImportedCardIcon,
       child: Container(
         key: const Key('cardBoundIcon'),
         width: dimension,
@@ -18583,7 +20181,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   Widget templateBoundIcon() {
     return ExternalImageDropTarget(
       enableClipboardPaste: true,
-      onImage: applyCustomIcon,
+      onImage: applyImportedCustomIcon,
       child: Container(
         key: const Key('templateBoundIcon'),
         width: 112,
@@ -18647,7 +20245,20 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   Future<void> pickCustomIconFile() async {
     final picked = await pickUserIconFile(context);
     if (picked == null || !mounted) return;
-    applyCustomIcon(picked.bytes, picked.fileName);
+    await applyImportedCustomIcon(picked.bytes, picked.fileName);
+  }
+
+  Future<void> applyImportedCustomIcon(
+    Uint8List pngBytes,
+    String fileName,
+  ) async {
+    final registration = await registerUserThirdPartyIconWithFeedback(
+      context,
+      pngBytes,
+      fileName,
+    );
+    if (registration == null || !mounted) return;
+    applyCustomIcon(registration.bytes, registration.fileName);
   }
 
   void applyCustomIcon(Uint8List pngBytes, String fileName) {

@@ -1,6 +1,7 @@
 package com.lc200333cmyk.walletaps
 
 import android.app.Activity
+import android.app.DownloadManager
 import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -9,6 +10,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
@@ -109,6 +111,16 @@ class MainActivity : FlutterActivity() {
                         result.error("bad_args", "Missing path", null)
                     } else {
                         shareFile(path, mimeType, result)
+                    }
+                }
+                "downloadUpdate" -> {
+                    val url = call.argument<String>("url")
+                    val fileName = call.argument<String>("fileName")
+                    val mimeType = call.argument<String>("mimeType")
+                    if (url == null || fileName == null || mimeType == null) {
+                        result.error("bad_args", "Missing update download arguments", null)
+                    } else {
+                        downloadUpdate(url, fileName, mimeType, result)
                     }
                 }
                 else -> result.notImplemented()
@@ -679,6 +691,35 @@ class MainActivity : FlutterActivity() {
             result.error("no_share_target", "No application can receive this file", null)
         } catch (error: Throwable) {
             result.error("share_failed", error.message, null)
+        }
+    }
+
+    private fun downloadUpdate(
+        url: String,
+        fileName: String,
+        mimeType: String,
+        result: MethodChannel.Result
+    ) {
+        try {
+            val safeName = fileName
+                .replace(Regex("[^\\p{L}\\p{N}._ -]"), "_")
+                .take(120)
+                .ifBlank { "Wallet-APS-update.apk" }
+            val request = DownloadManager.Request(Uri.parse(url)).apply {
+                setTitle(safeName)
+                setDescription("Загрузка обновления Wallet APS")
+                setMimeType(mimeType)
+                setAllowedOverMetered(true)
+                setAllowedOverRoaming(false)
+                setNotificationVisibility(
+                    DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED
+                )
+                setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, safeName)
+            }
+            val manager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            result.success(manager.enqueue(request))
+        } catch (error: Throwable) {
+            result.error("download_failed", error.message, null)
         }
     }
 
