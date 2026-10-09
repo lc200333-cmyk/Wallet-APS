@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM mirror.gcr.io/library/ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708

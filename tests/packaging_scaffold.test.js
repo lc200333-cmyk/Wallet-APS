@@ -108,7 +108,7 @@ assert.match(read('app/lib/app_version.dart'), /currentAppVersion = '\d+\.\d+\.\
 
 const dockerfile = read('docker/build-env/Dockerfile');
 [
-  'FROM ubuntu:24.04',
+  'FROM mirror.gcr.io/library/ubuntu:24.04',
   'ANDROID_HOME=/opt/android-sdk',
   'FLUTTER_HOME=/opt/flutter',
   'libgtk-3-dev',
@@ -141,7 +141,7 @@ const compose = read('docker-compose.yml');
 
 const linuxDebDockerfile = read('docker/linux-deb/Dockerfile');
 [
-  'FROM ubuntu:20.04',
+  'FROM mirror.gcr.io/library/ubuntu:20.04',
   'FLUTTER_HOME=/opt/flutter',
   'libgtk-3-dev',
   'libwebp-dev',

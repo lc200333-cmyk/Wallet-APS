@@ -157,6 +157,10 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.tag }}
 
+      - name: Use public Ubuntu mirror
+        shell: bash
+        run: sed -i 's#^FROM ubuntu:#FROM mirror.gcr.io/library/ubuntu:#' docker/build-env/Dockerfile
+
       - name: Build release APK in Docker
         shell: bash
         run: |
@@ -179,6 +183,10 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.tag }}
+
+      - name: Use public Ubuntu mirror
+        shell: bash
+        run: sed -i 's#^FROM ubuntu:#FROM mirror.gcr.io/library/ubuntu:#' docker/linux-deb/Dockerfile
 
       - name: Build deb in Docker
         shell: bash
