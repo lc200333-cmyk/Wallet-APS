@@ -2259,6 +2259,7 @@ void main() {
   testWidgets('desktop vault uses the W1 three-column layout', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     await tester.binding.setSurfaceSize(const Size(1280, 1010));
+    await tester.runAsync(loadSpb64PngIconAssets);
     addTearDown(() {
       debugDefaultTargetPlatformOverride = null;
       tester.binding.setSurfaceSize(null);
@@ -2285,6 +2286,36 @@ void main() {
     expect(find.text('Задачи'), findsOneWidget);
     expect(find.text('Создать кошелёк'), findsOneWidget);
     expect(find.byKey(const Key('spbCreateWalletAppIcon')), findsOneWidget);
+    final archiveTaskImage = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const Key('spbArchiveTaskIcon')),
+        matching: find.byType(Image),
+      ),
+    );
+    expect(
+      listEquals(
+        (archiveTaskImage.image as MemoryImage).bytes,
+        spbPackedIconBytes(
+          'spb://apk_icons/res/drawable-hdpi/icon_sync_dropbox_small.png',
+        ),
+      ),
+      isTrue,
+    );
+    final repairTaskImage = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const Key('spbRepairTaskIcon')),
+        matching: find.byType(Image),
+      ),
+    );
+    expect(
+      listEquals(
+        (repairTaskImage.image as MemoryImage).bytes,
+        spbPackedIconBytes(
+          'spb://apk_icons/res/drawable-hdpi/icon_sync_small.png',
+        ),
+      ),
+      isTrue,
+    );
     expect(find.text('Создать новую папку'), findsOneWidget);
     expect(find.text('Сделать архивную копию'), findsOneWidget);
     final undo = find.byTooltip('Отменить изменения этой сессии');
@@ -2325,6 +2356,10 @@ void main() {
     state.selectedTemplateId = state.templates.first.id;
     state.setState(() {});
     await tester.pumpAndSettle();
+    final templateDeleteTaskIcon = tester.widget<Icon>(
+      find.byKey(const Key('templateDeleteTaskIcon')),
+    );
+    expect(templateDeleteTaskIcon.color, const Color(0xffc62828));
     await tester.tap(
       find.byKey(
         ValueKey('spbCentralTemplate-${state.templates.first.id}'),
@@ -2489,6 +2524,25 @@ void main() {
     expect(find.byKey(const Key('managedIconUploadTaskIcon')), findsOneWidget);
     expect(find.byKey(const Key('managedIconMoveTaskIcon')), findsOneWidget);
     expect(find.byKey(const Key('managedIconExitTaskIcon')), findsOneWidget);
+    final uploadTaskImage = tester.widget<Image>(
+      find.descendant(
+        of: find.byKey(const Key('managedIconUploadTaskIcon')),
+        matching: find.byType(Image),
+      ),
+    );
+    expect(
+      listEquals(
+        (uploadTaskImage.image as MemoryImage).bytes,
+        spbPackedIconBytes(
+          'spb://apk_icons/res/drawable-hdpi/icon_add_folder.png',
+        ),
+      ),
+      isTrue,
+    );
+    final exitTaskIcon = tester.widget<Icon>(
+      find.byKey(const Key('managedIconExitTaskIcon')),
+    );
+    expect(exitTaskIcon.icon, Icons.logout);
     final deleteTaskIcon = tester.widget<Icon>(
       find.byKey(const Key('managedIconDeleteTaskIcon')),
     );
@@ -4309,6 +4363,16 @@ void main() {
     await tester.pumpWidget(const WalletApsApp());
     await tester.pump();
 
+    final appTheme = Theme.of(tester.element(find.byType(VaultShell)));
+    expect(appTheme.scaffoldBackgroundColor, appWindowBackgroundColor);
+    expect(
+      appTheme.dialogTheme.backgroundColor,
+      appWindowBackgroundColor,
+    );
+    expect(
+      tester.widget<Scaffold>(find.byType(Scaffold)).backgroundColor,
+      appWindowBackgroundColor,
+    );
     expect(find.text('Пароль'), findsOneWidget);
     expect(find.byKey(const Key('passwordVersion')), findsOneWidget);
     expect(find.text('v. $currentAppVersion'), findsOneWidget);

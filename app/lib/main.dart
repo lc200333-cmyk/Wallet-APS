@@ -36,6 +36,7 @@ void main(List<String> arguments) {
 
 final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
 final appUserActivityPulse = ValueNotifier<int>(0);
+const appWindowBackgroundColor = Color(0xffe6e6e6);
 
 void notifyAppUserActivity() {
   appUserActivityPulse.value++;
@@ -1158,7 +1159,11 @@ class WalletApsApp extends StatelessWidget {
         seedColor: const Color(0xff2d6f73),
         brightness: Brightness.light,
       ),
-      scaffoldBackgroundColor: const Color(0xfff5f7f8),
+      scaffoldBackgroundColor: appWindowBackgroundColor,
+      dialogTheme: const DialogThemeData(
+        backgroundColor: appWindowBackgroundColor,
+        surfaceTintColor: Colors.transparent,
+      ),
       visualDensity: VisualDensity.standard,
       scrollbarTheme: const ScrollbarThemeData(
         thickness: WidgetStatePropertyAll<double>(13.6),
@@ -5523,7 +5528,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xffececec),
+          backgroundColor: appWindowBackgroundColor,
           surfaceTintColor: Colors.transparent,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
           titlePadding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
@@ -5980,7 +5985,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               horizontal: narrow ? 4 : 40,
               vertical: narrow ? 8 : 24,
             ),
-            backgroundColor: const Color(0xffececec),
+            backgroundColor: appWindowBackgroundColor,
             surfaceTintColor: Colors.transparent,
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
@@ -7085,7 +7090,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
     return Container(
       height: 48,
-      color: const Color(0xfff4f4f4),
+      color: appWindowBackgroundColor,
       padding: EdgeInsets.fromLTRB(mobile ? 22 : 11, 7, 12, 7),
       child: mobile
           ? LayoutBuilder(
@@ -7521,7 +7526,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget buildSpbDesktopShell() {
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: appWindowBackgroundColor,
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -7665,7 +7670,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Widget buildSpbMobileShell() {
     final modified = selectedVaultModifiedText;
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: appWindowBackgroundColor,
       body: SafeArea(
         child: Column(
           children: [
@@ -7812,7 +7817,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       height: 46,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
       decoration: const BoxDecoration(
-        color: Color(0xfff4f4f4),
+        color: appWindowBackgroundColor,
         border: Border(top: BorderSide(color: _spbBorder)),
       ),
       child: Row(
@@ -9748,7 +9753,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: const Color(0xffececec),
+          backgroundColor: appWindowBackgroundColor,
           surfaceTintColor: Colors.transparent,
           shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
           title: const Text('Удалить шаблон'),
@@ -11886,7 +11891,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         (
           KeyedSubtree(
             key: const Key('managedIconUploadTaskIcon'),
-            child: spbResourceIcon('icon_import.png', 40),
+            child: spbResourceIcon('icon_add_folder.png', 40),
           ),
           'Загрузить иконку',
           uploadManagedIcon,
@@ -11910,9 +11915,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           deleteSelectedManagedIcon,
         ),
         (
-          KeyedSubtree(
-            key: const Key('managedIconExitTaskIcon'),
-            child: spbResourceIcon('icon_exit.png', 40),
+          const Icon(
+            Icons.logout,
+            key: Key('managedIconExitTaskIcon'),
+            size: 36,
+            color: Color(0xff33434f),
           ),
           'Выйти',
           exitToPasswordPrompt,
@@ -11938,7 +11945,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           exportSelectedSpbTemplate,
         ),
         (
-          const Icon(Icons.delete_outline, size: 36, color: Color(0xff33434f)),
+          const Icon(
+            Icons.delete_outline,
+            key: Key('templateDeleteTaskIcon'),
+            size: 36,
+            color: Color(0xffc62828),
+          ),
           'Удалить',
           deleteSelectedSpbTemplate,
         ),
@@ -12003,15 +12015,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             ),
       ),
       (
-        spbResourceIcon('icon_backup.png', 40),
+        KeyedSubtree(
+          key: const Key('spbArchiveTaskIcon'),
+          child: spbResourceIcon('icon_sync_dropbox_small.png', 40),
+        ),
         'Сделать архивную копию',
         createDatedArchiveCopy,
       ),
       (
-        const Icon(
-          Icons.health_and_safety_outlined,
-          size: 36,
-          color: Color(0xff33434f),
+        KeyedSubtree(
+          key: const Key('spbRepairTaskIcon'),
+          child: spbResourceIcon('icon_sync_small.png', 40),
         ),
         'Проверить и восстановить базу',
         repairCurrentWalletCompatibility,
@@ -12833,7 +12847,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   ),
                   Container(
                     width: double.infinity,
-                    color: const Color(0xfff4f4f4),
+                    color: appWindowBackgroundColor,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 22,
                       vertical: 24,
@@ -13226,7 +13240,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     const modeBottom = Color(0xff6d3107);
 
     return Scaffold(
-      backgroundColor: const Color(0xfff4f4f4),
+      backgroundColor: appWindowBackgroundColor,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
@@ -13244,7 +13258,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     child: Container(
                       width: constraints.maxWidth,
                       decoration: BoxDecoration(
-                        color: const Color(0xfff4f4f4),
+                        color: appWindowBackgroundColor,
                         border: Border.all(color: const Color(0xffc6c6c6)),
                       ),
                       child: Column(
@@ -15858,7 +15872,7 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: const Color(0xfff4f4f4),
+          color: appWindowBackgroundColor,
           elevation: 24,
           clipBehavior: Clip.antiAlias,
           shape: const RoundedRectangleBorder(
@@ -16728,7 +16742,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
     return Align(
       alignment: Alignment.center,
       child: Material(
-        color: const Color(0xfff4f4f4),
+        color: appWindowBackgroundColor,
         elevation: 24,
         clipBehavior: Clip.antiAlias,
         shape: const RoundedRectangleBorder(
@@ -17474,7 +17488,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: const Color(0xfff4f4f4),
+          color: appWindowBackgroundColor,
           elevation: 24,
           clipBehavior: Clip.antiAlias,
           shape: const RoundedRectangleBorder(
@@ -19106,7 +19120,7 @@ class TemplatePreviewDialog extends StatelessWidget {
     return Align(
       alignment: Alignment.center,
       child: Material(
-        color: const Color(0xfff4f4f4),
+        color: appWindowBackgroundColor,
         elevation: 24,
         clipBehavior: Clip.antiAlias,
         shape: const RoundedRectangleBorder(
@@ -19447,7 +19461,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: const Color(0xfff4f4f4),
+          color: appWindowBackgroundColor,
           elevation: 24,
           clipBehavior: Clip.antiAlias,
           shape: const RoundedRectangleBorder(
