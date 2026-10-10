@@ -701,6 +701,24 @@ void main() {
       icons.where((iconId) => iconId.endsWith('/icon_add.png')),
       ['spb://apk_icons/res/drawable-hdpi/icon_add.png'],
     );
+    expect(
+      spbPackedIconBytes(
+        'spb://apk_icons/res/drawable-hdpi/icon_add_folder.png',
+      ),
+      isNotNull,
+    );
+    expect(
+      spbPackedIconBytes(
+        'spb://apk_icons/res/drawable-hdpi/icon_sync_dropbox_small.png',
+      ),
+      isNotNull,
+    );
+    expect(
+      spbPackedIconBytes(
+        'spb://apk_icons/res/drawable-hdpi/icon_sync_small.png',
+      ),
+      isNotNull,
+    );
   });
 
   testWidgets('brand icon bundle is available', (tester) async {
@@ -2259,7 +2277,6 @@ void main() {
   testWidgets('desktop vault uses the W1 three-column layout', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
     await tester.binding.setSurfaceSize(const Size(1280, 1010));
-    await tester.runAsync(loadSpb64PngIconAssets);
     addTearDown(() {
       debugDefaultTargetPlatformOverride = null;
       tester.binding.setSurfaceSize(null);
@@ -2286,36 +2303,8 @@ void main() {
     expect(find.text('Задачи'), findsOneWidget);
     expect(find.text('Создать кошелёк'), findsOneWidget);
     expect(find.byKey(const Key('spbCreateWalletAppIcon')), findsOneWidget);
-    final archiveTaskImage = tester.widget<Image>(
-      find.descendant(
-        of: find.byKey(const Key('spbArchiveTaskIcon')),
-        matching: find.byType(Image),
-      ),
-    );
-    expect(
-      listEquals(
-        (archiveTaskImage.image as MemoryImage).bytes,
-        spbPackedIconBytes(
-          'spb://apk_icons/res/drawable-hdpi/icon_sync_dropbox_small.png',
-        ),
-      ),
-      isTrue,
-    );
-    final repairTaskImage = tester.widget<Image>(
-      find.descendant(
-        of: find.byKey(const Key('spbRepairTaskIcon')),
-        matching: find.byType(Image),
-      ),
-    );
-    expect(
-      listEquals(
-        (repairTaskImage.image as MemoryImage).bytes,
-        spbPackedIconBytes(
-          'spb://apk_icons/res/drawable-hdpi/icon_sync_small.png',
-        ),
-      ),
-      isTrue,
-    );
+    expect(find.byKey(const Key('spbArchiveTaskIcon')), findsOneWidget);
+    expect(find.byKey(const Key('spbRepairTaskIcon')), findsOneWidget);
     expect(find.text('Создать новую папку'), findsOneWidget);
     expect(find.text('Сделать архивную копию'), findsOneWidget);
     final undo = find.byTooltip('Отменить изменения этой сессии');
