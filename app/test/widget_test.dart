@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:file_picker/file_picker.dart';
 import 'package:wallet_aps/app_version.dart';
 import 'package:wallet_aps/main.dart';
+import 'package:wallet_aps/widgets/workspace_geometry.dart';
 import 'package:wallet_aps/services/platform/secure_clipboard_service.dart';
 import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
 import 'package:flutter/foundation.dart';
@@ -2274,9 +2275,9 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
-  testWidgets('desktop vault uses the W1 three-column layout', (tester) async {
+  testWidgets('desktop vault uses the V1 three-column layout', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    await tester.binding.setSurfaceSize(const Size(1280, 1010));
+    await tester.binding.setSurfaceSize(const Size(1280, 746.5));
     addTearDown(() {
       debugDefaultTargetPlatformOverride = null;
       tester.binding.setSurfaceSize(null);
@@ -2289,10 +2290,20 @@ void main() {
 
     final desktopSearch = find.byKey(const Key('spbSearchInput'));
     final desktopSubmit = find.byKey(const Key('spbSubmitSearchButton'));
-    expect(tester.getSize(desktopSearch).width, closeTo(250.445, 0.1));
+    final desktopEditable = find.descendant(
+      of: desktopSearch,
+      matching: find.byType(EditableText),
+    );
+    final emptySearchEditableSize = tester.getSize(desktopEditable);
+    expect(
+      tester.widget<TextField>(desktopSearch).decoration?.suffixIcon,
+      isNotNull,
+    );
+    expect(find.byKey(const Key('spbClearSearchButton')), findsNothing);
+    expect(tester.getSize(desktopSearch).width, closeTo(179, 0.1));
     expect(
       tester.getTopLeft(desktopSearch).dy - tester.getTopLeft(desktopSubmit).dy,
-      closeTo(1.1, 0.1),
+      closeTo(0.5, 0.1),
     );
     expect(
       tester.getTopLeft(desktopSubmit).dx,
@@ -2338,9 +2349,13 @@ void main() {
     await tester.enterText(desktopSearch, 'live-search');
     await tester.pump();
     expect(state.spbSubmittedSearchQuery, 'live-search');
+    expect(find.byKey(const Key('spbClearSearchButton')), findsOneWidget);
+    expect(tester.getSize(desktopEditable), emptySearchEditableSize);
     await tester.enterText(desktopSearch, '');
     await tester.pump();
     expect(state.spbSubmittedSearchQuery, isEmpty);
+    expect(find.byKey(const Key('spbClearSearchButton')), findsNothing);
+    expect(tester.getSize(desktopEditable), emptySearchEditableSize);
     state.mobileTemplatesOpen = true;
     state.selectedTemplateId = state.templates.first.id;
     state.setState(() {});
@@ -2367,7 +2382,7 @@ void main() {
   testWidgets('desktop main panes have persistent interactive scrollbars',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.windows;
-    await tester.binding.setSurfaceSize(const Size(1280, 700));
+    await tester.binding.setSurfaceSize(const Size(1280, 500));
     try {
       await tester.pumpWidget(
         const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
@@ -2377,7 +2392,7 @@ void main() {
       final dynamic state = tester.state(find.byType(VaultShell));
       final CardTemplate template = state.templates.first as CardTemplate;
       final cards = List<SecretItem>.generate(
-        40,
+        140,
         (index) => SecretItem(
           id: 'three-pane-scroll-$index',
           templateId: template.id,
@@ -2568,18 +2583,20 @@ void main() {
     expect(firstFrameDecoration.border, isNotNull);
     expect(firstFrameDecoration.borderRadius, BorderRadius.circular(8));
     final dynamic state = tester.state(find.byType(VaultShell));
-    expect(state.managedIconPickerContentSize, 40.32);
-    expect(state.managedIconPickerImageScale, 1.2);
+    expect(state.managedIconPickerContentSize, 64);
+    expect(state.managedIconPickerImageScale, 1);
+    expect(
+      tester.getSize(
+        find.byKey(ValueKey('managedIconContent-$firstIconId')),
+      ),
+      const Size.square(64),
+    );
     final iconGrid = find.descendant(
       of: find.byKey(const Key('spbIconGridScrollbar')),
       matching: find.byType(GridView),
     );
-    var gridDelegate = tester.widget<GridView>(iconGrid).gridDelegate
-        as SliverGridDelegateWithMaxCrossAxisExtent;
-    expect(gridDelegate.maxCrossAxisExtent, 62.4);
-    expect(gridDelegate.childAspectRatio, 1);
-    expect(gridDelegate.mainAxisSpacing, 6);
-    expect(gridDelegate.crossAxisSpacing, 6);
+    var gridDelegate = tester.widget<GridView>(iconGrid).gridDelegate;
+    expect(gridDelegate, isA<WorkspaceGridDelegate>());
 
     for (final kind in const [
       IconCatalogKind.pictograms,
@@ -2590,19 +2607,15 @@ void main() {
         find.byKey(ValueKey('spbIconCatalog-${kind.storageKey}')),
       );
       await tester.pumpAndSettle();
-      gridDelegate = tester.widget<GridView>(iconGrid).gridDelegate
-          as SliverGridDelegateWithMaxCrossAxisExtent;
-      expect(gridDelegate.maxCrossAxisExtent, 62.4);
-      expect(gridDelegate.childAspectRatio, 1);
-      expect(gridDelegate.mainAxisSpacing, 6);
-      expect(gridDelegate.crossAxisSpacing, 6);
+      gridDelegate = tester.widget<GridView>(iconGrid).gridDelegate;
+      expect(gridDelegate, isA<WorkspaceGridDelegate>());
       expect(
         state.managedIconPickerContentSize,
-        kind == IconCatalogKind.pictograms ? 30 : 40.32,
+        64,
       );
       expect(
         state.managedIconPickerImageScale,
-        kind == IconCatalogKind.pictograms ? 1 : 1.2,
+        1,
       );
     }
 
@@ -2816,6 +2829,13 @@ void main() {
       const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
     );
     await tester.pumpAndSettle();
+
+    final mainMenuLabel = tester.widget<Text>(find.descendant(
+      of: find.byKey(const Key('spbMyCardsModeButton')),
+      matching: find.byType(Text),
+    ));
+    expect(mainMenuLabel.style?.fontSize, 14);
+    expect(mainMenuLabel.style?.fontWeight, FontWeight.bold);
 
     final dynamic state = tester.state(find.byType(VaultShell));
     final CardTemplate template = state.templates.first as CardTemplate;
@@ -3333,8 +3353,8 @@ void main() {
       ),
     );
     expect(activeRegions, findsNWidgets(2));
-    expect(tester.getSize(activeRegions.at(0)), const Size(68, 67));
-    expect(tester.getSize(activeRegions.at(1)).width, 73.3125);
+    expect(tester.getSize(activeRegions.at(0)), const Size(32, 35));
+    expect(tester.getSize(activeRegions.at(1)).width, 72);
     final selectedBackgrounds = find.descendant(
       of: card,
       matching: find.byWidgetPredicate(
@@ -3347,11 +3367,11 @@ void main() {
     expect(selectedBackgrounds, findsNWidgets(2));
     expect(
       tester.getSize(selectedBackgrounds.at(0)),
-      const Size(50.25, 50.25),
+      const Size(32, 32),
     );
     expect(
       tester.getSize(selectedBackgrounds.at(1)).width,
-      lessThanOrEqualTo(73.3125),
+      lessThanOrEqualTo(72),
     );
 
     final cardRect = tester.getRect(card);
@@ -3396,15 +3416,16 @@ void main() {
     expect(title, findsOneWidget);
     expect(modified, findsOneWidget);
     expect(tester.widget<Text>(modified).data, '26.09.26 14.35');
-    expect(tester.widget<Text>(modified).style?.fontSize, 13.6);
+    expect(tester.widget<Text>(modified).style?.fontSize, 12);
     expect(tester.widget<Text>(modified).style?.fontWeight, FontWeight.normal);
     final baselineRow = find.ancestor(
       of: modified,
       matching: find.byWidgetPredicate(
         (widget) =>
             widget is Row &&
-            widget.crossAxisAlignment == CrossAxisAlignment.baseline &&
-            widget.textBaseline == TextBaseline.alphabetic,
+            (widget.crossAxisAlignment == CrossAxisAlignment.center ||
+                (widget.crossAxisAlignment == CrossAxisAlignment.baseline &&
+                    widget.textBaseline == TextBaseline.alphabetic)),
       ),
     );
     expect(baselineRow, findsOneWidget);
@@ -3413,7 +3434,7 @@ void main() {
         tester.getCenter(modified).dx, greaterThan(tester.getCenter(title).dx));
   });
 
-  testWidgets('narrow vault header shows a thirty percent smaller file date',
+  testWidgets('narrow vault header shows the file date with V1 font size',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(390, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -3442,7 +3463,7 @@ void main() {
     expect(tester.widget<Text>(title).data, 'narrow-wallet');
     expect(modified, findsOneWidget);
     expect(tester.widget<Text>(modified).data, '26.09.26 08.07');
-    expect(tester.widget<Text>(modified).style?.fontSize, 15.4);
+    expect(tester.widget<Text>(modified).style?.fontSize, 12);
     expect(tester.widget<Text>(modified).style?.fontWeight, FontWeight.normal);
     final baselineRow = find.ancestor(
       of: modified,
@@ -3459,7 +3480,8 @@ void main() {
         tester.getCenter(modified).dx, greaterThan(tester.getCenter(title).dx));
   });
 
-  testWidgets('wide top-level folders keep two pixels between icons',
+  testWidgets(
+      'wide tree folders keep twenty pixel rows and sixteen pixel icons',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -3510,10 +3532,31 @@ void main() {
           modifiedAt: DateTime(2026),
         ),
       ];
+      state.categoryIconsByPath = <String, String>{
+        'Folder spacing A': 'home',
+      };
       state.expandedCategoryPaths.add('Expanded folder');
       state.selectedCategoryPath = 'Folder spacing A';
     });
     await tester.pumpAndSettle();
+
+    final currentFolderHeaderIcon = find.byKey(
+      const ValueKey(
+        'spbCurrentFolderHeaderIcon-Folder spacing A',
+      ),
+    );
+    expect(tester.getSize(currentFolderHeaderIcon), const Size.square(16));
+    expect(
+      tester
+          .widget<Icon>(
+            find.descendant(
+              of: currentFolderHeaderIcon,
+              matching: find.byType(Icon),
+            ),
+          )
+          .icon,
+      Icons.home_outlined,
+    );
 
     final firstFolderFinder =
         find.byKey(const ValueKey('spbTreeFolder-Folder spacing A'));
@@ -3523,7 +3566,7 @@ void main() {
         matching: find.byType(ExpansionTile),
       ),
     );
-    expect(firstFolderTile.minTileHeight, 40);
+    expect(firstFolderTile.minTileHeight, 20);
     final topLevelHighlight = tester.widget<CustomPaint>(
       find.byKey(
         const ValueKey('spbTreeFolderHighlight-Folder spacing A'),
@@ -3531,7 +3574,7 @@ void main() {
     );
     expect(
       (topLevelHighlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      40,
+      20,
     );
     final firstFolderIcon = find.byKey(
       const ValueKey('spbTreeFolderIconRow-Folder spacing A'),
@@ -3542,7 +3585,7 @@ void main() {
     expect(
       tester.getRect(secondFolderIcon).top -
           tester.getRect(firstFolderIcon).bottom,
-      closeTo(2, 0.1),
+      closeTo(0, 0.1),
     );
     final firstNestedFolder = find.byKey(
         const ValueKey('spbTreeFolder-Expanded folder / Nested folder A'));
@@ -3560,7 +3603,7 @@ void main() {
         matching: find.byType(ExpansionTile),
       ),
     );
-    expect(firstNestedTile.minTileHeight, 44);
+    expect(firstNestedTile.minTileHeight, 20);
     final nestedHighlight = tester.widget<CustomPaint>(
       find.byKey(const ValueKey(
         'spbTreeFolderHighlight-Expanded folder / Nested folder A',
@@ -3568,12 +3611,12 @@ void main() {
     );
     expect(
       (nestedHighlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      44,
+      20,
     );
     expect(
       tester.getCenter(secondNestedFolder).dy -
           tester.getCenter(firstNestedFolder).dy,
-      greaterThanOrEqualTo(40),
+      closeTo(20, 0.1),
     );
 
     final treeFolderTitle = tester.widget<Text>(
@@ -3582,6 +3625,7 @@ void main() {
         matching: find.text('Folder spacing A'),
       ),
     );
+    expect(treeFolderTitle.style?.fontSize, 14);
     expect(treeFolderTitle.style?.fontWeight, FontWeight.normal);
 
     state.setState(() => state.selectedCategoryPath = '');
@@ -3592,7 +3636,8 @@ void main() {
         matching: find.text('Folder spacing A'),
       ),
     );
-    expect(centralFolderTitle.style?.fontWeight, FontWeight.bold);
+    expect(centralFolderTitle.style?.fontSize, 14);
+    expect(centralFolderTitle.style?.fontWeight, FontWeight.normal);
 
     await tester.tap(firstFolderFinder, buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
@@ -3614,8 +3659,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('narrow top-level folder spacing stays unchanged',
-      (tester) async {
+  testWidgets('narrow tree folders use the same V1 row height', (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await tester.binding.setSurfaceSize(const Size(390, 800));
     addTearDown(() {
@@ -3652,7 +3696,7 @@ void main() {
     final tile = tester.widget<ExpansionTile>(
       find.descendant(of: folder, matching: find.byType(ExpansionTile)),
     );
-    expect(tile.minTileHeight, 30.2);
+    expect(tile.minTileHeight, 20);
     final highlight = tester.widget<CustomPaint>(
       find.byKey(const ValueKey(
         'spbTreeFolderHighlight-Narrow unchanged folder',
@@ -3660,7 +3704,7 @@ void main() {
     );
     expect(
       (highlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      30.2,
+      20,
     );
 
     await tester.longPress(folder);
@@ -3785,11 +3829,11 @@ void main() {
     final tabletSubmit = find.byKey(const Key('spbSubmitSearchButton'));
     expect(
       tester.getTopLeft(tabletSearch).dy - tester.getTopLeft(tabletSubmit).dy,
-      closeTo(1.1, 0.1),
+      closeTo(0.5, 0.1),
     );
     expect(
       tester.getTopLeft(tabletSubmit).dx,
-      closeTo(tester.getTopRight(tabletSearch).dx + 5, 0.1),
+      closeTo(tester.getTopRight(tabletSearch).dx + 7, 0.1),
     );
 
     expect(find.text('Мои карточки'), findsOneWidget);
@@ -4161,7 +4205,7 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
-  testWidgets('wide Android card grid adds five pixels between rows',
+  testWidgets('wide Android card grid uses the same fixed V1 cells',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await tester.binding.setSurfaceSize(const Size(1280, 800));
@@ -4181,9 +4225,7 @@ void main() {
         matching: find.byType(GridView),
       ),
     );
-    final delegate =
-        grid.gridDelegate as SliverGridDelegateWithMaxCrossAxisExtent;
-    expect(delegate.mainAxisSpacing, 11.36);
+    expect(grid.gridDelegate, isA<WorkspaceGridDelegate>());
     debugDefaultTargetPlatformOverride = null;
     await tester.binding.setSurfaceSize(null);
   });
@@ -4358,6 +4400,8 @@ void main() {
       appTheme.dialogTheme.backgroundColor,
       appWindowBackgroundColor,
     );
+    expect(appTheme.popupMenuTheme.textStyle?.fontSize, 17);
+    expect(appTheme.popupMenuTheme.textStyle?.fontWeight, FontWeight.normal);
     expect(
       tester.widget<Scaffold>(find.byType(Scaffold)).backgroundColor,
       appWindowBackgroundColor,

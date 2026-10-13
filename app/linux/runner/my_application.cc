@@ -89,7 +89,21 @@ static void window_channel_method_call_cb(FlMethodChannel* /*channel*/,
 
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
-  gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+  GtkWidget* toplevel = gtk_widget_get_toplevel(GTK_WIDGET(view));
+  gtk_widget_show(toplevel);
+  // Match the V1 outer-window target while retaining the real system frame.
+  // GDK/GTK coordinates are logical; the compositor applies display scaling.
+  GdkWindow* native_window = gtk_widget_get_window(toplevel);
+  if (native_window != nullptr) {
+    GdkRectangle frame{};
+    gdk_window_get_frame_extents(native_window, &frame);
+    gint client_width = 0;
+    gint client_height = 0;
+    gtk_window_get_size(GTK_WINDOW(toplevel), &client_width, &client_height);
+    gtk_window_resize(GTK_WINDOW(toplevel),
+                      1280 - MAX(0, frame.width - client_width),
+                      770 - MAX(0, frame.height - client_height));
+  }
 }
 
 // Give Dart a chance to checkpoint, back up, and close the active wallet.
@@ -140,7 +154,8 @@ static void my_application_activate(GApplication* application) {
     gtk_window_set_title(window, "Wallet APS");
   }
 
-  gtk_window_set_default_size(window, 1280, 1010);
+  // GTK sizes are logical, and the window manager supplies the system frame.
+  gtk_window_set_default_size(window, 1280, 770);
 
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(

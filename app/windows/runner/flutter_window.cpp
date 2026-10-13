@@ -1,6 +1,7 @@
 #include "flutter_window.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <optional>
@@ -261,9 +262,10 @@ void FlutterWindow::SetWindowMode(bool login, bool expanded,
   const double scale = GetDpiForWindow(hwnd) / 96.0;
   int width = static_cast<int>((login ? 562 : 1280) * scale);
   const int login_height = expanded ? 650 : 590;
-  // The classic SPB Wallet layout is intentionally taller than a 16:9
-  // dashboard. Keep the initial desktop proportions of the W1 reference.
-  int height = static_cast<int>((login ? login_height : 1010) * scale);
+  // V1 outer-window target in DIP. Keep the real system frame; Flutter gets
+  // the remaining client area. Round only after applying the monitor DPI.
+  int height = static_cast<int>(
+      std::lround((login ? login_height : 769.5) * scale));
 
   HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
   MONITORINFO monitor_info{};
