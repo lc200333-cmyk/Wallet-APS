@@ -133,16 +133,31 @@ void main() {
           platform: platform,
           scale: scale,
         );
+        final wideAndroid = platform == TargetPlatform.android;
+        final sideRowHeight = wideAndroid
+            ? WorkspaceGeometry.narrowRowHeight
+            : WorkspaceGeometry.rowHeight;
+        final sideIconSize = wideAndroid
+            ? WorkspaceGeometry.narrowSmallIcon
+            : WorkspaceGeometry.smallIcon;
+        final centerCellSize = wideAndroid
+            ? WorkspaceGeometry.wideAndroidGridCell
+            : WorkspaceGeometry.gridCell;
+        final actionIconSize = wideAndroid
+            ? WorkspaceGeometry.narrowActionIcon
+            : WorkspaceGeometry.actionIcon;
         final navigator = find.byKey(const Key('spbVaultTitle'));
         expect(tester.getSize(navigator), const Size(247, 25));
         final firstRow = find.byKey(const ValueKey('spbTreeFolderIconRow-A'));
         final secondRow = find.byKey(const ValueKey('spbTreeFolderIconRow-B'));
-        expect(tester.getSize(firstRow).height, 20);
+        expect(tester.getSize(firstRow).height, sideRowHeight);
         expect(
-            tester.getCenter(secondRow).dy - tester.getCenter(firstRow).dy, 20);
+          tester.getCenter(secondRow).dy - tester.getCenter(firstRow).dy,
+          sideRowHeight,
+        );
         final treeIcon =
             find.descendant(of: firstRow, matching: find.byType(Icon));
-        expect(tester.getSize(treeIcon.last), const Size(16, 16));
+        expect(tester.getSize(treeIcon.last), Size.square(sideIconSize));
         final treeFolderLabel = tester.widget<Text>(find.descendant(
           of: find.byKey(const ValueKey('spbTreeFolder-A')),
           matching: find.text('A'),
@@ -160,25 +175,36 @@ void main() {
           matching: find.byType(GridView),
         );
         expect(tester.getSize(grid).width, 781);
-        expect(tester.widget<GridView>(grid).gridDelegate,
-            isA<WorkspaceGridDelegate>());
+        if (wideAndroid) {
+          expect(tester.widget<GridView>(grid).gridDelegate,
+              isA<WideAndroidGridDelegate>());
+        } else {
+          expect(tester.widget<GridView>(grid).gridDelegate,
+              isA<WorkspaceGridDelegate>());
+        }
         final firstCard =
             find.byKey(const ValueKey('spbCentralCard-geometry-0'));
-        expect(tester.getSize(firstCard), const Size(75, 75));
+        expect(tester.getSize(firstCard), Size.square(centerCellSize));
         final secondCard =
             find.byKey(const ValueKey('spbCentralCard-geometry-1'));
-        final nextRow = find.byKey(const ValueKey('spbCentralCard-geometry-7'));
+        final nextRow = find.byKey(ValueKey(
+          wideAndroid
+              ? 'spbCentralCard-geometry-5'
+              : 'spbCentralCard-geometry-7',
+        ));
         expect(tester.getCenter(secondCard).dx - tester.getCenter(firstCard).dx,
-            75);
+            centerCellSize);
         expect(
-            tester.getCenter(nextRow).dy - tester.getCenter(firstCard).dy, 75);
+          tester.getCenter(nextRow).dy - tester.getCenter(firstCard).dy,
+          centerCellSize,
+        );
         final label = tester.widget<Text>(
           find.byKey(const ValueKey('spbCardGridLabel-geometry-0')),
         );
-        expect(label.style!.fontSize, 13);
+        expect(label.style!.fontSize, wideAndroid ? 16 : 13);
         expect(
           label.style!.height! * label.style!.fontSize!,
-          closeTo(15, 0.000001),
+          closeTo(wideAndroid ? 18 : 15, 0.000001),
         );
         expect(label.style!.fontWeight, FontWeight.normal);
         expect(label.maxLines, 2);
@@ -187,27 +213,32 @@ void main() {
           of: find.byKey(const ValueKey('spbCentralFolder-A')),
           matching: find.text('A'),
         ));
-        expect(gridFolderLabel.style?.fontSize, 14);
+        expect(gridFolderLabel.style?.fontSize, wideAndroid ? 17 : 14);
         expect(gridFolderLabel.style?.fontWeight, FontWeight.normal);
         final actions = find.byKey(const Key('spbActionsPanelScrollbar'));
         expect(tester.getSize(actions).width, 244);
         expect(tester.widget<Scrollbar>(actions).thickness, 19);
         final taskHeader = find.byKey(const ValueKey('spbCollapseЗадачи'));
-        expect(tester.getSize(taskHeader), const Size(18, 18));
+        expect(
+          tester.getSize(taskHeader),
+          Size.square(wideAndroid
+              ? WorkspaceGeometry.narrowCollapseSize
+              : WorkspaceGeometry.collapseSize),
+        );
         final taskLabel = state.spbTasksForCurrentMode().first.$2 as String;
         final taskIcon = find.byKey(ValueKey('spbActionIcon-$taskLabel'));
-        expect(tester.getSize(taskIcon), const Size.square(22));
+        expect(tester.getSize(taskIcon), Size.square(actionIconSize));
         final frequentIcon = find.byKey(
           ValueKey('spbActionIcon-${state.frequentItems().first.title}'),
         );
-        expect(tester.getSize(frequentIcon), const Size.square(22));
+        expect(tester.getSize(frequentIcon), Size.square(actionIconSize));
         state.searchController.text = 'Card 01';
         state.setState(() => state.spbSubmittedSearchQuery = 'Card 01');
         await tester.pumpAndSettle();
         final foundIcon = find.byKey(
           const ValueKey('spbFoundIcon-Card 01'),
         );
-        expect(tester.getSize(foundIcon), const Size.square(22));
+        expect(tester.getSize(foundIcon), Size.square(actionIconSize));
         state.searchController.clear();
         state.setState(() => state.spbSubmittedSearchQuery = '');
         await tester.pumpAndSettle();
@@ -282,7 +313,7 @@ void main() {
     debugDefaultTargetPlatformOverride = null;
   });
 
-  testWidgets('Android narrow panes keep V1 cells and reachable controls',
+  testWidgets('Android narrow panes use enlarged type and three grid columns',
       (tester) async {
     final dynamic state = await pumpWorkspace(
       tester,
@@ -291,16 +322,106 @@ void main() {
       scale: 2,
     );
     expect(find.byKey(const Key('spbNavigatorSplitter')), findsNothing);
+    final firstTreeRow = find.byKey(const ValueKey('spbTreeFolderIconRow-A'));
+    final secondTreeRow = find.byKey(const ValueKey('spbTreeFolderIconRow-B'));
+    expect(tester.getSize(firstTreeRow).height,
+        closeTo(WorkspaceGeometry.narrowRowHeight, 0.01));
+    expect(
+      tester.getCenter(secondTreeRow).dy - tester.getCenter(firstTreeRow).dy,
+      closeTo(WorkspaceGeometry.narrowRowHeight, 0.01),
+    );
+    final treeIcon =
+        find.descendant(of: firstTreeRow, matching: find.byType(Icon));
+    expect(tester.getSize(treeIcon.last).width,
+        closeTo(WorkspaceGeometry.narrowSmallIcon, 0.01));
+    final treeFolderLabel = tester.widget<Text>(find.descendant(
+      of: find.byKey(const ValueKey('spbTreeFolder-A')),
+      matching: find.text('A'),
+    ));
+    expect(treeFolderLabel.style?.fontSize, 17);
+    expect(treeFolderLabel.style?.fontWeight, FontWeight.normal);
+    final treeCardLabel = tester.widget<Text>(find.descendant(
+      of: find.byKey(const ValueKey('spbTreeCard-geometry-0')),
+      matching: find.text('A long card caption that wraps onto two lines'),
+    ));
+    expect(treeCardLabel.style?.fontSize, 16);
+
     state.setState(() => state.mobilePane = 1);
     await tester.pumpAndSettle();
+    final centerHeader = tester.widget<Text>(find.text('Мои карточки'));
+    expect(centerHeader.style?.fontSize, 15);
+    final grid = find.descendant(
+      of: find.byKey(const Key('spbCentralWorkspace')),
+      matching: find.byType(GridView),
+    );
+    expect(tester.widget<GridView>(grid).gridDelegate,
+        isA<NarrowAndroidGridDelegate>());
+    final firstFolder = find.byKey(const ValueKey('spbCentralFolder-A'));
+    final secondFolder = find.byKey(const ValueKey('spbCentralFolder-B'));
+    final thirdFolder = find.byKey(const ValueKey('spbCentralFolder-C'));
+    final firstCard = find.byKey(const ValueKey('spbCentralCard-geometry-0'));
+    final nextCardRow = find.byKey(const ValueKey('spbCentralCard-geometry-3'));
+    final firstCardSize = tester.getSize(firstCard);
+    expect(firstCardSize.width, closeTo((360 - 16) / 3, 0.01));
     expect(
-        tester.getSize(find.byKey(const ValueKey('spbCentralCard-geometry-0'))),
-        const Size(75, 75));
+        firstCardSize.height, closeTo(WorkspaceGeometry.narrowGridCell, 0.01));
+    expect(
+      tester.getCenter(secondFolder).dx - tester.getCenter(firstFolder).dx,
+      closeTo(firstCardSize.width, 0.01),
+    );
+    expect(
+      tester.getCenter(thirdFolder).dx - tester.getCenter(secondFolder).dx,
+      closeTo(firstCardSize.width, 0.01),
+    );
+    expect(
+      tester.getCenter(nextCardRow).dy - tester.getCenter(firstCard).dy,
+      closeTo(WorkspaceGeometry.narrowGridCell, 0.01),
+    );
+    final cardLabel = tester.widget<Text>(
+      find.byKey(const ValueKey('spbCardGridLabel-geometry-0')),
+    );
+    expect(cardLabel.style?.fontSize, 15);
+    final centralFolderLabel = tester.widget<Text>(find.descendant(
+      of: firstFolder,
+      matching: find.text('A'),
+    ));
+    expect(centralFolderLabel.style?.fontSize, 16);
     expect(tester.takeException(), isNull);
     await capture(tester, 'android-narrow-200', 2);
+
     state.setState(() => state.mobilePane = 2);
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('spbCollapseЗадачи')), findsOneWidget);
+    final taskHeader = tester.widget<Text>(find.text('Задачи'));
+    expect(taskHeader.style?.fontSize, 16);
+    final taskLabel = state.spbTasksForCurrentMode().first.$2 as String;
+    final taskIcon = find.byKey(ValueKey('spbActionIcon-$taskLabel'));
+    expect(tester.getSize(taskIcon).width,
+        closeTo(WorkspaceGeometry.narrowActionIcon, 0.01));
+    final taskText = tester.widget<Text>(find.text(taskLabel));
+    expect(taskText.style?.fontSize, 15);
+    final frequentTitle = state.frequentItems().first.title as String;
+    final frequentText = tester.widget<Text>(find.text(frequentTitle));
+    expect(frequentText.style?.fontSize, 16);
+
+    state.searchController.text = 'Card 01';
+    state.setState(() => state.spbSubmittedSearchQuery = 'Card 01');
+    await tester.pumpAndSettle();
+    final foundIcon = find.byKey(const ValueKey('spbFoundIcon-Card 01'));
+    expect(tester.getSize(foundIcon).width,
+        closeTo(WorkspaceGeometry.narrowActionIcon, 0.01));
+    final foundTitle = tester.widget<Text>(find.descendant(
+      of: find.byKey(const Key('spbSearchResults')),
+      matching: find.text('Card 01'),
+    ));
+    expect(foundTitle.style?.fontSize, 16);
+    final foundSubtitle = tester
+        .widgetList<Text>(find.descendant(
+          of: find.byKey(const Key('spbSearchResults')),
+          matching: find.text('Карточка'),
+        ))
+        .first;
+    expect(foundSubtitle.style?.fontSize, 15);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });

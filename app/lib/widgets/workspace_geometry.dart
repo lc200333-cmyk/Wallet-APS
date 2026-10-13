@@ -51,6 +51,28 @@ abstract final class WorkspaceGeometry {
   static const searchHeight = 21.0;
   static const searchWidth = 179.0;
 
+  // The phone layout is deliberately roomier than the desktop V1 geometry.
+  // Font increases are expressed in logical pixels (Flutter points), while
+  // icons and row strides retain the requested 15% proportional increase.
+  static const narrowAndroidScale = 1.15;
+  static const narrowSideFontIncrease = 3.0;
+  static const narrowCenterFontIncrease = 2.0;
+  static const wideAndroidGridScale = 1.20;
+  static const wideAndroidCenterFontIncrease = 3.0;
+  static const narrowRowHeight = rowHeight * narrowAndroidScale;
+  static const narrowLineHeight = lineHeight * narrowAndroidScale;
+  static const narrowSmallIcon = smallIcon * narrowAndroidScale;
+  static const narrowActionIcon = actionIcon * narrowAndroidScale;
+  static const narrowCollapseSize = collapseSize * narrowAndroidScale;
+  static const narrowExpansionSize = expansionSize * narrowAndroidScale;
+  static const narrowGridIcon = largeIcon * narrowAndroidScale;
+  static const narrowGridCell = gridCell * narrowAndroidScale;
+  static const narrowLabelHeight = labelHeight * narrowAndroidScale;
+  static const wideAndroidGridIcon = largeIcon * wideAndroidGridScale;
+  static const wideAndroidGridCell = gridCell * wideAndroidGridScale;
+  static const wideAndroidLabelWidth = labelWidth * wideAndroidGridScale;
+  static const wideAndroidLabelHeight = labelHeight * wideAndroidGridScale;
+
   static const bodyStyle = TextStyle(
     fontSize: fontSize,
     height: lineHeight / fontSize,
@@ -80,6 +102,94 @@ abstract final class WorkspaceGeometry {
     height: lineHeight / itemNameFontSize,
     forceStrutHeight: true,
   );
+  static const narrowSideBodyStyle = TextStyle(
+    fontSize: fontSize + narrowSideFontIncrease,
+    height: narrowLineHeight / (fontSize + narrowSideFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const narrowSideFolderStyle = TextStyle(
+    fontSize: itemNameFontSize + 1 + narrowSideFontIncrease,
+    height: narrowLineHeight / (itemNameFontSize + 1 + narrowSideFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const narrowSideItemNameStyle = TextStyle(
+    fontSize: itemNameFontSize + narrowSideFontIncrease,
+    height: narrowLineHeight / (itemNameFontSize + narrowSideFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const narrowSideHeadingStyle = TextStyle(
+    fontSize: headingFontSize + narrowSideFontIncrease,
+    fontWeight: FontWeight.bold,
+  );
+  static const narrowSideBodyStrut = StrutStyle(
+    fontSize: fontSize + narrowSideFontIncrease,
+    height: narrowLineHeight / (fontSize + narrowSideFontIncrease),
+    forceStrutHeight: true,
+  );
+  static const narrowSideItemNameStrut = StrutStyle(
+    fontSize: itemNameFontSize + narrowSideFontIncrease,
+    height: narrowLineHeight / (itemNameFontSize + narrowSideFontIncrease),
+    forceStrutHeight: true,
+  );
+  static const wideAndroidSideBodyStyle = TextStyle(
+    fontSize: fontSize,
+    height: narrowLineHeight / fontSize,
+    fontWeight: FontWeight.normal,
+  );
+  static const wideAndroidSideFolderStyle = TextStyle(
+    fontSize: itemNameFontSize + 1,
+    height: narrowLineHeight / (itemNameFontSize + 1),
+    fontWeight: FontWeight.normal,
+  );
+  static const wideAndroidSideItemNameStyle = TextStyle(
+    fontSize: itemNameFontSize,
+    height: narrowLineHeight / itemNameFontSize,
+    fontWeight: FontWeight.normal,
+  );
+  static const wideAndroidSideBodyStrut = StrutStyle(
+    fontSize: fontSize,
+    height: narrowLineHeight / fontSize,
+    forceStrutHeight: true,
+  );
+  static const wideAndroidSideItemNameStrut = StrutStyle(
+    fontSize: itemNameFontSize,
+    height: narrowLineHeight / itemNameFontSize,
+    forceStrutHeight: true,
+  );
+  static const narrowCenterItemNameStyle = TextStyle(
+    fontSize: itemNameFontSize + narrowCenterFontIncrease,
+    height: narrowLineHeight / (itemNameFontSize + narrowCenterFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const narrowCenterFolderStyle = TextStyle(
+    fontSize: itemNameFontSize + 1 + narrowCenterFontIncrease,
+    height:
+        narrowLineHeight / (itemNameFontSize + 1 + narrowCenterFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const narrowCenterItemNameStrut = StrutStyle(
+    fontSize: itemNameFontSize + narrowCenterFontIncrease,
+    height: narrowLineHeight / (itemNameFontSize + narrowCenterFontIncrease),
+    forceStrutHeight: true,
+  );
+  static const wideAndroidCenterItemNameStyle = TextStyle(
+    fontSize: itemNameFontSize + wideAndroidCenterFontIncrease,
+    height: (lineHeight * wideAndroidGridScale) /
+        (itemNameFontSize + wideAndroidCenterFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const wideAndroidCenterFolderStyle = TextStyle(
+    fontSize: itemNameFontSize + 1 + wideAndroidCenterFontIncrease,
+    height: (lineHeight * wideAndroidGridScale) /
+        (itemNameFontSize + 1 + wideAndroidCenterFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const wideAndroidCenterItemNameStrut = StrutStyle(
+    fontSize: itemNameFontSize + wideAndroidCenterFontIncrease,
+    height: (lineHeight * wideAndroidGridScale) /
+        (itemNameFontSize + wideAndroidCenterFontIncrease),
+    forceStrutHeight: true,
+  );
 }
 
 /// Keeps both dimensions and strides fixed; surplus width stays at the right.
@@ -102,4 +212,49 @@ class WorkspaceGridDelegate extends SliverGridDelegate {
 
   @override
   bool shouldRelayout(covariant WorkspaceGridDelegate oldDelegate) => false;
+}
+
+/// Uses the full phone width for exactly three columns. Wider cells place the
+/// icon centres farther apart and give two-line card captions more room.
+class NarrowAndroidGridDelegate extends SliverGridDelegate {
+  const NarrowAndroidGridDelegate();
+
+  @override
+  SliverGridLayout getLayout(SliverConstraints constraints) {
+    const crossAxisCount = 3;
+    final cellWidth = constraints.crossAxisExtent / crossAxisCount;
+    return SliverGridRegularTileLayout(
+      crossAxisCount: crossAxisCount,
+      mainAxisStride: WorkspaceGeometry.narrowGridCell,
+      crossAxisStride: cellWidth,
+      childMainAxisExtent: WorkspaceGeometry.narrowGridCell,
+      childCrossAxisExtent: cellWidth,
+      reverseCrossAxis: axisDirectionIsReversed(constraints.crossAxisDirection),
+    );
+  }
+
+  @override
+  bool shouldRelayout(covariant NarrowAndroidGridDelegate oldDelegate) => false;
+}
+
+/// Retains the fixed desktop-style grid while increasing both grid strides by
+/// 20% on wide Android screens.
+class WideAndroidGridDelegate extends SliverGridDelegate {
+  const WideAndroidGridDelegate();
+
+  @override
+  SliverGridLayout getLayout(SliverConstraints constraints) {
+    const cell = WorkspaceGeometry.wideAndroidGridCell;
+    return SliverGridRegularTileLayout(
+      crossAxisCount: math.max(1, (constraints.crossAxisExtent / cell).floor()),
+      mainAxisStride: cell,
+      crossAxisStride: cell,
+      childMainAxisExtent: cell,
+      childCrossAxisExtent: cell,
+      reverseCrossAxis: axisDirectionIsReversed(constraints.crossAxisDirection),
+    );
+  }
+
+  @override
+  bool shouldRelayout(covariant WideAndroidGridDelegate oldDelegate) => false;
 }

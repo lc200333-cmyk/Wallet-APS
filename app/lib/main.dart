@@ -8087,29 +8087,30 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
-  Widget spbExpansionMark(bool expanded) {
+  Widget spbExpansionMark(bool expanded, {double? dimension}) {
+    final size = dimension ?? WorkspaceGeometry.expansionSize;
     return Container(
-      width: WorkspaceGeometry.expansionSize,
-      height: WorkspaceGeometry.expansionSize,
+      width: size,
+      height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
         color: const Color(0xfff5f5f5),
         border: Border.all(color: const Color(0xff8d9aa3)),
       ),
       child: expanded
-          ? const Text(
+          ? Text(
               '−',
               style: TextStyle(
-                color: Color(0xff526b7d),
-                fontSize: 8,
+                color: const Color(0xff526b7d),
+                fontSize: 8 * size / WorkspaceGeometry.expansionSize,
                 height: 0.9,
                 fontWeight: FontWeight.w700,
               ),
             )
-          : const Icon(
+          : Icon(
               Icons.add,
-              color: Color(0xff526b7d),
-              size: 7,
+              color: const Color(0xff526b7d),
+              size: 7 * size / WorkspaceGeometry.expansionSize,
               weight: 700,
             ),
     );
@@ -8158,6 +8159,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Widget buildSpbTreeViewport(Widget tree) {
+    final narrowAndroid = spbNarrowAndroid;
+    final wideAndroid = spbWideAndroid;
     // Measure complete names so horizontal scrolling never changes the data.
     double contentWidth = 0;
     void measure(
@@ -8205,7 +8208,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           measure(
             parts.last,
             parts.length - 1,
-            style: WorkspaceGeometry.folderStyle,
+            style: narrowAndroid
+                ? WorkspaceGeometry.narrowSideFolderStyle
+                : wideAndroid
+                    ? WorkspaceGeometry.wideAndroidSideFolderStyle
+                    : WorkspaceGeometry.folderStyle,
           );
         }
       }
@@ -8213,7 +8220,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         measure(
           item.title,
           categoryParts(item.category).length,
-          style: WorkspaceGeometry.itemNameStyle,
+          style: narrowAndroid
+              ? WorkspaceGeometry.narrowSideItemNameStyle
+              : wideAndroid
+                  ? WorkspaceGeometry.wideAndroidSideItemNameStyle
+                  : WorkspaceGeometry.itemNameStyle,
         );
       }
       measure(selectedVaultTitle, 0);
@@ -8351,7 +8362,38 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     int depth, {
     bool compactRows = false,
   }) {
-    const folderRowHeight = WorkspaceGeometry.rowHeight;
+    final narrowAndroid = spbNarrowAndroid;
+    final wideAndroid = spbWideAndroid;
+    final androidSpacing = narrowAndroid || wideAndroid;
+    final folderRowHeight = androidSpacing
+        ? WorkspaceGeometry.narrowRowHeight
+        : WorkspaceGeometry.rowHeight;
+    final treeIconSize = androidSpacing
+        ? WorkspaceGeometry.narrowSmallIcon
+        : WorkspaceGeometry.smallIcon;
+    final expansionSize = androidSpacing
+        ? WorkspaceGeometry.narrowExpansionSize
+        : WorkspaceGeometry.expansionSize;
+    final folderStyle = narrowAndroid
+        ? WorkspaceGeometry.narrowSideFolderStyle
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidSideFolderStyle
+            : WorkspaceGeometry.folderStyle;
+    final folderStrut = narrowAndroid
+        ? WorkspaceGeometry.narrowSideItemNameStrut
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidSideItemNameStrut
+            : WorkspaceGeometry.bodyStrut;
+    final itemStyle = narrowAndroid
+        ? WorkspaceGeometry.narrowSideItemNameStyle
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidSideItemNameStyle
+            : WorkspaceGeometry.itemNameStyle;
+    final itemStrut = narrowAndroid
+        ? WorkspaceGeometry.narrowSideItemNameStrut
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidSideItemNameStrut
+            : WorkspaceGeometry.itemNameStrut;
     final result = <Widget>[];
     final folders = node.children.values.toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
@@ -8392,7 +8434,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 childrenPadding: EdgeInsets.zero,
                 trailing: const SizedBox.shrink(),
                 leading: SizedBox(
-                  width: 31,
+                  width: androidSpacing ? 35.65 : 31,
                   height: folderRowHeight,
                   child: Row(
                     key: ValueKey('spbTreeFolderIconRow-${folder.path}'),
@@ -8400,14 +8442,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       if (folder.children.isNotEmpty || folder.cards.isNotEmpty)
                         spbExpansionMark(
                           expandedCategoryPaths.contains(folder.path),
+                          dimension: expansionSize,
                         )
                       else
-                        const SizedBox(width: WorkspaceGeometry.expansionSize),
-                      const SizedBox(width: 6),
+                        SizedBox(width: expansionSize),
+                      SizedBox(width: androidSpacing ? 6.9 : 6),
                       spbSizedDataIcon(
                         folder.iconId ??
                             defaultIconForCategoryPath(folder.path),
-                        WorkspaceGeometry.smallIcon,
+                        treeIconSize,
                         fallbackColor: categoryPictogramColor(folder.colorId),
                       ),
                     ],
@@ -8424,15 +8467,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       child: CustomPaint(
                         key: ValueKey('spbTreeFolderHighlight-${folder.path}'),
                         painter: selectedCategoryPath == folder.path
-                            ? const SpbFolderHighlightPainter(folderRowHeight)
+                            ? SpbFolderHighlightPainter(folderRowHeight)
                             : null,
                         child: Text(
                           folder.name,
                           maxLines: 1,
                           softWrap: false,
                           overflow: TextOverflow.visible,
-                          strutStyle: WorkspaceGeometry.bodyStrut,
-                          style: WorkspaceGeometry.folderStyle,
+                          strutStyle: folderStrut,
+                          style: folderStyle,
                         ),
                       ),
                     ),
@@ -8470,15 +8513,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               selectedTileColor: const Color(0xffcfe9fb),
               dense: true,
               visualDensity: VisualDensity.standard,
-              minTileHeight: WorkspaceGeometry.rowHeight,
+              minTileHeight: folderRowHeight,
               minVerticalPadding: 0,
-              minLeadingWidth: WorkspaceGeometry.smallIcon,
+              minLeadingWidth: treeIconSize,
               horizontalTitleGap: 5,
               contentPadding: EdgeInsets.zero,
               leading: spbCardIconWithAttachmentMark(
                 item: item,
                 template: template,
-                dimension: WorkspaceGeometry.smallIcon,
+                dimension: treeIconSize,
                 attachmentMarkKey:
                     ValueKey('treeCardAttachmentArrow-${item.id}'),
               ),
@@ -8487,8 +8530,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 maxLines: 1,
                 softWrap: false,
                 overflow: TextOverflow.visible,
-                strutStyle: WorkspaceGeometry.itemNameStrut,
-                style: WorkspaceGeometry.itemNameStyle,
+                strutStyle: itemStrut,
+                style: itemStyle,
               ),
               onTap: () => selectSpbCardFromPrimaryClick(item),
             ),
@@ -8500,6 +8543,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   bool get spbWideMultiSelectEnabled => MediaQuery.sizeOf(context).width >= 700;
+
+  bool get spbNarrowAndroid =>
+      defaultTargetPlatform == TargetPlatform.android &&
+      MediaQuery.sizeOf(context).width < 700;
+
+  bool get spbWideAndroid =>
+      defaultTargetPlatform == TargetPlatform.android &&
+      MediaQuery.sizeOf(context).width >= 700;
 
   GlobalKey spbGridEntryKey(String id) =>
       spbGridEntryKeys.putIfAbsent(id, GlobalKey.new);
@@ -9986,6 +10037,23 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool showPersistentScrollbar = false,
     bool allowItemDragging = true,
   }) {
+    final narrowAndroid = spbNarrowAndroid;
+    final wideAndroid = spbWideAndroid;
+    final gridIconSize = narrowAndroid
+        ? WorkspaceGeometry.narrowGridIcon
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidGridIcon
+            : WorkspaceGeometry.largeIcon;
+    final gridEntryHeight = narrowAndroid
+        ? WorkspaceGeometry.narrowGridCell
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidGridCell
+            : WorkspaceGeometry.gridCell;
+    final gridLabelHeight = narrowAndroid
+        ? WorkspaceGeometry.narrowLabelHeight
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidLabelHeight
+            : WorkspaceGeometry.labelHeight;
     final searchQuery = spbSubmittedSearchQuery;
     final showingSearchResults = searchQuery.isNotEmpty;
     final root = buildCategoryTree(
@@ -10013,12 +10081,26 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         showingSearchResults
             ? spbSectionHeader(
                 'Результаты поиска',
+                fontSize: narrowAndroid
+                    ? WorkspaceGeometry.headingFontSize +
+                        WorkspaceGeometry.narrowCenterFontIncrease
+                    : wideAndroid
+                        ? WorkspaceGeometry.headingFontSize +
+                            WorkspaceGeometry.wideAndroidCenterFontIncrease
+                        : WorkspaceGeometry.headingFontSize,
                 trailing:
                     const Icon(Icons.search, size: WorkspaceGeometry.smallIcon),
               )
             : selectedCategoryPath.isEmpty
                 ? spbSectionHeader(
                     'Мои карточки',
+                    fontSize: narrowAndroid
+                        ? WorkspaceGeometry.headingFontSize +
+                            WorkspaceGeometry.narrowCenterFontIncrease
+                        : wideAndroid
+                            ? WorkspaceGeometry.headingFontSize +
+                                WorkspaceGeometry.wideAndroidCenterFontIncrease
+                            : WorkspaceGeometry.headingFontSize,
                     trailing: spbCurrentFolderHeaderIcon(),
                   )
                 : Container(
@@ -10037,9 +10119,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             categoryParts(selectedCategoryPath).last,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Color(0xff18364d),
-                              fontSize: WorkspaceGeometry.headingFontSize,
+                            style: TextStyle(
+                              color: const Color(0xff18364d),
+                              fontSize: narrowAndroid
+                                  ? WorkspaceGeometry.headingFontSize +
+                                      WorkspaceGeometry.narrowCenterFontIncrease
+                                  : wideAndroid
+                                      ? WorkspaceGeometry.headingFontSize +
+                                          WorkspaceGeometry
+                                              .wideAndroidCenterFontIncrease
+                                      : WorkspaceGeometry.headingFontSize,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
@@ -10069,24 +10158,40 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     controller: spbFolderGridScrollController,
                     padding: const EdgeInsets.only(
                         right: WorkspaceGeometry.treeScrollbar),
-                    gridDelegate: const WorkspaceGridDelegate(),
+                    gridDelegate: narrowAndroid
+                        ? const NarrowAndroidGridDelegate()
+                        : wideAndroid
+                            ? const WideAndroidGridDelegate()
+                            : const WorkspaceGridDelegate(),
                     itemCount: folders.length + cards.length,
                     itemBuilder: (context, index) {
                       if (index < folders.length) {
                         final folder = folders[index];
-                        final folderEntry = buildSpbGridEntry(
-                          label: folder.name,
-                          icon: spbSizedDataIcon(
-                            folder.iconId ??
-                                defaultIconForCategoryPath(folder.path),
-                            WorkspaceGeometry.largeIcon,
-                            fallbackColor:
-                                categoryPictogramColor(folder.colorId),
+                        final folderEntry = LayoutBuilder(
+                          builder: (context, constraints) => buildSpbGridEntry(
+                            label: folder.name,
+                            labelWidth: narrowAndroid
+                                ? max(1, constraints.maxWidth - 8)
+                                : wideAndroid
+                                    ? WorkspaceGeometry.wideAndroidLabelWidth
+                                    : WorkspaceGeometry.labelWidth,
+                            iconSize: gridIconSize,
+                            entryHeight: gridEntryHeight,
+                            labelHeight: gridLabelHeight,
+                            icon: spbSizedDataIcon(
+                              folder.iconId ??
+                                  defaultIconForCategoryPath(folder.path),
+                              gridIconSize,
+                              fallbackColor:
+                                  categoryPictogramColor(folder.colorId),
+                            ),
+                            onTap: () => openSpbFolder(folder.path),
+                            onContextMenu: (position) =>
+                                showSpbFolderMenu(folder, position),
+                            boldLabel: true,
+                            narrowAndroidLabel: narrowAndroid,
+                            wideAndroidLabel: wideAndroid,
                           ),
-                          onTap: () => openSpbFolder(folder.path),
-                          onContextMenu: (position) =>
-                              showSpbFolderMenu(folder, position),
-                          boldLabel: true,
                         );
                         return KeyedSubtree(
                           key: ValueKey('spbCentralFolder-${folder.path}'),
@@ -10105,22 +10210,33 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       }
                       final item = cards[index - folders.length];
                       final template = templateFor(item.templateId);
-                      final cardEntry = buildSpbGridEntry(
-                        label: item.title,
-                        labelKey: ValueKey('spbCardGridLabel-${item.id}'),
-                        labelWidth: WorkspaceGeometry.labelWidth,
-                        selected: selectedItemIds.contains(item.id) ||
-                            selectedItemId == item.id,
-                        icon: spbCardIconWithAttachmentMark(
-                          item: item,
-                          template: template,
-                          dimension: WorkspaceGeometry.largeIcon,
-                          attachmentMarkKey:
-                              ValueKey('cardAttachmentArrow-${item.id}'),
+                      final cardEntry = LayoutBuilder(
+                        builder: (context, constraints) => buildSpbGridEntry(
+                          label: item.title,
+                          labelKey: ValueKey('spbCardGridLabel-${item.id}'),
+                          labelWidth: narrowAndroid
+                              ? max(1, constraints.maxWidth - 8)
+                              : wideAndroid
+                                  ? WorkspaceGeometry.wideAndroidLabelWidth
+                                  : WorkspaceGeometry.labelWidth,
+                          iconSize: gridIconSize,
+                          entryHeight: gridEntryHeight,
+                          labelHeight: gridLabelHeight,
+                          selected: selectedItemIds.contains(item.id) ||
+                              selectedItemId == item.id,
+                          icon: spbCardIconWithAttachmentMark(
+                            item: item,
+                            template: template,
+                            dimension: gridIconSize,
+                            attachmentMarkKey:
+                                ValueKey('cardAttachmentArrow-${item.id}'),
+                          ),
+                          onTap: () => selectSpbCardFromPrimaryClick(item),
+                          onContextMenu: (position) =>
+                              showSpbCardMenu(item, position),
+                          narrowAndroidLabel: narrowAndroid,
+                          wideAndroidLabel: wideAndroid,
                         ),
-                        onTap: () => selectSpbCardFromPrimaryClick(item),
-                        onContextMenu: (position) =>
-                            showSpbCardMenu(item, position),
                       );
                       return KeyedSubtree(
                         key: ValueKey('spbCentralCard-${item.id}'),
@@ -10946,8 +11062,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     Key? labelKey,
     bool selected = false,
     double labelWidth = WorkspaceGeometry.labelWidth,
+    double iconSize = WorkspaceGeometry.largeIcon,
+    double entryHeight = WorkspaceGeometry.gridCell,
+    double labelHeight = WorkspaceGeometry.labelHeight,
     bool boldLabel = false,
     bool showLabel = true,
+    bool narrowAndroidLabel = false,
+    bool wideAndroidLabel = false,
   }) {
     final stabilizeAndroidLabel =
         defaultTargetPlatform == TargetPlatform.android;
@@ -10973,19 +11094,33 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ),
         );
     return SizedBox(
-      width: WorkspaceGeometry.gridCell,
-      height: WorkspaceGeometry.gridCell,
+      width: max(WorkspaceGeometry.gridCell, labelWidth),
+      height: entryHeight,
       child: Column(
         children: [
-          const SizedBox(height: WorkspaceGeometry.iconTop),
+          SizedBox(
+            height: narrowAndroidLabel
+                ? WorkspaceGeometry.iconTop *
+                    WorkspaceGeometry.narrowAndroidScale
+                : wideAndroidLabel
+                    ? WorkspaceGeometry.iconTop *
+                        WorkspaceGeometry.wideAndroidGridScale
+                    : WorkspaceGeometry.iconTop,
+          ),
           interactiveRegion(
             SizedBox(
-              width: WorkspaceGeometry.largeIcon,
-              height: WorkspaceGeometry.largeIcon + WorkspaceGeometry.labelGap,
+              width: iconSize,
+              height: iconSize +
+                  WorkspaceGeometry.labelGap *
+                      (narrowAndroidLabel
+                          ? WorkspaceGeometry.narrowAndroidScale
+                          : wideAndroidLabel
+                              ? WorkspaceGeometry.wideAndroidGridScale
+                              : 1),
               child: Align(
                 alignment: Alignment.topCenter,
                 child: SizedBox.square(
-                  dimension: WorkspaceGeometry.largeIcon,
+                  dimension: iconSize,
                   child: Container(
                     decoration: selected ? selectedDecoration : null,
                     child: FittedBox(fit: BoxFit.contain, child: icon),
@@ -10997,8 +11132,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           if (showLabel) ...[
             interactiveRegion(
               SizedBox(
-                width: WorkspaceGeometry.labelWidth,
-                height: WorkspaceGeometry.labelHeight,
+                width: labelWidth,
+                height: labelHeight,
                 child: Align(
                   alignment: Alignment.topCenter,
                   child: Container(
@@ -11011,10 +11146,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       textAlign: TextAlign.center,
                       textScaler:
                           stabilizeAndroidLabel ? TextScaler.noScaling : null,
-                      strutStyle: WorkspaceGeometry.itemNameStrut,
-                      style: boldLabel
-                          ? WorkspaceGeometry.folderStyle
-                          : WorkspaceGeometry.itemNameStyle,
+                      strutStyle: narrowAndroidLabel
+                          ? WorkspaceGeometry.narrowCenterItemNameStrut
+                          : wideAndroidLabel
+                              ? WorkspaceGeometry.wideAndroidCenterItemNameStrut
+                              : WorkspaceGeometry.itemNameStrut,
+                      style: narrowAndroidLabel
+                          ? (boldLabel
+                              ? WorkspaceGeometry.narrowCenterFolderStyle
+                              : WorkspaceGeometry.narrowCenterItemNameStyle)
+                          : wideAndroidLabel
+                              ? (boldLabel
+                                  ? WorkspaceGeometry
+                                      .wideAndroidCenterFolderStyle
+                                  : WorkspaceGeometry
+                                      .wideAndroidCenterItemNameStyle)
+                              : (boldLabel
+                                  ? WorkspaceGeometry.folderStyle
+                                  : WorkspaceGeometry.itemNameStyle),
                     ),
                   ),
                 ),
@@ -12273,8 +12422,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   trailing: Text(
                     '$foundCount',
                     key: const Key('spbFoundCount'),
-                    style:
-                        const TextStyle(fontSize: WorkspaceGeometry.fontSize),
+                    style: TextStyle(
+                      fontSize: spbNarrowAndroid
+                          ? WorkspaceGeometry.fontSize +
+                              WorkspaceGeometry.narrowSideFontIncrease
+                          : WorkspaceGeometry.fontSize,
+                    ),
                   ),
                 ),
                 if (spbFoundExpanded && query.isNotEmpty)
@@ -12376,14 +12529,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     List<SecretItem> matchingCards, {
     ScrollController? controller,
   }) {
+    final narrowAndroid = spbNarrowAndroid;
     if (matchingFolders.isEmpty && matchingCards.isEmpty) {
-      return const SizedBox(
+      return SizedBox(
         height: 48,
         child: Center(
           child: Text(
             'Совпадений нет',
-            key: Key('spbNoSearchResults'),
-            style: TextStyle(fontSize: 15),
+            key: const Key('spbNoSearchResults'),
+            style: TextStyle(fontSize: narrowAndroid ? 18 : 15),
           ),
         ),
       );
@@ -12438,6 +12592,27 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required String subtitle,
     required VoidCallback onTap,
   }) {
+    final narrowAndroid = spbNarrowAndroid;
+    final wideAndroid = spbWideAndroid;
+    final androidSpacing = narrowAndroid || wideAndroid;
+    final iconSize = androidSpacing
+        ? WorkspaceGeometry.narrowActionIcon
+        : WorkspaceGeometry.actionIcon;
+    final itemStyle = narrowAndroid
+        ? WorkspaceGeometry.narrowSideItemNameStyle
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidSideItemNameStyle
+            : WorkspaceGeometry.itemNameStyle;
+    final itemStrut = narrowAndroid
+        ? WorkspaceGeometry.narrowSideItemNameStrut
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidSideItemNameStrut
+            : WorkspaceGeometry.itemNameStrut;
+    final bodyStrut = narrowAndroid
+        ? WorkspaceGeometry.narrowSideBodyStrut
+        : wideAndroid
+            ? WorkspaceGeometry.wideAndroidSideBodyStrut
+            : WorkspaceGeometry.bodyStrut;
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -12446,7 +12621,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           children: [
             SizedBox.square(
               key: ValueKey('spbFoundIcon-$title'),
-              dimension: WorkspaceGeometry.actionIcon,
+              dimension: iconSize,
               child: FittedBox(fit: BoxFit.contain, child: icon),
             ),
             const SizedBox(width: WorkspaceGeometry.actionIconGap),
@@ -12458,19 +12633,29 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     title,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: WorkspaceGeometry.itemNameStyle,
-                    strutStyle: WorkspaceGeometry.itemNameStrut,
+                    style: itemStyle,
+                    strutStyle: itemStrut,
                   ),
                   Text(
                     subtitle,
-                    strutStyle: WorkspaceGeometry.bodyStrut,
+                    strutStyle: bodyStrut,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Color(0xff5f5f5f),
-                      fontSize: WorkspaceGeometry.fontSize,
-                      height: WorkspaceGeometry.lineHeight /
-                          WorkspaceGeometry.fontSize,
+                    style: TextStyle(
+                      color: const Color(0xff5f5f5f),
+                      fontSize: narrowAndroid
+                          ? WorkspaceGeometry.fontSize +
+                              WorkspaceGeometry.narrowSideFontIncrease
+                          : WorkspaceGeometry.fontSize,
+                      height: narrowAndroid
+                          ? WorkspaceGeometry.narrowLineHeight /
+                              (WorkspaceGeometry.fontSize +
+                                  WorkspaceGeometry.narrowSideFontIncrease)
+                          : wideAndroid
+                              ? WorkspaceGeometry.narrowLineHeight /
+                                  WorkspaceGeometry.fontSize
+                              : WorkspaceGeometry.lineHeight /
+                                  WorkspaceGeometry.fontSize,
                     ),
                   ),
                 ],
@@ -12490,6 +12675,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool shellStyle = false,
     Widget? trailing,
   }) {
+    final narrowAndroid = spbNarrowAndroid;
+    final wideAndroid = spbWideAndroid;
+    final collapseSize = narrowAndroid || wideAndroid
+        ? WorkspaceGeometry.narrowCollapseSize
+        : WorkspaceGeometry.collapseSize;
     return Container(
       height: WorkspaceGeometry.headerHeight,
       padding: const EdgeInsets.only(left: 14, right: 3.5),
@@ -12509,13 +12699,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: WorkspaceGeometry.headingStyle,
+              style: narrowAndroid
+                  ? WorkspaceGeometry.narrowSideHeadingStyle
+                  : WorkspaceGeometry.headingStyle,
             ),
           ),
           if (trailing != null) trailing,
           SizedBox(
-            width: WorkspaceGeometry.collapseSize,
-            height: WorkspaceGeometry.collapseSize,
+            width: collapseSize,
+            height: collapseSize,
             child: Tooltip(
               message: expanded ? 'Свернуть' : 'Развернуть',
               child: InkWell(
@@ -12526,7 +12718,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 child: Center(
                   child: Icon(
                     expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down,
-                    size: WorkspaceGeometry.collapseSize,
+                    size: collapseSize,
                     color: const Color(0xff168bd2),
                     shadows: const [
                       Shadow(
@@ -12561,6 +12753,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     ScrollController? scrollController,
     bool frequentRows = false,
   }) {
+    final narrowAndroid = spbNarrowAndroid;
+    final wideAndroid = spbWideAndroid;
+    final androidSpacing = narrowAndroid || wideAndroid;
+    final actionIconSize = androidSpacing
+        ? WorkspaceGeometry.narrowActionIcon
+        : WorkspaceGeometry.actionIcon;
+    final minimumRowHeight = androidSpacing
+        ? WorkspaceGeometry.narrowRowHeight
+        : WorkspaceGeometry.rowHeight;
     final header = sectionExpanded == null
         ? Container(
             height: WorkspaceGeometry.headerHeight,
@@ -12578,7 +12779,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               title,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: WorkspaceGeometry.headingStyle,
+              style: narrowAndroid
+                  ? WorkspaceGeometry.narrowSideHeadingStyle
+                  : WorkspaceGeometry.headingStyle,
             ),
           )
         : buildSpbCollapsibleHeader(
@@ -12596,14 +12799,34 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           builder: (context, constraints) {
             final textWidth = max(
               1.0,
-              constraints.maxWidth - WorkspaceGeometry.actionTextStart - 6,
+              constraints.maxWidth -
+                  WorkspaceGeometry.actionIconLeft -
+                  actionIconSize -
+                  WorkspaceGeometry.actionIconGap -
+                  6,
             );
-            final rowTextStyle = frequentRows
-                ? WorkspaceGeometry.itemNameStyle
-                : WorkspaceGeometry.bodyStyle;
-            final rowStrutStyle = frequentRows
-                ? WorkspaceGeometry.itemNameStrut
-                : WorkspaceGeometry.bodyStrut;
+            final rowTextStyle = narrowAndroid
+                ? (frequentRows
+                    ? WorkspaceGeometry.narrowSideItemNameStyle
+                    : WorkspaceGeometry.narrowSideBodyStyle)
+                : wideAndroid
+                    ? (frequentRows
+                        ? WorkspaceGeometry.wideAndroidSideItemNameStyle
+                        : WorkspaceGeometry.wideAndroidSideBodyStyle)
+                    : (frequentRows
+                        ? WorkspaceGeometry.itemNameStyle
+                        : WorkspaceGeometry.bodyStyle);
+            final rowStrutStyle = narrowAndroid
+                ? (frequentRows
+                    ? WorkspaceGeometry.narrowSideItemNameStrut
+                    : WorkspaceGeometry.narrowSideBodyStrut)
+                : wideAndroid
+                    ? (frequentRows
+                        ? WorkspaceGeometry.wideAndroidSideItemNameStrut
+                        : WorkspaceGeometry.wideAndroidSideBodyStrut)
+                    : (frequentRows
+                        ? WorkspaceGeometry.itemNameStrut
+                        : WorkspaceGeometry.bodyStrut);
             final textStyle =
                 DefaultTextStyle.of(context).style.merge(rowTextStyle);
             final painter = TextPainter(
@@ -12613,8 +12836,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               strutStyle: rowStrutStyle,
             )..layout(maxWidth: textWidth);
             final rowHeight = max(
-              WorkspaceGeometry.actionIcon,
-              max(WorkspaceGeometry.rowHeight, painter.height),
+              actionIconSize,
+              max(minimumRowHeight, painter.height),
             );
             painter.dispose();
             return InkWell(
@@ -12627,7 +12850,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     children: [
                       SizedBox.square(
                         key: ValueKey('spbActionIcon-${action.$2}'),
-                        dimension: WorkspaceGeometry.actionIcon,
+                        dimension: actionIconSize,
                         child: FittedBox(
                           fit: BoxFit.contain,
                           child: action.$1,

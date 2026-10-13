@@ -3353,8 +3353,16 @@ void main() {
       ),
     );
     expect(activeRegions, findsNWidgets(2));
-    expect(tester.getSize(activeRegions.at(0)), const Size(32, 35));
-    expect(tester.getSize(activeRegions.at(1)).width, 72);
+    expect(
+      tester.getSize(activeRegions.at(0)),
+      const Size(
+        WorkspaceGeometry.wideAndroidGridIcon,
+        WorkspaceGeometry.wideAndroidGridIcon +
+            WorkspaceGeometry.labelGap * WorkspaceGeometry.wideAndroidGridScale,
+      ),
+    );
+    expect(tester.getSize(activeRegions.at(1)).width,
+        WorkspaceGeometry.wideAndroidLabelWidth);
     final selectedBackgrounds = find.descendant(
       of: card,
       matching: find.byWidgetPredicate(
@@ -3367,11 +3375,11 @@ void main() {
     expect(selectedBackgrounds, findsNWidgets(2));
     expect(
       tester.getSize(selectedBackgrounds.at(0)),
-      const Size(32, 32),
+      const Size.square(WorkspaceGeometry.wideAndroidGridIcon),
     );
     expect(
       tester.getSize(selectedBackgrounds.at(1)).width,
-      lessThanOrEqualTo(72),
+      lessThanOrEqualTo(WorkspaceGeometry.wideAndroidLabelWidth),
     );
 
     final cardRect = tester.getRect(card);
@@ -3481,7 +3489,7 @@ void main() {
   });
 
   testWidgets(
-      'wide tree folders keep twenty pixel rows and sixteen pixel icons',
+      'wide Android tree folders use fifteen-percent larger row geometry',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -3566,7 +3574,7 @@ void main() {
         matching: find.byType(ExpansionTile),
       ),
     );
-    expect(firstFolderTile.minTileHeight, 20);
+    expect(firstFolderTile.minTileHeight, WorkspaceGeometry.narrowRowHeight);
     final topLevelHighlight = tester.widget<CustomPaint>(
       find.byKey(
         const ValueKey('spbTreeFolderHighlight-Folder spacing A'),
@@ -3574,7 +3582,7 @@ void main() {
     );
     expect(
       (topLevelHighlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      20,
+      WorkspaceGeometry.narrowRowHeight,
     );
     final firstFolderIcon = find.byKey(
       const ValueKey('spbTreeFolderIconRow-Folder spacing A'),
@@ -3582,6 +3590,8 @@ void main() {
     final secondFolderIcon = find.byKey(
       const ValueKey('spbTreeFolderIconRow-Folder spacing B'),
     );
+    expect(tester.getSize(firstFolderIcon).height,
+        WorkspaceGeometry.narrowRowHeight);
     expect(
       tester.getRect(secondFolderIcon).top -
           tester.getRect(firstFolderIcon).bottom,
@@ -3603,7 +3613,7 @@ void main() {
         matching: find.byType(ExpansionTile),
       ),
     );
-    expect(firstNestedTile.minTileHeight, 20);
+    expect(firstNestedTile.minTileHeight, WorkspaceGeometry.narrowRowHeight);
     final nestedHighlight = tester.widget<CustomPaint>(
       find.byKey(const ValueKey(
         'spbTreeFolderHighlight-Expanded folder / Nested folder A',
@@ -3611,12 +3621,12 @@ void main() {
     );
     expect(
       (nestedHighlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      20,
+      WorkspaceGeometry.narrowRowHeight,
     );
     expect(
       tester.getCenter(secondNestedFolder).dy -
           tester.getCenter(firstNestedFolder).dy,
-      closeTo(20, 0.1),
+      closeTo(WorkspaceGeometry.narrowRowHeight, 0.1),
     );
 
     final treeFolderTitle = tester.widget<Text>(
@@ -3636,7 +3646,7 @@ void main() {
         matching: find.text('Folder spacing A'),
       ),
     );
-    expect(centralFolderTitle.style?.fontSize, 14);
+    expect(centralFolderTitle.style?.fontSize, 17);
     expect(centralFolderTitle.style?.fontWeight, FontWeight.normal);
 
     await tester.tap(firstFolderFinder, buttons: kSecondaryMouseButton);
@@ -3659,7 +3669,8 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('narrow tree folders use the same V1 row height', (tester) async {
+  testWidgets('narrow Android tree folders use enlarged row height',
+      (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await tester.binding.setSurfaceSize(const Size(390, 800));
     addTearDown(() {
@@ -3696,7 +3707,7 @@ void main() {
     final tile = tester.widget<ExpansionTile>(
       find.descendant(of: folder, matching: find.byType(ExpansionTile)),
     );
-    expect(tile.minTileHeight, 20);
+    expect(tile.minTileHeight, WorkspaceGeometry.narrowRowHeight);
     final highlight = tester.widget<CustomPaint>(
       find.byKey(const ValueKey(
         'spbTreeFolderHighlight-Narrow unchanged folder',
@@ -3704,7 +3715,7 @@ void main() {
     );
     expect(
       (highlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      20,
+      WorkspaceGeometry.narrowRowHeight,
     );
 
     await tester.longPress(folder);
@@ -4205,7 +4216,7 @@ void main() {
     await tester.binding.setSurfaceSize(null);
   });
 
-  testWidgets('wide Android card grid uses the same fixed V1 cells',
+  testWidgets('wide Android card grid uses twenty-percent larger cells',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await tester.binding.setSurfaceSize(const Size(1280, 800));
@@ -4225,7 +4236,7 @@ void main() {
         matching: find.byType(GridView),
       ),
     );
-    expect(grid.gridDelegate, isA<WorkspaceGridDelegate>());
+    expect(grid.gridDelegate, isA<WideAndroidGridDelegate>());
     debugDefaultTargetPlatformOverride = null;
     await tester.binding.setSurfaceSize(null);
   });
