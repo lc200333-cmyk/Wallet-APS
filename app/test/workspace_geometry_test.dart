@@ -134,13 +134,24 @@ void main() {
           scale: scale,
         );
         final wideAndroid = platform == TargetPlatform.android;
+        final desktopFolderLayout = platform == TargetPlatform.windows ||
+            platform == TargetPlatform.linux;
         final sideRowHeight = wideAndroid
-            ? WorkspaceGeometry.narrowRowHeight
-            : WorkspaceGeometry.rowHeight;
+            ? WorkspaceGeometry.androidListRowHeight
+            : desktopFolderLayout
+                ? WorkspaceGeometry.desktopFolderRowHeight
+                : WorkspaceGeometry.rowHeight;
         final sideIconSize = wideAndroid
-            ? WorkspaceGeometry.narrowSmallIcon
-            : WorkspaceGeometry.smallIcon;
-        final centerCellSize = wideAndroid
+            ? WorkspaceGeometry.androidListSmallIcon
+            : desktopFolderLayout
+                ? WorkspaceGeometry.desktopTreeIcon
+                : WorkspaceGeometry.smallIcon;
+        final centerCellWidth = wideAndroid
+            ? WorkspaceGeometry.wideAndroidGridCell
+            : desktopFolderLayout
+                ? WorkspaceGeometry.desktopCenterCellWidth
+                : WorkspaceGeometry.gridCell;
+        final centerCellHeight = wideAndroid
             ? WorkspaceGeometry.wideAndroidGridCell
             : WorkspaceGeometry.gridCell;
         final actionIconSize = wideAndroid
@@ -162,14 +173,29 @@ void main() {
           of: find.byKey(const ValueKey('spbTreeFolder-A')),
           matching: find.text('A'),
         ));
-        expect(treeFolderLabel.style?.fontSize, 14);
+        expect(
+          treeFolderLabel.style?.fontSize,
+          wideAndroid || desktopFolderLayout ? 16 : 14,
+        );
         expect(treeFolderLabel.style?.fontWeight, FontWeight.normal);
         final treeCardLabel = tester.widget<Text>(find.descendant(
           of: find.byKey(const ValueKey('spbTreeCard-geometry-0')),
           matching: find.text('A long card caption that wraps onto two lines'),
         ));
-        expect(treeCardLabel.style?.fontSize, 13);
+        expect(treeCardLabel.style?.fontSize, desktopFolderLayout ? 14 : 13);
         expect(treeCardLabel.style?.fontWeight, FontWeight.normal);
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('spbTreeCard-geometry-0')),
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is SizedBox &&
+                  widget.width == sideIconSize &&
+                  widget.height == sideIconSize,
+            ),
+          ),
+          findsWidgets,
+        );
         final grid = find.descendant(
           of: find.byKey(const Key('spbCentralWorkspace')),
           matching: find.byType(GridView),
@@ -178,30 +204,60 @@ void main() {
         if (wideAndroid) {
           expect(tester.widget<GridView>(grid).gridDelegate,
               isA<WideAndroidGridDelegate>());
+        } else if (desktopFolderLayout) {
+          expect(tester.widget<GridView>(grid).gridDelegate,
+              isA<DesktopCardGridDelegate>());
         } else {
           expect(tester.widget<GridView>(grid).gridDelegate,
               isA<WorkspaceGridDelegate>());
         }
         final firstCard =
             find.byKey(const ValueKey('spbCentralCard-geometry-0'));
-        expect(tester.getSize(firstCard), Size.square(centerCellSize));
+        expect(
+          tester.getSize(firstCard),
+          Size(centerCellWidth, centerCellHeight),
+        );
+        final centerIconSize = wideAndroid
+            ? WorkspaceGeometry.wideAndroidGridIcon
+            : desktopFolderLayout
+                ? WorkspaceGeometry.desktopCenterIcon
+                : WorkspaceGeometry.largeIcon;
+        expect(
+          find.descendant(
+            of: firstCard,
+            matching: find.byWidgetPredicate(
+              (widget) =>
+                  widget is SizedBox &&
+                  widget.width == centerIconSize &&
+                  widget.height == centerIconSize,
+            ),
+          ),
+          findsWidgets,
+        );
         final secondCard =
             find.byKey(const ValueKey('spbCentralCard-geometry-1'));
         final nextRow = find.byKey(ValueKey(
-          wideAndroid
+          wideAndroid || desktopFolderLayout
               ? 'spbCentralCard-geometry-5'
               : 'spbCentralCard-geometry-7',
         ));
         expect(tester.getCenter(secondCard).dx - tester.getCenter(firstCard).dx,
-            centerCellSize);
+            centerCellWidth);
         expect(
           tester.getCenter(nextRow).dy - tester.getCenter(firstCard).dy,
-          centerCellSize,
+          centerCellHeight,
         );
         final label = tester.widget<Text>(
           find.byKey(const ValueKey('spbCardGridLabel-geometry-0')),
         );
-        expect(label.style!.fontSize, wideAndroid ? 16 : 13);
+        expect(
+          label.style!.fontSize,
+          wideAndroid
+              ? 16
+              : desktopFolderLayout
+                  ? 14
+                  : 13,
+        );
         expect(
           label.style!.height! * label.style!.fontSize!,
           closeTo(wideAndroid ? 18 : 15, 0.000001),
@@ -228,6 +284,10 @@ void main() {
         final taskLabel = state.spbTasksForCurrentMode().first.$2 as String;
         final taskIcon = find.byKey(ValueKey('spbActionIcon-$taskLabel'));
         expect(tester.getSize(taskIcon), Size.square(actionIconSize));
+        expect(
+          tester.widget<Text>(find.text(taskLabel)).style?.fontSize,
+          wideAndroid ? 13 : 12,
+        );
         final frequentIcon = find.byKey(
           ValueKey('spbActionIcon-${state.frequentItems().first.title}'),
         );
@@ -239,6 +299,18 @@ void main() {
           const ValueKey('spbFoundIcon-Card 01'),
         );
         expect(tester.getSize(foundIcon), Size.square(actionIconSize));
+        final foundTitle = tester.widget<Text>(find.descendant(
+          of: find.byKey(const Key('spbSearchResults')),
+          matching: find.text('Card 01'),
+        ));
+        expect(foundTitle.style?.fontSize, wideAndroid ? 14 : 13);
+        final foundSubtitle = tester
+            .widgetList<Text>(find.descendant(
+              of: find.byKey(const Key('spbSearchResults')),
+              matching: find.text('Карточка'),
+            ))
+            .first;
+        expect(foundSubtitle.style?.fontSize, wideAndroid ? 13 : 12);
         state.searchController.clear();
         state.setState(() => state.spbSubmittedSearchQuery = '');
         await tester.pumpAndSettle();
@@ -252,19 +324,41 @@ void main() {
         final template = find.byKey(
           ValueKey('spbCentralTemplate-${state.templates.first.id}'),
         );
-        expect(tester.getSize(template), const Size(75, 75));
+        expect(
+            tester.getSize(template), Size(centerCellWidth, centerCellHeight));
         final templateLabel = tester.widget<Text>(find.descendant(
           of: template,
           matching: find.text(state.templates.first.name),
         ));
-        expect(templateLabel.style?.fontSize, 13);
+        expect(templateLabel.style, label.style);
+        expect(templateLabel.strutStyle, label.strutStyle);
+        expect(templateLabel.maxLines, label.maxLines);
+        expect(templateLabel.overflow, label.overflow);
         expect(templateLabel.style?.fontWeight, FontWeight.normal);
         final treeTemplateLabel = tester.widget<Text>(find.descendant(
           of: find.byKey(ValueKey('spbTemplate-${state.templates.first.id}')),
           matching: find.text(state.templates.first.name),
         ));
-        expect(treeTemplateLabel.style?.fontSize, 13);
+        expect(treeTemplateLabel.style, treeCardLabel.style);
+        expect(treeTemplateLabel.strutStyle, treeCardLabel.strutStyle);
         expect(treeTemplateLabel.style?.fontWeight, FontWeight.normal);
+        final treeTemplateTile = tester.widget<ListTile>(find.descendant(
+          of: find.byKey(
+            ValueKey('spbTemplate-${state.templates.first.id}'),
+          ),
+          matching: find.byType(ListTile),
+        ));
+        expect(treeTemplateTile.minTileHeight, sideRowHeight);
+        final treeTemplateIcon = find.descendant(
+          of: find.byKey(
+            ValueKey('spbTemplate-${state.templates.first.id}'),
+          ),
+          matching: find.byType(Icon),
+        );
+        expect(
+          tester.getSize(treeTemplateIcon.last),
+          Size.square(sideIconSize),
+        );
         expect(tester.takeException(), isNull);
         debugDefaultTargetPlatformOverride = null;
       });
@@ -304,7 +398,10 @@ void main() {
         .tap(find.byKey(const ValueKey('spbTreeFolderIconRow-A / Nested')));
     await tester.pumpAndSettle();
     final card = find.byKey(const ValueKey('spbTreeCard-nested-geometry'));
-    expect(tester.getSize(card).height, 20);
+    expect(
+      tester.getSize(card).height,
+      WorkspaceGeometry.desktopFolderRowHeight,
+    );
     final ScrollController horizontal = state.spbTreeHorizontalScrollController;
     expect(horizontal.position.maxScrollExtent, greaterThan(0));
     horizontal.jumpTo(horizontal.position.maxScrollExtent);
@@ -325,20 +422,20 @@ void main() {
     final firstTreeRow = find.byKey(const ValueKey('spbTreeFolderIconRow-A'));
     final secondTreeRow = find.byKey(const ValueKey('spbTreeFolderIconRow-B'));
     expect(tester.getSize(firstTreeRow).height,
-        closeTo(WorkspaceGeometry.narrowRowHeight, 0.01));
+        closeTo(WorkspaceGeometry.androidListRowHeight, 0.01));
     expect(
       tester.getCenter(secondTreeRow).dy - tester.getCenter(firstTreeRow).dy,
-      closeTo(WorkspaceGeometry.narrowRowHeight, 0.01),
+      closeTo(WorkspaceGeometry.androidListRowHeight, 0.01),
     );
     final treeIcon =
         find.descendant(of: firstTreeRow, matching: find.byType(Icon));
     expect(tester.getSize(treeIcon.last).width,
-        closeTo(WorkspaceGeometry.narrowSmallIcon, 0.01));
+        closeTo(WorkspaceGeometry.androidListSmallIcon, 0.01));
     final treeFolderLabel = tester.widget<Text>(find.descendant(
       of: find.byKey(const ValueKey('spbTreeFolder-A')),
       matching: find.text('A'),
     ));
-    expect(treeFolderLabel.style?.fontSize, 17);
+    expect(treeFolderLabel.style?.fontSize, 16);
     expect(treeFolderLabel.style?.fontWeight, FontWeight.normal);
     final treeCardLabel = tester.widget<Text>(find.descendant(
       of: find.byKey(const ValueKey('spbTreeCard-geometry-0')),
@@ -393,16 +490,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('spbCollapseЗадачи')), findsOneWidget);
     final taskHeader = tester.widget<Text>(find.text('Задачи'));
-    expect(taskHeader.style?.fontSize, 16);
+    expect(taskHeader.style?.fontSize, 14);
     final taskLabel = state.spbTasksForCurrentMode().first.$2 as String;
     final taskIcon = find.byKey(ValueKey('spbActionIcon-$taskLabel'));
     expect(tester.getSize(taskIcon).width,
         closeTo(WorkspaceGeometry.narrowActionIcon, 0.01));
     final taskText = tester.widget<Text>(find.text(taskLabel));
-    expect(taskText.style?.fontSize, 15);
+    expect(taskText.style?.fontSize, 13);
     final frequentTitle = state.frequentItems().first.title as String;
     final frequentText = tester.widget<Text>(find.text(frequentTitle));
-    expect(frequentText.style?.fontSize, 16);
+    expect(frequentText.style?.fontSize, 14);
 
     state.searchController.text = 'Card 01';
     state.setState(() => state.spbSubmittedSearchQuery = 'Card 01');
@@ -414,14 +511,64 @@ void main() {
       of: find.byKey(const Key('spbSearchResults')),
       matching: find.text('Card 01'),
     ));
-    expect(foundTitle.style?.fontSize, 16);
+    expect(foundTitle.style?.fontSize, 14);
     final foundSubtitle = tester
         .widgetList<Text>(find.descendant(
           of: find.byKey(const Key('spbSearchResults')),
           matching: find.text('Карточка'),
         ))
         .first;
-    expect(foundSubtitle.style?.fontSize, 15);
+    expect(foundSubtitle.style?.fontSize, 13);
+
+    state.searchController.clear();
+    state.setState(() {
+      state.spbSubmittedSearchQuery = '';
+      state.mobileTemplatesOpen = true;
+      state.mobilePane = 0;
+    });
+    await tester.pumpAndSettle();
+    final templateRow = find.byKey(
+      ValueKey('spbTemplate-${state.templates.first.id}'),
+    );
+    final templateTile = tester.widget<ListTile>(
+      find.descendant(of: templateRow, matching: find.byType(ListTile)),
+    );
+    expect(templateTile.minTileHeight, WorkspaceGeometry.androidListRowHeight);
+    final templateIcon = find.descendant(
+      of: templateRow,
+      matching: find.byType(Icon),
+    );
+    expect(
+      tester.getSize(templateIcon.last),
+      const Size.square(WorkspaceGeometry.androidListSmallIcon),
+    );
+    final templateLabel = tester.widget<Text>(
+      find.descendant(
+        of: templateRow,
+        matching: find.text(state.templates.first.name),
+      ),
+    );
+    expect(templateLabel.style?.fontSize, 16);
+    state.setState(() => state.mobilePane = 1);
+    await tester.pumpAndSettle();
+    final templateGrid = find.descendant(
+      of: find.byKey(const Key('spbTemplateWorkspace')),
+      matching: find.byType(GridView),
+    );
+    expect(tester.widget<GridView>(templateGrid).gridDelegate,
+        isA<NarrowAndroidGridDelegate>());
+    final centralTemplate = find.byKey(
+      ValueKey('spbCentralTemplate-${state.templates.first.id}'),
+    );
+    final centralTemplateLabel = tester.widget<Text>(find.descendant(
+      of: centralTemplate,
+      matching: find.text(state.templates.first.name),
+    ));
+    expect(tester.getSize(centralTemplate), firstCardSize);
+    expect(centralTemplateLabel.style, cardLabel.style);
+    expect(centralTemplateLabel.strutStyle, cardLabel.strutStyle);
+    expect(centralTemplateLabel.maxLines, cardLabel.maxLines);
+    expect(centralTemplateLabel.overflow, cardLabel.overflow);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });

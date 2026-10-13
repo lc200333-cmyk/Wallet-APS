@@ -790,6 +790,128 @@ void main() {
     }
   });
 
+  for (final platform in [TargetPlatform.windows, TargetPlatform.linux]) {
+    testWidgets(
+        '${platform.name} template preview and editor icons fill ninety percent of their frames',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = platform;
+      await tester.binding.setSurfaceSize(const Size(1280, 900));
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.binding.setSurfaceSize(null);
+      });
+      final template = builtInTemplates().first;
+      const frameSize = 112.0;
+      const iconSize = frameSize * WorkspaceGeometry.framedIconScale;
+
+      await tester.pumpWidget(
+        MaterialApp(home: TemplatePreviewDialog(template: template)),
+      );
+      await tester.pumpAndSettle();
+
+      final previewFrame = find.byKey(const Key('templatePreviewIcon'));
+      expect(tester.getSize(previewFrame), const Size.square(frameSize));
+      expect(
+        tester
+            .widget<Icon>(
+              find.descendant(
+                of: previewFrame,
+                matching: find.byType(Icon),
+              ),
+            )
+            .size,
+        iconSize,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(home: TemplateEditorDialog(initial: template)),
+      );
+      await tester.pumpAndSettle();
+
+      final editorFrame = find.byKey(const Key('templateBoundIcon'));
+      expect(tester.getSize(editorFrame), const Size.square(frameSize));
+      expect(
+        tester
+            .widget<Icon>(
+              find.descendant(
+                of: editorFrame,
+                matching: find.byType(Icon),
+              ),
+            )
+            .size,
+        iconSize,
+      );
+      expect(tester.takeException(), isNull);
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+    });
+  }
+
+  for (final configuration in [
+    (TargetPlatform.windows, const Size(1280, 900)),
+    (TargetPlatform.linux, const Size(1280, 900)),
+    (TargetPlatform.android, const Size(390, 800)),
+    (TargetPlatform.android, const Size(1000, 800)),
+  ]) {
+    testWidgets(
+        'template preview bottom actions ${configuration.$1.name} ${configuration.$2.width}',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = configuration.$1;
+      await tester.binding.setSurfaceSize(configuration.$2);
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        tester.binding.setSurfaceSize(null);
+      });
+      TemplatePreviewAction? result;
+      await tester.pumpWidget(MaterialApp(
+        home: Builder(
+            builder: (context) => TextButton(
+                  onPressed: () async {
+                    result = await showDialog<TemplatePreviewAction>(
+                      context: context,
+                      builder: (_) => TemplatePreviewDialog(
+                          template: builtInTemplates().first),
+                    );
+                  },
+                  child: const Text('Open preview'),
+                )),
+      ));
+      for (final action in [
+        ('templatePreviewEditButton', TemplatePreviewAction.edit),
+        ('templatePreviewDeleteButton', TemplatePreviewAction.delete),
+        ('templatePreviewCloseButton', TemplatePreviewAction.close),
+      ]) {
+        await tester.tap(find.text('Open preview'));
+        await tester.pumpAndSettle();
+        final edit = find.byKey(const Key('templatePreviewEditButton'));
+        final delete = find.byKey(const Key('templatePreviewDeleteButton'));
+        final close = find.byKey(const Key('templatePreviewCloseButton'));
+        expect(close, findsOneWidget);
+        expect(tester.getSize(edit), const Size.square(48));
+        expect(tester.getCenter(delete).dx - tester.getCenter(edit).dx, 54);
+        expect(tester.getCenter(close).dx - tester.getCenter(delete).dx, 54);
+        expect(tester.getCenter(close).dy, tester.getCenter(edit).dy);
+        final surface =
+            tester.getRect(find.byKey(const Key('templatePreviewSurface')));
+        expect(surface.right - tester.getRect(close).right, 10);
+        expect(surface.bottom - tester.getRect(close).bottom, 7);
+        expect(tester.widget<SpbGradientActionButton>(edit).colors,
+            const [Color(0xff5bc96d), Color(0xff08772f)]);
+        expect(tester.widget<SpbGradientActionButton>(delete).colors,
+            const [Color(0xffffdc58), Color(0xffc58a00)]);
+        expect(tester.widget<SpbGradientActionButton>(close).colors,
+            const [Color(0xffff5a5f), Color(0xffa90000)]);
+        await tester.tap(find.byKey(Key(action.$1)));
+        await tester.pumpAndSettle();
+        expect(result, action.$2);
+        expect(find.byType(TemplatePreviewDialog), findsNothing);
+        expect(tester.takeException(), isNull);
+      }
+      debugDefaultTargetPlatformOverride = null;
+      await tester.binding.setSurfaceSize(null);
+    });
+  }
+
   testWidgets('template editor uses SPB layout and supports local undo',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(360, 800));
@@ -807,7 +929,7 @@ void main() {
     expect(templateSurfaceSize.height, greaterThanOrEqualTo(500));
     expect(find.byKey(const Key('templateNameField')), findsOneWidget);
     expect(find.byKey(const Key('templateBoundIcon')), findsOneWidget);
-    expect(find.text('Выбрать иконку'), findsOneWidget);
+    expect(find.text('Выбрать иконку'), findsNothing);
     expect(find.byKey(const Key('templateSpbDefaultButton')), findsOneWidget);
     expect(find.byKey(const Key('templatePictogramsButton')), findsOneWidget);
     expect(find.byKey(const Key('templateBrandPicker')), findsOneWidget);
@@ -850,6 +972,14 @@ void main() {
     final iconFrame = tester.widget<Container>(
       find.byKey(const Key('templateBoundIcon')),
     );
+    expect(
+      tester.getSize(find.byKey(const Key('templateBoundIcon'))),
+      const Size(88, 88),
+    );
+    expect(
+      tester.widget(find.byKey(const Key('templateSpbDefaultButton'))),
+      isA<SpbGrayPickerButton>(),
+    );
     final iconDecoration = iconFrame.decoration! as BoxDecoration;
     expect((iconDecoration.border! as Border).top.width, 2);
     expect(iconDecoration.borderRadius, BorderRadius.circular(5));
@@ -874,6 +1004,10 @@ void main() {
         matching: find.byType(Icon),
       ),
     );
+    expect(
+      coloredPictogram.size,
+      88 * WorkspaceGeometry.framedIconScale,
+    );
     expect(coloredPictogram.color, templatePictogramColor('template_sky'));
     expect(tester.takeException(), isNull);
 
@@ -885,18 +1019,16 @@ void main() {
     final deleteButton =
         find.byKey(ValueKey('templateFieldDelete-$firstFieldId'));
     final upButton = find.byKey(ValueKey('templateFieldUp-$firstFieldId'));
+    final fieldName = find.byKey(ValueKey('templateFieldName-$firstFieldId'));
+    final fieldType = find.byKey(ValueKey('templateFieldType-$firstFieldId'));
     expect(tester.getSize(deleteButton).width, tester.getSize(upButton).width);
     expect(
-      tester
-          .getTopRight(
-            find.byKey(ValueKey('templateFieldName-$firstFieldId')),
-          )
-          .dx,
-      tester
-          .getTopRight(
-            find.byKey(ValueKey('templateFieldType-$firstFieldId')),
-          )
-          .dx,
+      tester.getTopLeft(fieldType).dy - tester.getBottomLeft(fieldName).dy,
+      8,
+    );
+    expect(
+      tester.getTopRight(fieldName).dx,
+      tester.getTopRight(fieldType).dx,
     );
     expect(
       tester.getTopLeft(firstField).dy,
@@ -1539,7 +1671,7 @@ void main() {
             ),
           )
           .size,
-      80,
+      88 * WorkspaceGeometry.framedIconScale,
     );
     expect(
       find.byKey(ValueKey('cardPreviewField-${template.fields[0].id}')),
@@ -3489,7 +3621,7 @@ void main() {
   });
 
   testWidgets(
-      'wide Android tree folders use fifteen-percent larger row geometry',
+      'wide Android tree folders use twenty-five-percent larger row geometry',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -3574,7 +3706,10 @@ void main() {
         matching: find.byType(ExpansionTile),
       ),
     );
-    expect(firstFolderTile.minTileHeight, WorkspaceGeometry.narrowRowHeight);
+    expect(
+      firstFolderTile.minTileHeight,
+      WorkspaceGeometry.androidListRowHeight,
+    );
     final topLevelHighlight = tester.widget<CustomPaint>(
       find.byKey(
         const ValueKey('spbTreeFolderHighlight-Folder spacing A'),
@@ -3582,7 +3717,7 @@ void main() {
     );
     expect(
       (topLevelHighlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      WorkspaceGeometry.narrowRowHeight,
+      WorkspaceGeometry.androidListRowHeight,
     );
     final firstFolderIcon = find.byKey(
       const ValueKey('spbTreeFolderIconRow-Folder spacing A'),
@@ -3591,7 +3726,7 @@ void main() {
       const ValueKey('spbTreeFolderIconRow-Folder spacing B'),
     );
     expect(tester.getSize(firstFolderIcon).height,
-        WorkspaceGeometry.narrowRowHeight);
+        WorkspaceGeometry.androidListRowHeight);
     expect(
       tester.getRect(secondFolderIcon).top -
           tester.getRect(firstFolderIcon).bottom,
@@ -3613,7 +3748,10 @@ void main() {
         matching: find.byType(ExpansionTile),
       ),
     );
-    expect(firstNestedTile.minTileHeight, WorkspaceGeometry.narrowRowHeight);
+    expect(
+      firstNestedTile.minTileHeight,
+      WorkspaceGeometry.androidListRowHeight,
+    );
     final nestedHighlight = tester.widget<CustomPaint>(
       find.byKey(const ValueKey(
         'spbTreeFolderHighlight-Expanded folder / Nested folder A',
@@ -3621,12 +3759,12 @@ void main() {
     );
     expect(
       (nestedHighlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      WorkspaceGeometry.narrowRowHeight,
+      WorkspaceGeometry.androidListRowHeight,
     );
     expect(
       tester.getCenter(secondNestedFolder).dy -
           tester.getCenter(firstNestedFolder).dy,
-      closeTo(WorkspaceGeometry.narrowRowHeight, 0.1),
+      closeTo(WorkspaceGeometry.androidListRowHeight, 0.1),
     );
 
     final treeFolderTitle = tester.widget<Text>(
@@ -3635,7 +3773,7 @@ void main() {
         matching: find.text('Folder spacing A'),
       ),
     );
-    expect(treeFolderTitle.style?.fontSize, 14);
+    expect(treeFolderTitle.style?.fontSize, 16);
     expect(treeFolderTitle.style?.fontWeight, FontWeight.normal);
 
     state.setState(() => state.selectedCategoryPath = '');
@@ -3669,7 +3807,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('narrow Android tree folders use enlarged row height',
+  testWidgets('narrow Android tree folders use twenty-five-percent row height',
       (tester) async {
     debugDefaultTargetPlatformOverride = TargetPlatform.android;
     await tester.binding.setSurfaceSize(const Size(390, 800));
@@ -3707,7 +3845,7 @@ void main() {
     final tile = tester.widget<ExpansionTile>(
       find.descendant(of: folder, matching: find.byType(ExpansionTile)),
     );
-    expect(tile.minTileHeight, WorkspaceGeometry.narrowRowHeight);
+    expect(tile.minTileHeight, WorkspaceGeometry.androidListRowHeight);
     final highlight = tester.widget<CustomPaint>(
       find.byKey(const ValueKey(
         'spbTreeFolderHighlight-Narrow unchanged folder',
@@ -3715,7 +3853,7 @@ void main() {
     );
     expect(
       (highlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      WorkspaceGeometry.narrowRowHeight,
+      WorkspaceGeometry.androidListRowHeight,
     );
 
     await tester.longPress(folder);

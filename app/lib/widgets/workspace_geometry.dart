@@ -35,6 +35,7 @@ abstract final class WorkspaceGeometry {
   static const sectionDivider = 6.0;
   static const gridCell = 75.0;
   static const iconFrameContent = 64.0;
+  static const framedIconScale = 0.90;
   static const labelWidth = 72.0;
   static const labelHeight = 30.0;
   static const iconTop = 3.0;
@@ -51,11 +52,20 @@ abstract final class WorkspaceGeometry {
   static const searchHeight = 21.0;
   static const searchWidth = 179.0;
 
-  // The phone layout is deliberately roomier than the desktop V1 geometry.
-  // Font increases are expressed in logical pixels (Flutter points), while
-  // icons and row strides retain the requested 15% proportional increase.
+  // Android panels use separate scales: folders/templates are 25% roomier,
+  // while action rows and the narrow card grid retain their 15% increase.
+  // Font increases are expressed in logical pixels (Flutter points).
   static const narrowAndroidScale = 1.15;
+  static const androidListScale = 1.25;
+  static const desktopFolderScale = 1.20;
+  static const desktopTreeIconScale = 1.10;
+  static const desktopCenterIconScale = 1.10;
+  static const desktopCenterHorizontalScale = 1.20;
   static const narrowSideFontIncrease = 3.0;
+  static const androidFolderFontIncrease = 2.0;
+  static const desktopFolderFontIncrease = 2.0;
+  static const androidTemplateFontIncrease = 3.0;
+  static const androidActionFontIncrease = 1.0;
   static const narrowCenterFontIncrease = 2.0;
   static const wideAndroidGridScale = 1.20;
   static const wideAndroidCenterFontIncrease = 3.0;
@@ -65,6 +75,17 @@ abstract final class WorkspaceGeometry {
   static const narrowActionIcon = actionIcon * narrowAndroidScale;
   static const narrowCollapseSize = collapseSize * narrowAndroidScale;
   static const narrowExpansionSize = expansionSize * narrowAndroidScale;
+  static const androidListRowHeight = rowHeight * androidListScale;
+  static const androidListLineHeight = lineHeight * androidListScale;
+  static const androidListSmallIcon = smallIcon * androidListScale;
+  static const androidListExpansionSize = expansionSize * androidListScale;
+  static const desktopFolderRowHeight = rowHeight * desktopFolderScale;
+  static const desktopFolderLineHeight = lineHeight * desktopFolderScale;
+  static const desktopFolderIcon = smallIcon * desktopFolderScale;
+  static const desktopTreeIcon = desktopFolderIcon * desktopTreeIconScale;
+  static const desktopFolderExpansionSize = expansionSize * desktopFolderScale;
+  static const desktopCenterIcon = largeIcon * desktopCenterIconScale;
+  static const desktopCenterCellWidth = gridCell * desktopCenterHorizontalScale;
   static const narrowGridIcon = largeIcon * narrowAndroidScale;
   static const narrowGridCell = gridCell * narrowAndroidScale;
   static const narrowLabelHeight = labelHeight * narrowAndroidScale;
@@ -88,6 +109,11 @@ abstract final class WorkspaceGeometry {
     height: lineHeight / itemNameFontSize,
     fontWeight: FontWeight.normal,
   );
+  static const desktopCardNameStyle = TextStyle(
+    fontSize: itemNameFontSize + 1,
+    height: lineHeight / (itemNameFontSize + 1),
+    fontWeight: FontWeight.normal,
+  );
   static const headingStyle = TextStyle(
     fontSize: headingFontSize,
     fontWeight: FontWeight.bold,
@@ -100,6 +126,11 @@ abstract final class WorkspaceGeometry {
   static const itemNameStrut = StrutStyle(
     fontSize: itemNameFontSize,
     height: lineHeight / itemNameFontSize,
+    forceStrutHeight: true,
+  );
+  static const desktopCardNameStrut = StrutStyle(
+    fontSize: itemNameFontSize + 1,
+    height: lineHeight / (itemNameFontSize + 1),
     forceStrutHeight: true,
   );
   static const narrowSideBodyStyle = TextStyle(
@@ -129,6 +160,66 @@ abstract final class WorkspaceGeometry {
   static const narrowSideItemNameStrut = StrutStyle(
     fontSize: itemNameFontSize + narrowSideFontIncrease,
     height: narrowLineHeight / (itemNameFontSize + narrowSideFontIncrease),
+    forceStrutHeight: true,
+  );
+  static const androidFolderStyle = TextStyle(
+    fontSize: itemNameFontSize + 1 + androidFolderFontIncrease,
+    height: androidListLineHeight /
+        (itemNameFontSize + 1 + androidFolderFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const androidFolderStrut = StrutStyle(
+    fontSize: itemNameFontSize + 1 + androidFolderFontIncrease,
+    height: androidListLineHeight /
+        (itemNameFontSize + 1 + androidFolderFontIncrease),
+    forceStrutHeight: true,
+  );
+  static const desktopFolderStyle = TextStyle(
+    fontSize: itemNameFontSize + 1 + desktopFolderFontIncrease,
+    height: desktopFolderLineHeight /
+        (itemNameFontSize + 1 + desktopFolderFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const desktopFolderStrut = StrutStyle(
+    fontSize: itemNameFontSize + 1 + desktopFolderFontIncrease,
+    height: desktopFolderLineHeight /
+        (itemNameFontSize + 1 + desktopFolderFontIncrease),
+    forceStrutHeight: true,
+  );
+  static const androidTemplateStyle = TextStyle(
+    fontSize: itemNameFontSize + androidTemplateFontIncrease,
+    height: androidListLineHeight /
+        (itemNameFontSize + androidTemplateFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const androidTemplateStrut = StrutStyle(
+    fontSize: itemNameFontSize + androidTemplateFontIncrease,
+    height: androidListLineHeight /
+        (itemNameFontSize + androidTemplateFontIncrease),
+    forceStrutHeight: true,
+  );
+  static const androidActionBodyStyle = TextStyle(
+    fontSize: fontSize + androidActionFontIncrease,
+    height: narrowLineHeight / (fontSize + androidActionFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const androidActionItemNameStyle = TextStyle(
+    fontSize: itemNameFontSize + androidActionFontIncrease,
+    height: narrowLineHeight / (itemNameFontSize + androidActionFontIncrease),
+    fontWeight: FontWeight.normal,
+  );
+  static const androidActionHeadingStyle = TextStyle(
+    fontSize: headingFontSize + androidActionFontIncrease,
+    fontWeight: FontWeight.bold,
+  );
+  static const androidActionBodyStrut = StrutStyle(
+    fontSize: fontSize + androidActionFontIncrease,
+    height: narrowLineHeight / (fontSize + androidActionFontIncrease),
+    forceStrutHeight: true,
+  );
+  static const androidActionItemNameStrut = StrutStyle(
+    fontSize: itemNameFontSize + androidActionFontIncrease,
+    height: narrowLineHeight / (itemNameFontSize + androidActionFontIncrease),
     forceStrutHeight: true,
   );
   static const wideAndroidSideBodyStyle = TextStyle(
@@ -212,6 +303,30 @@ class WorkspaceGridDelegate extends SliverGridDelegate {
 
   @override
   bool shouldRelayout(covariant WorkspaceGridDelegate oldDelegate) => false;
+}
+
+/// Adds horizontal room between desktop card columns without changing their
+/// vertical rhythm.
+class DesktopCardGridDelegate extends SliverGridDelegate {
+  const DesktopCardGridDelegate();
+
+  @override
+  SliverGridLayout getLayout(SliverConstraints constraints) {
+    const cellWidth = WorkspaceGeometry.desktopCenterCellWidth;
+    const cellHeight = WorkspaceGeometry.gridCell;
+    return SliverGridRegularTileLayout(
+      crossAxisCount:
+          math.max(1, (constraints.crossAxisExtent / cellWidth).floor()),
+      mainAxisStride: cellHeight,
+      crossAxisStride: cellWidth,
+      childMainAxisExtent: cellHeight,
+      childCrossAxisExtent: cellWidth,
+      reverseCrossAxis: axisDirectionIsReversed(constraints.crossAxisDirection),
+    );
+  }
+
+  @override
+  bool shouldRelayout(covariant DesktopCardGridDelegate oldDelegate) => false;
 }
 
 /// Uses the full phone width for exactly three columns. Wider cells place the
