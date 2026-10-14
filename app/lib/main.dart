@@ -22,6 +22,7 @@ import 'features/templates/template_order.dart';
 import 'services/wallet_rekey_service.dart';
 import 'services/platform/secure_clipboard_service.dart';
 import 'widgets/card_surface.dart';
+import 'widgets/android_screen_scale.dart';
 import 'widgets/workspace_geometry.dart';
 
 void main(List<String> arguments) {
@@ -68,7 +69,10 @@ Rect? activeGlobalRectForKey(GlobalKey key) {
   try {
     final origin = renderObject.localToGlobal(Offset.zero);
     if (!origin.dx.isFinite || !origin.dy.isFinite) return null;
-    return origin & renderObject.size;
+    return Rect.fromPoints(
+      origin,
+      renderObject.localToGlobal(renderObject.size.bottomRight(Offset.zero)),
+    );
   } on FlutterError {
     // Pointer and drag callbacks can arrive while Windows is replacing the
     // keyed subtree. Ignore that event until the next laid-out frame.
@@ -421,7 +425,7 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
         updatePackageForPlatform(defaultTargetPlatform, latest) != null;
     const versionStyle = TextStyle(
       color: Color(0xffeeeeee),
-      fontSize: 11,
+      fontSize: 14,
       fontWeight: FontWeight.normal,
     );
     return Row(
@@ -1202,7 +1206,9 @@ class WalletApsApp extends StatelessWidget {
       title: 'Wallet APS',
       debugShowCheckedModeBanner: false,
       builder: (context, child) => AppUserActivityRegion(
-        child: child ?? const SizedBox.shrink(),
+        child: AndroidScreenScale(
+          child: child ?? const SizedBox.shrink(),
+        ),
       ),
       theme: baseTheme.copyWith(
         textTheme: enlargedText,
@@ -2899,7 +2905,7 @@ class _ExternalImageDropTargetState extends State<ExternalImageDropTarget> {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+        overlay.globalToLocal(globalPosition) & Size.zero,
         Offset.zero & overlay.size,
       ),
       items: const [
@@ -3238,8 +3244,10 @@ SecretAttachment? attachmentAtGlobalPosition(
         )) {
           final renderObject = element.renderObject;
           if (renderObject is RenderBox && renderObject.hasSize) {
-            final bounds =
-                renderObject.localToGlobal(Offset.zero) & renderObject.size;
+            final bounds = Rect.fromPoints(
+                renderObject.localToGlobal(Offset.zero),
+                renderObject
+                    .localToGlobal(renderObject.size.bottomRight(Offset.zero)));
             if (bounds.contains(globalPosition)) {
               result = attachment;
               return;
@@ -3267,8 +3275,10 @@ bool globalPositionIsInsideKey(
     if (element.widget.key == targetKey) {
       final renderObject = element.renderObject;
       if (renderObject is RenderBox && renderObject.hasSize) {
-        final bounds =
-            renderObject.localToGlobal(Offset.zero) & renderObject.size;
+        final bounds = Rect.fromPoints(
+            renderObject.localToGlobal(Offset.zero),
+            renderObject
+                .localToGlobal(renderObject.size.bottomRight(Offset.zero)));
         inside = bounds.contains(globalPosition);
       }
     }
@@ -3419,7 +3429,7 @@ Future<AttachmentContextAction?> showAttachmentContextMenu(
   return showMenu<AttachmentContextAction>(
     context: context,
     position: RelativeRect.fromRect(
-      Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+      overlay.globalToLocal(globalPosition) & const Size(1, 1),
       Offset.zero & overlay.size,
     ),
     items: [
@@ -7081,7 +7091,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         onSubmitted: submitSpbSearch,
         textInputAction: TextInputAction.search,
         textAlignVertical: TextAlignVertical.center,
-        style: WorkspaceGeometry.bodyStyle,
+        style: WorkspaceGeometry.searchTextStyle,
         decoration: InputDecoration(
           isDense: true,
           filled: true,
@@ -7103,14 +7113,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             const Key('spbClearSearchButton'),
           ),
           suffixIconConstraints: const BoxConstraints.tightFor(
-            width: 16,
+            width: WorkspaceGeometry.searchHeight,
             height: WorkspaceGeometry.searchHeight,
           ),
         ),
       ),
     );
     return Container(
-      height: WorkspaceGeometry.toolbarHeight,
+      height: WorkspaceGeometry.searchToolbarHeight,
       color: appWindowBackgroundColor,
       padding: const EdgeInsets.symmetric(horizontal: 11),
       child: Row(
@@ -7119,7 +7129,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             const Text(
               'Поиск',
               style: TextStyle(
-                fontSize: WorkspaceGeometry.fontSize,
+                fontSize: WorkspaceGeometry.searchFontSize,
                 fontWeight: FontWeight.bold,
                 color: Color(0xff202020),
               ),
@@ -7218,14 +7228,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required VoidCallback onTap,
   }) {
     return SizedBox(
-      width: WorkspaceGeometry.toolbarButtonWidth,
-      height: WorkspaceGeometry.toolbarButtonHeight,
+      key: key,
+      width: WorkspaceGeometry.searchHeight,
+      height: WorkspaceGeometry.searchHeight,
       child: OverflowBox(
-        minHeight: WorkspaceGeometry.toolbarButtonHeight,
-        maxHeight: WorkspaceGeometry.toolbarButtonHeight,
+        minHeight: WorkspaceGeometry.searchHeight,
+        maxHeight: WorkspaceGeometry.searchHeight,
         child: SizedBox(
-          width: WorkspaceGeometry.toolbarButtonWidth,
-          height: WorkspaceGeometry.toolbarButtonHeight,
+          width: WorkspaceGeometry.searchHeight,
+          height: WorkspaceGeometry.searchHeight,
           child: Tooltip(
             message: tooltip,
             child: Material(
@@ -7241,11 +7252,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   border: Border.all(color: const Color(0x99000000)),
                 ),
                 child: InkWell(
-                  key: key,
                   borderRadius: BorderRadius.circular(2.7),
                   onTap: onTap,
                   child: Icon(icon,
-                      color: Colors.white, size: WorkspaceGeometry.smallIcon),
+                      color: Colors.white,
+                      size: WorkspaceGeometry.smallIcon),
                 ),
               ),
             ),
@@ -9170,7 +9181,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: [
@@ -9532,7 +9543,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: [
@@ -9795,7 +9806,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: const [
@@ -10396,7 +10407,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: [
@@ -10460,7 +10471,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       selected = await showMenu<String>(
         context: context,
         position: RelativeRect.fromRect(
-          Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+          overlay.globalToLocal(globalPosition) & const Size(1, 1),
           Offset.zero & overlay.size,
         ),
         items: const [
@@ -10567,7 +10578,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(submenuPosition.dx, submenuPosition.dy, 1, 1),
+        overlay.globalToLocal(submenuPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: [
@@ -10616,7 +10627,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       selected = await showMenu<String>(
         context: context,
         position: RelativeRect.fromRect(
-          Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+          overlay.globalToLocal(globalPosition) & const Size(1, 1),
           Offset.zero & overlay.size,
         ),
         items: [
@@ -12425,8 +12436,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     trailing: Text(
                       '$foundCount',
                       key: const Key('spbFoundCount'),
-                      style:
-                          const TextStyle(fontSize: WorkspaceGeometry.fontSize),
+                      style: const TextStyle(
+                          fontSize: WorkspaceGeometry.fontSize + 2),
                     ),
                   ),
                   if (spbFoundExpanded && query.isNotEmpty)
@@ -12512,9 +12523,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     key: const Key('spbFoundCount'),
                     style: TextStyle(
                       fontSize: spbNarrowAndroid || spbWideAndroid
-                          ? WorkspaceGeometry.fontSize +
+                          ? 2 +
+                              WorkspaceGeometry.fontSize +
                               WorkspaceGeometry.androidActionFontIncrease
-                          : WorkspaceGeometry.fontSize,
+                          : WorkspaceGeometry.fontSize + 2,
                     ),
                   ),
                 ),
@@ -12588,7 +12600,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: const [
@@ -12628,8 +12640,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             key: const Key('spbNoSearchResults'),
             style: TextStyle(
               fontSize: narrowAndroid || wideAndroid
-                  ? 15 + WorkspaceGeometry.androidActionFontIncrease
-                  : 15,
+                  ? 17 + WorkspaceGeometry.androidActionFontIncrease
+                  : 17,
             ),
           ),
         ),
@@ -12692,14 +12704,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ? WorkspaceGeometry.narrowActionIcon
         : WorkspaceGeometry.actionIcon;
     final itemStyle = narrowAndroid || wideAndroid
-        ? WorkspaceGeometry.androidActionItemNameStyle
-        : WorkspaceGeometry.itemNameStyle;
+        ? WorkspaceGeometry.enlargeActionText(
+            WorkspaceGeometry.androidActionItemNameStyle)
+        : WorkspaceGeometry.enlargeActionText(WorkspaceGeometry.itemNameStyle);
     final itemStrut = narrowAndroid || wideAndroid
-        ? WorkspaceGeometry.androidActionItemNameStrut
-        : WorkspaceGeometry.itemNameStrut;
+        ? WorkspaceGeometry.enlargeActionStrut(
+            WorkspaceGeometry.androidActionItemNameStrut)
+        : WorkspaceGeometry.enlargeActionStrut(WorkspaceGeometry.itemNameStrut);
     final bodyStrut = narrowAndroid || wideAndroid
-        ? WorkspaceGeometry.androidActionBodyStrut
-        : WorkspaceGeometry.bodyStrut;
+        ? WorkspaceGeometry.enlargeActionStrut(
+            WorkspaceGeometry.androidActionBodyStrut)
+        : WorkspaceGeometry.enlargeActionStrut(WorkspaceGeometry.bodyStrut);
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -12731,9 +12746,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     style: TextStyle(
                       color: const Color(0xff5f5f5f),
                       fontSize: narrowAndroid || wideAndroid
-                          ? WorkspaceGeometry.fontSize +
+                          ? 2 +
+                              WorkspaceGeometry.fontSize +
                               WorkspaceGeometry.androidActionFontIncrease
-                          : WorkspaceGeometry.fontSize,
+                          : WorkspaceGeometry.fontSize + 2,
                       height: narrowAndroid || wideAndroid
                           ? WorkspaceGeometry.narrowLineHeight /
                               (WorkspaceGeometry.fontSize +
@@ -12784,8 +12800,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: narrowAndroid || wideAndroid
-                  ? WorkspaceGeometry.androidActionHeadingStyle
-                  : WorkspaceGeometry.headingStyle,
+                  ? WorkspaceGeometry.enlargeActionText(
+                      WorkspaceGeometry.androidActionHeadingStyle)
+                  : WorkspaceGeometry.enlargeActionText(
+                      WorkspaceGeometry.headingStyle),
             ),
           ),
           if (trailing != null) trailing,
@@ -12864,8 +12882,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: narrowAndroid || wideAndroid
-                  ? WorkspaceGeometry.androidActionHeadingStyle
-                  : WorkspaceGeometry.headingStyle,
+                  ? WorkspaceGeometry.enlargeActionText(
+                      WorkspaceGeometry.androidActionHeadingStyle)
+                  : WorkspaceGeometry.enlargeActionText(
+                      WorkspaceGeometry.headingStyle),
             ),
           )
         : buildSpbCollapsibleHeader(
@@ -12891,18 +12911,26 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             );
             final rowTextStyle = narrowAndroid || wideAndroid
                 ? (frequentRows
-                    ? WorkspaceGeometry.androidActionItemNameStyle
-                    : WorkspaceGeometry.androidActionBodyStyle)
+                    ? WorkspaceGeometry.enlargeActionText(
+                        WorkspaceGeometry.androidActionItemNameStyle)
+                    : WorkspaceGeometry.enlargeActionText(
+                        WorkspaceGeometry.androidActionBodyStyle))
                 : (frequentRows
-                    ? WorkspaceGeometry.itemNameStyle
-                    : WorkspaceGeometry.bodyStyle);
+                    ? WorkspaceGeometry.enlargeActionText(
+                        WorkspaceGeometry.itemNameStyle)
+                    : WorkspaceGeometry.enlargeActionText(
+                        WorkspaceGeometry.bodyStyle));
             final rowStrutStyle = narrowAndroid || wideAndroid
                 ? (frequentRows
-                    ? WorkspaceGeometry.androidActionItemNameStrut
-                    : WorkspaceGeometry.androidActionBodyStrut)
+                    ? WorkspaceGeometry.enlargeActionStrut(
+                        WorkspaceGeometry.androidActionItemNameStrut)
+                    : WorkspaceGeometry.enlargeActionStrut(
+                        WorkspaceGeometry.androidActionBodyStrut))
                 : (frequentRows
-                    ? WorkspaceGeometry.itemNameStrut
-                    : WorkspaceGeometry.bodyStrut);
+                    ? WorkspaceGeometry.enlargeActionStrut(
+                        WorkspaceGeometry.itemNameStrut)
+                    : WorkspaceGeometry.enlargeActionStrut(
+                        WorkspaceGeometry.bodyStrut));
             final textStyle =
                 DefaultTextStyle.of(context).style.merge(rowTextStyle);
             final painter = TextPainter(
@@ -15471,12 +15499,7 @@ class _FieldValueRowState extends State<FieldValueRow> {
     final picked = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(
-          details.globalPosition.dx,
-          details.globalPosition.dy,
-          1,
-          1,
-        ),
+        overlay.globalToLocal(details.globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: const [
@@ -16637,8 +16660,10 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
       if (element.widget is EditableText) {
         final renderObject = element.renderObject;
         if (renderObject is RenderBox && renderObject.hasSize) {
-          final bounds =
-              renderObject.localToGlobal(Offset.zero) & renderObject.size;
+          final bounds = Rect.fromPoints(
+              renderObject.localToGlobal(Offset.zero),
+              renderObject
+                  .localToGlobal(renderObject.size.bottomRight(Offset.zero)));
           inside = bounds.contains(globalPosition);
         }
       }
@@ -16733,7 +16758,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 1, 1),
+        overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: const [
@@ -18996,8 +19021,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       if (element.widget is EditableText) {
         final renderObject = element.renderObject;
         if (renderObject is RenderBox && renderObject.hasSize) {
-          final bounds =
-              renderObject.localToGlobal(Offset.zero) & renderObject.size;
+          final bounds = Rect.fromPoints(
+              renderObject.localToGlobal(Offset.zero),
+              renderObject
+                  .localToGlobal(renderObject.size.bottomRight(Offset.zero)));
           inside = bounds.contains(globalPosition);
         }
       }
@@ -19417,7 +19444,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     final selected = await showMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
-        Rect.fromLTWH(globalPosition.dx, globalPosition.dy, 0, 0),
+        overlay.globalToLocal(globalPosition) & Size.zero,
         Offset.zero & overlay.size,
       ),
       items: const [

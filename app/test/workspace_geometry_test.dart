@@ -175,7 +175,11 @@ void main() {
         ));
         expect(
           treeFolderLabel.style?.fontSize,
-          wideAndroid || desktopFolderLayout ? 16 : 14,
+          wideAndroid
+              ? 17
+              : desktopFolderLayout
+                  ? 16
+                  : 14,
         );
         expect(treeFolderLabel.style?.fontWeight, FontWeight.normal);
         final treeCardLabel = tester.widget<Text>(find.descendant(
@@ -269,7 +273,7 @@ void main() {
           of: find.byKey(const ValueKey('spbCentralFolder-A')),
           matching: find.text('A'),
         ));
-        expect(gridFolderLabel.style?.fontSize, wideAndroid ? 17 : 14);
+        expect(gridFolderLabel.style?.fontSize, wideAndroid ? 18 : 14);
         expect(gridFolderLabel.style?.fontWeight, FontWeight.normal);
         final actions = find.byKey(const Key('spbActionsPanelScrollbar'));
         expect(tester.getSize(actions).width, 244);
@@ -286,7 +290,7 @@ void main() {
         expect(tester.getSize(taskIcon), Size.square(actionIconSize));
         expect(
           tester.widget<Text>(find.text(taskLabel)).style?.fontSize,
-          wideAndroid ? 13 : 12,
+          wideAndroid ? 15 : 14,
         );
         final frequentIcon = find.byKey(
           ValueKey('spbActionIcon-${state.frequentItems().first.title}'),
@@ -303,14 +307,14 @@ void main() {
           of: find.byKey(const Key('spbSearchResults')),
           matching: find.text('Card 01'),
         ));
-        expect(foundTitle.style?.fontSize, wideAndroid ? 14 : 13);
+        expect(foundTitle.style?.fontSize, wideAndroid ? 16 : 15);
         final foundSubtitle = tester
             .widgetList<Text>(find.descendant(
               of: find.byKey(const Key('spbSearchResults')),
               matching: find.text('Карточка'),
             ))
             .first;
-        expect(foundSubtitle.style?.fontSize, wideAndroid ? 13 : 12);
+        expect(foundSubtitle.style?.fontSize, wideAndroid ? 15 : 14);
         state.searchController.clear();
         state.setState(() => state.spbSubmittedSearchQuery = '');
         await tester.pumpAndSettle();
@@ -435,7 +439,7 @@ void main() {
       of: find.byKey(const ValueKey('spbTreeFolder-A')),
       matching: find.text('A'),
     ));
-    expect(treeFolderLabel.style?.fontSize, 16);
+    expect(treeFolderLabel.style?.fontSize, 17);
     expect(treeFolderLabel.style?.fontWeight, FontWeight.normal);
     final treeCardLabel = tester.widget<Text>(find.descendant(
       of: find.byKey(const ValueKey('spbTreeCard-geometry-0')),
@@ -482,7 +486,7 @@ void main() {
       of: firstFolder,
       matching: find.text('A'),
     ));
-    expect(centralFolderLabel.style?.fontSize, 16);
+    expect(centralFolderLabel.style?.fontSize, 17);
     expect(tester.takeException(), isNull);
     await capture(tester, 'android-narrow-200', 2);
 
@@ -490,16 +494,16 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const ValueKey('spbCollapseЗадачи')), findsOneWidget);
     final taskHeader = tester.widget<Text>(find.text('Задачи'));
-    expect(taskHeader.style?.fontSize, 14);
+    expect(taskHeader.style?.fontSize, 16);
     final taskLabel = state.spbTasksForCurrentMode().first.$2 as String;
     final taskIcon = find.byKey(ValueKey('spbActionIcon-$taskLabel'));
     expect(tester.getSize(taskIcon).width,
         closeTo(WorkspaceGeometry.narrowActionIcon, 0.01));
     final taskText = tester.widget<Text>(find.text(taskLabel));
-    expect(taskText.style?.fontSize, 13);
+    expect(taskText.style?.fontSize, 15);
     final frequentTitle = state.frequentItems().first.title as String;
     final frequentText = tester.widget<Text>(find.text(frequentTitle));
-    expect(frequentText.style?.fontSize, 14);
+    expect(frequentText.style?.fontSize, 16);
 
     state.searchController.text = 'Card 01';
     state.setState(() => state.spbSubmittedSearchQuery = 'Card 01');
@@ -511,14 +515,14 @@ void main() {
       of: find.byKey(const Key('spbSearchResults')),
       matching: find.text('Card 01'),
     ));
-    expect(foundTitle.style?.fontSize, 14);
+    expect(foundTitle.style?.fontSize, 16);
     final foundSubtitle = tester
         .widgetList<Text>(find.descendant(
           of: find.byKey(const Key('spbSearchResults')),
           matching: find.text('Карточка'),
         ))
         .first;
-    expect(foundSubtitle.style?.fontSize, 13);
+    expect(foundSubtitle.style?.fontSize, 15);
 
     state.searchController.clear();
     state.setState(() {

@@ -5,6 +5,19 @@ import 'package:flutter/rendering.dart';
 /// V1 geometry in Flutter logical pixels on every platform. The reference's
 /// presumed 200% scale is applied by the framework, never multiplied here.
 abstract final class WorkspaceGeometry {
+  // Right-panel typography grows together with its measured row height.
+  static TextStyle enlargeActionText(TextStyle style) =>
+      style.copyWith(fontSize: style.fontSize! + 2);
+
+  static StrutStyle enlargeActionStrut(StrutStyle style) => StrutStyle(
+        fontSize: style.fontSize! + 2,
+        height: style.height,
+        leading: style.leading,
+        fontWeight: style.fontWeight,
+        fontStyle: style.fontStyle,
+        forceStrutHeight: style.forceStrutHeight,
+      );
+
   static const windowWidth = 1280.0;
   static const windowHeight = 769.5;
   static const navigatorWidth = 247.0;
@@ -49,7 +62,14 @@ abstract final class WorkspaceGeometry {
   static const actionTextStart = actionIconLeft + actionIcon + actionIconGap;
   static const collapseSize = 18.0;
   static const frequentTop = 9.0;
-  static const searchHeight = 21.0;
+  static const searchHeight = 27.0;
+  static const searchToolbarHeight = 32.0;
+  static const searchFontSize = fontSize + 3;
+  static const searchTextStyle = TextStyle(
+    fontSize: searchFontSize,
+    height: (lineHeight + 3) / searchFontSize,
+    fontWeight: FontWeight.normal,
+  );
   static const searchWidth = 179.0;
 
   // Android panels use separate scales: folders/templates are 25% roomier,
@@ -62,7 +82,7 @@ abstract final class WorkspaceGeometry {
   static const desktopCenterIconScale = 1.10;
   static const desktopCenterHorizontalScale = 1.20;
   static const narrowSideFontIncrease = 3.0;
-  static const androidFolderFontIncrease = 2.0;
+  static const androidFolderFontIncrease = 3.0;
   static const desktopFolderFontIncrease = 2.0;
   static const androidTemplateFontIncrease = 3.0;
   static const androidActionFontIncrease = 1.0;
@@ -253,9 +273,9 @@ abstract final class WorkspaceGeometry {
     fontWeight: FontWeight.normal,
   );
   static const narrowCenterFolderStyle = TextStyle(
-    fontSize: itemNameFontSize + 1 + narrowCenterFontIncrease,
+    fontSize: itemNameFontSize + 2 + narrowCenterFontIncrease,
     height:
-        narrowLineHeight / (itemNameFontSize + 1 + narrowCenterFontIncrease),
+        narrowLineHeight / (itemNameFontSize + 2 + narrowCenterFontIncrease),
     fontWeight: FontWeight.normal,
   );
   static const narrowCenterItemNameStrut = StrutStyle(
@@ -270,9 +290,9 @@ abstract final class WorkspaceGeometry {
     fontWeight: FontWeight.normal,
   );
   static const wideAndroidCenterFolderStyle = TextStyle(
-    fontSize: itemNameFontSize + 1 + wideAndroidCenterFontIncrease,
+    fontSize: itemNameFontSize + 2 + wideAndroidCenterFontIncrease,
     height: (lineHeight * wideAndroidGridScale) /
-        (itemNameFontSize + 1 + wideAndroidCenterFontIncrease),
+        (itemNameFontSize + 2 + wideAndroidCenterFontIncrease),
     fontWeight: FontWeight.normal,
   );
   static const wideAndroidCenterItemNameStrut = StrutStyle(

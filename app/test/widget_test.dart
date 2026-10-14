@@ -370,8 +370,12 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('v. $currentAppVersion'), findsOneWidget);
+    final current = tester.widget<Text>(
+      find.text('v. $currentAppVersion'),
+    );
+    expect(current.style?.fontSize, 14);
     final available = tester.widget<Text>(find.text('99.0.0'));
+    expect(available.style?.fontSize, 14);
     expect(available.style?.color, const Color(0xffff3b30));
     expect(available.style?.fontWeight, FontWeight.bold);
 
@@ -2434,8 +2438,12 @@ void main() {
     expect(find.byKey(const Key('spbClearSearchButton')), findsNothing);
     expect(tester.getSize(desktopSearch).width, closeTo(179, 0.1));
     expect(
-      tester.getTopLeft(desktopSearch).dy - tester.getTopLeft(desktopSubmit).dy,
-      closeTo(0.5, 0.1),
+      tester.getCenter(desktopSearch).dy - tester.getCenter(desktopSubmit).dy,
+      closeTo(0, 0.1),
+    );
+    expect(
+      tester.getSize(desktopSubmit),
+      const Size.square(WorkspaceGeometry.searchHeight),
     );
     expect(
       tester.getTopLeft(desktopSubmit).dx,
@@ -3773,7 +3781,7 @@ void main() {
         matching: find.text('Folder spacing A'),
       ),
     );
-    expect(treeFolderTitle.style?.fontSize, 16);
+    expect(treeFolderTitle.style?.fontSize, 17);
     expect(treeFolderTitle.style?.fontWeight, FontWeight.normal);
 
     state.setState(() => state.selectedCategoryPath = '');
@@ -3784,7 +3792,7 @@ void main() {
         matching: find.text('Folder spacing A'),
       ),
     );
-    expect(centralFolderTitle.style?.fontSize, 17);
+    expect(centralFolderTitle.style?.fontSize, 18);
     expect(centralFolderTitle.style?.fontWeight, FontWeight.normal);
 
     await tester.tap(firstFolderFinder, buttons: kSecondaryMouseButton);
@@ -3977,12 +3985,12 @@ void main() {
     final tabletSearch = find.byKey(const Key('spbSearchInput'));
     final tabletSubmit = find.byKey(const Key('spbSubmitSearchButton'));
     expect(
-      tester.getTopLeft(tabletSearch).dy - tester.getTopLeft(tabletSubmit).dy,
-      closeTo(0.5, 0.1),
+      tester.getCenter(tabletSearch).dy - tester.getCenter(tabletSubmit).dy,
+      closeTo(0, 0.1),
     );
     expect(
       tester.getTopLeft(tabletSubmit).dx,
-      closeTo(tester.getTopRight(tabletSearch).dx + 7, 0.1),
+      closeTo(tester.getTopRight(tabletSearch).dx + 6, 0.1),
     );
 
     expect(find.text('Мои карточки'), findsOneWidget);
