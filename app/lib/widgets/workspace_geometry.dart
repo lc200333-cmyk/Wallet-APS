@@ -6,11 +6,13 @@ import 'package:flutter/rendering.dart';
 /// presumed 200% scale is applied by the framework, never multiplied here.
 abstract final class WorkspaceGeometry {
   // Right-panel typography grows together with its measured row height.
-  static TextStyle enlargeActionText(TextStyle style) =>
-      style.copyWith(fontSize: style.fontSize! + 2);
+  static TextStyle enlargeActionText(TextStyle style, {double increase = 2}) =>
+      style.copyWith(fontSize: style.fontSize! + increase);
 
-  static StrutStyle enlargeActionStrut(StrutStyle style) => StrutStyle(
-        fontSize: style.fontSize! + 2,
+  static StrutStyle enlargeActionStrut(StrutStyle style,
+          {double increase = 2}) =>
+      StrutStyle(
+        fontSize: style.fontSize! + increase,
         height: style.height,
         leading: style.leading,
         fontWeight: style.fontWeight,
@@ -192,6 +194,15 @@ abstract final class WorkspaceGeometry {
     fontSize: itemNameFontSize + 1 + androidFolderFontIncrease,
     height: androidListLineHeight /
         (itemNameFontSize + 1 + androidFolderFontIncrease),
+    forceStrutHeight: true,
+  );
+  // Only the left tree grows; center-pane folder and card labels keep their size.
+  static final androidTreeFolderStyle = androidFolderStyle.copyWith(
+    fontSize: androidFolderStyle.fontSize! * 1.15,
+  );
+  static final androidTreeFolderStrut = StrutStyle(
+    fontSize: androidFolderStrut.fontSize! * 1.15,
+    height: androidFolderStrut.height,
     forceStrutHeight: true,
   );
   static const desktopFolderStyle = TextStyle(

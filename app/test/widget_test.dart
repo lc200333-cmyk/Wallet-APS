@@ -156,6 +156,13 @@ void main() {
     expect(attachmentCanBeCopied('document.pdf'), isFalse);
   });
 
+  test('PDF attachments are displayed inline like images', () {
+    expect(attachmentHasInlinePreview('document.PDF'), isTrue);
+    expect(attachmentHasInlinePreview('photo.png'), isTrue);
+    expect(attachmentHasInlinePreview('archive.zip'), isFalse);
+    expect(attachmentCanBeCopied('document.PDF'), isFalse);
+  });
+
   test('text attachment decoder supports UTF-8 and UTF-16 byte order marks',
       () {
     expect(
@@ -2443,7 +2450,7 @@ void main() {
     );
     expect(
       tester.getSize(desktopSubmit),
-      const Size.square(WorkspaceGeometry.searchHeight),
+      const Size.square(WorkspaceGeometry.searchHeight * 1.1),
     );
     expect(
       tester.getTopLeft(desktopSubmit).dx,
@@ -2974,7 +2981,7 @@ void main() {
       of: find.byKey(const Key('spbMyCardsModeButton')),
       matching: find.byType(Text),
     ));
-    expect(mainMenuLabel.style?.fontSize, 14);
+    expect(mainMenuLabel.style?.fontSize, closeTo(15.4, 0.01));
     expect(mainMenuLabel.style?.fontWeight, FontWeight.bold);
 
     final dynamic state = tester.state(find.byType(VaultShell));
@@ -3781,7 +3788,7 @@ void main() {
         matching: find.text('Folder spacing A'),
       ),
     );
-    expect(treeFolderTitle.style?.fontSize, 17);
+    expect(treeFolderTitle.style?.fontSize, 17 * 1.15);
     expect(treeFolderTitle.style?.fontWeight, FontWeight.normal);
 
     state.setState(() => state.selectedCategoryPath = '');

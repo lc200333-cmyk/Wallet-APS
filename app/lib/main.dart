@@ -12,6 +12,7 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as image;
 import 'package:path_provider/path_provider.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import 'app_version.dart';
 import 'data/spb_wallet_repository.dart';
@@ -3183,11 +3184,98 @@ bool attachmentIsCopyableImage(String fileName) {
   ].any(lower.endsWith);
 }
 
+bool attachmentIsPdf(String fileName) =>
+    fileName.toLowerCase().endsWith('.pdf');
+
+class InlinePdfAttachmentPreview extends StatefulWidget {
+  const InlinePdfAttachmentPreview({required this.bytes, super.key});
+
+  final Uint8List bytes;
+
+  @override
+  State<InlinePdfAttachmentPreview> createState() =>
+      _InlinePdfAttachmentPreviewState();
+}
+
+class _InlinePdfAttachmentPreviewState
+    extends State<InlinePdfAttachmentPreview> {
+  late PdfDocumentRefData documentRef;
+  final scrollController = ScrollController();
+
+  void updateDocument() {
+    documentRef = PdfDocumentRefData(
+      widget.bytes,
+      sourceName: 'attachment-${UniqueKey()}',
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    updateDocument();
+  }
+
+  @override
+  void didUpdateWidget(covariant InlinePdfAttachmentPreview oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!listEquals(oldWidget.bytes, widget.bytes)) updateDocument();
+  }
+
+  @override
+  void dispose() {
+    scrollController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 320,
+      width: double.infinity,
+      child: PdfDocumentViewBuilder(
+        documentRef: documentRef,
+        loadingBuilder: (_) => const Center(child: CircularProgressIndicator()),
+        errorBuilder: (_, __, ___) => const Center(
+          child: Text(
+              'Не удалось показать PDF. Нажмите, чтобы открыть в программе.'),
+        ),
+        builder: (context, document) {
+          if (document == null) return const SizedBox.shrink();
+          return Scrollbar(
+            controller: scrollController,
+            thumbVisibility: true,
+            child: ListView.builder(
+              controller: scrollController,
+              primary: false,
+              itemCount: document.pages.length,
+              itemBuilder: (context, index) {
+                final page = document.pages[index];
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: AspectRatio(
+                    aspectRatio: page.width / page.height,
+                    child: PdfPageView(
+                      document: document,
+                      pageNumber: index + 1,
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
 bool attachmentCanBeCopied(String fileName) =>
     attachmentIsCopyableText(fileName) || attachmentIsCopyableImage(fileName);
 
 bool attachmentHasInlinePreview(String fileName) =>
-    attachmentIsCopyableText(fileName) || attachmentIsCopyableImage(fileName);
+    attachmentIsCopyableText(fileName) ||
+    attachmentIsCopyableImage(fileName) ||
+    attachmentIsPdf(fileName);
 
 Widget selectableTextAttachmentPreview(
   String fileName,
@@ -7082,6 +7170,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     double? desktopNavigatorWidth,
     double? desktopActionsPanelWidth,
   }) {
+    final android = defaultTargetPlatform == TargetPlatform.android;
+    final enlarged = android || defaultTargetPlatform == TargetPlatform.windows;
+    final searchScale = enlarged ? 1.1 : 1.0;
     final searchField = SizedBox(
       height: WorkspaceGeometry.searchHeight,
       child: TextField(
@@ -7091,7 +7182,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         onSubmitted: submitSpbSearch,
         textInputAction: TextInputAction.search,
         textAlignVertical: TextAlignVertical.center,
-        style: WorkspaceGeometry.searchTextStyle,
+        style: WorkspaceGeometry.searchTextStyle.copyWith(
+          fontSize: WorkspaceGeometry.searchFontSize * searchScale,
+        ),
         decoration: InputDecoration(
           isDense: true,
           filled: true,
@@ -7122,16 +7215,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return Container(
       height: WorkspaceGeometry.searchToolbarHeight,
       color: appWindowBackgroundColor,
-      padding: const EdgeInsets.symmetric(horizontal: 11),
+      padding: EdgeInsets.only(left: 11, right: enlarged ? 0 : 11),
       child: Row(
         children: [
           if (!mobile || MediaQuery.sizeOf(context).width >= 316) ...[
-            const Text(
+            Text(
               'Поиск',
               style: TextStyle(
-                fontSize: WorkspaceGeometry.searchFontSize,
+                fontSize: WorkspaceGeometry.searchFontSize * searchScale,
                 fontWeight: FontWeight.bold,
-                color: Color(0xff202020),
+                color: const Color(0xff202020),
               ),
             ),
             const SizedBox(width: 8),
@@ -7140,6 +7233,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             Expanded(child: searchField)
           else
             SizedBox(width: WorkspaceGeometry.searchWidth, child: searchField),
+          if (enlarged && !mobile) const Spacer(),
           const SizedBox(width: 6),
           buildSpbSearchButton(
             key: const Key('spbSubmitSearchButton'),
@@ -7148,7 +7242,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             gradient: const [Color(0xff42bff5), Color(0xff006fc4)],
             onTap: () => submitSpbSearch(searchController.text),
           ),
-          if (!mobile) const Spacer(),
+          if (!mobile && !enlarged) const Spacer(),
           const SizedBox(width: 4),
           buildSpbSearchButton(
             key: spbSessionUndoButtonKey,
@@ -7227,16 +7321,21 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required List<Color> gradient,
     required VoidCallback onTap,
   }) {
+    final scale = defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.windows
+        ? 1.1
+        : 1.0;
+    final dimension = WorkspaceGeometry.searchHeight * scale;
     return SizedBox(
       key: key,
-      width: WorkspaceGeometry.searchHeight,
-      height: WorkspaceGeometry.searchHeight,
+      width: dimension,
+      height: dimension,
       child: OverflowBox(
-        minHeight: WorkspaceGeometry.searchHeight,
-        maxHeight: WorkspaceGeometry.searchHeight,
+        minHeight: dimension,
+        maxHeight: dimension,
         child: SizedBox(
-          width: WorkspaceGeometry.searchHeight,
-          height: WorkspaceGeometry.searchHeight,
+          width: dimension,
+          height: dimension,
           child: Tooltip(
             message: tooltip,
             child: Material(
@@ -7256,7 +7355,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   onTap: onTap,
                   child: Icon(icon,
                       color: Colors.white,
-                      size: WorkspaceGeometry.smallIcon),
+                      size: WorkspaceGeometry.smallIcon * scale),
                 ),
               ),
             ),
@@ -8015,8 +8114,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required VoidCallback onTap,
     bool opensRootCreationMenu = false,
   }) {
+    final scale = defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.windows
+        ? 1.1
+        : 1.0;
     final button = Container(
-      height: WorkspaceGeometry.sectionHeight,
+      height: WorkspaceGeometry.sectionHeight * scale,
       padding: const EdgeInsets.symmetric(horizontal: 7.5),
       decoration: const BoxDecoration(
         border: Border(top: BorderSide(color: _spbBorder)),
@@ -8036,8 +8139,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               label,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                  fontSize: WorkspaceGeometry.menuFontSize,
+              style: TextStyle(
+                  fontSize: WorkspaceGeometry.menuFontSize * scale,
                   fontWeight: FontWeight.bold),
             ),
           ),
@@ -8205,14 +8308,22 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
     if (iconLibraryOpen) {
       for (final kind in IconCatalogKind.values) {
-        measure(kind.label, 0, trailing: 40);
+        measure(kind.label, 0,
+            trailing: 40,
+            style: WorkspaceGeometry.bodyStyle.copyWith(
+              fontSize: WorkspaceGeometry.fontSize *
+                  (defaultTargetPlatform == TargetPlatform.android ||
+                          defaultTargetPlatform == TargetPlatform.windows
+                      ? 1.15
+                      : 1),
+            ));
       }
     } else if (mobileTemplatesOpen) {
       for (final template in templates) {
         measure(
           template.name,
           0,
-          style: spbEntryTreeStyle,
+          style: spbTemplateTreeStyle,
         );
       }
     } else {
@@ -8222,10 +8333,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           measure(
             parts.last,
             parts.length - 1,
+            trailing: narrowAndroid || wideAndroid
+                ? WorkspaceGeometry.androidListSmallIcon * 0.15
+                : 0,
             style: narrowAndroid || wideAndroid
-                ? WorkspaceGeometry.androidFolderStyle
+                ? WorkspaceGeometry.androidTreeFolderStyle
                 : desktopFolderLayout
-                    ? WorkspaceGeometry.desktopFolderStyle
+                    ? spbTreeDesktopFolderStyle
                     : WorkspaceGeometry.folderStyle,
           );
         }
@@ -8384,7 +8498,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final desktopFolderLayout =
         defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux;
-    final folderRowHeight = spbEntryRowHeight;
+    final folderRowHeight = max(spbEntryRowHeight, spbEntryTreeIconSize);
     final treeIconSize = spbEntryTreeIconSize;
     final expansionSize = androidLayout
         ? WorkspaceGeometry.androidListExpansionSize
@@ -8392,14 +8506,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             ? WorkspaceGeometry.desktopFolderExpansionSize
             : WorkspaceGeometry.expansionSize;
     final folderStyle = androidLayout
-        ? WorkspaceGeometry.androidFolderStyle
+        ? WorkspaceGeometry.androidTreeFolderStyle
         : desktopFolderLayout
-            ? WorkspaceGeometry.desktopFolderStyle
+            ? spbTreeDesktopFolderStyle
             : WorkspaceGeometry.folderStyle;
     final folderStrut = androidLayout
-        ? WorkspaceGeometry.androidFolderStrut
+        ? WorkspaceGeometry.androidTreeFolderStrut
         : desktopFolderLayout
-            ? WorkspaceGeometry.desktopFolderStrut
+            ? spbTreeDesktopFolderStrut
             : WorkspaceGeometry.bodyStrut;
     final itemStyle = spbEntryTreeStyle;
     final itemStrut = spbEntryTreeStrut;
@@ -8444,9 +8558,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 trailing: const SizedBox.shrink(),
                 leading: SizedBox(
                   width: androidLayout
-                      ? 38.75
+                      ? 38.75 + WorkspaceGeometry.androidListSmallIcon * 0.15
                       : desktopFolderLayout
-                          ? 39.12
+                          ? 39.12 +
+                              (defaultTargetPlatform == TargetPlatform.windows
+                                  ? WorkspaceGeometry.desktopTreeIcon * 0.15
+                                  : 0)
                           : 31,
                   height: folderRowHeight,
                   child: Row(
@@ -8575,6 +8692,28 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       defaultTargetPlatform == TargetPlatform.windows ||
       defaultTargetPlatform == TargetPlatform.linux;
 
+  TextStyle get spbTreeDesktopFolderStyle =>
+      defaultTargetPlatform == TargetPlatform.windows
+          ? WorkspaceGeometry.desktopFolderStyle.copyWith(
+              fontSize: WorkspaceGeometry.desktopFolderStyle.fontSize! * 1.15)
+          : WorkspaceGeometry.desktopFolderStyle;
+
+  StrutStyle get spbTreeDesktopFolderStrut => StrutStyle(
+        fontSize: spbTreeDesktopFolderStyle.fontSize,
+        height: WorkspaceGeometry.desktopFolderStrut.height,
+        forceStrutHeight: true,
+      );
+
+  TextStyle get spbTemplateTreeStyle => spbEntryTreeStyle.copyWith(
+        fontSize: spbEntryTreeStyle.fontSize! * 1.15,
+      );
+
+  StrutStyle get spbTemplateTreeStrut => StrutStyle(
+        fontSize: spbEntryTreeStrut.fontSize! * 1.15,
+        height: spbEntryTreeStrut.height,
+        forceStrutHeight: true,
+      );
+
   double get spbEntryRowHeight => spbNarrowAndroid || spbWideAndroid
       ? WorkspaceGeometry.androidListRowHeight
       : spbDesktopLayout
@@ -8582,9 +8721,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           : WorkspaceGeometry.rowHeight;
 
   double get spbEntryTreeIconSize => spbNarrowAndroid || spbWideAndroid
-      ? WorkspaceGeometry.androidListSmallIcon
+      ? WorkspaceGeometry.androidListSmallIcon * 1.15
       : spbDesktopLayout
-          ? WorkspaceGeometry.desktopTreeIcon
+          ? WorkspaceGeometry.desktopTreeIcon *
+              (defaultTargetPlatform == TargetPlatform.windows ? 1.15 : 1)
           : WorkspaceGeometry.smallIcon;
 
   TextStyle get spbEntryTreeStyle => spbNarrowAndroid
@@ -8915,6 +9055,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool compactRows = false,
     ScrollController? scrollController,
   }) {
+    final scale = defaultTargetPlatform == TargetPlatform.android ||
+            defaultTargetPlatform == TargetPlatform.windows
+        ? 1.15
+        : 1.0;
     final tree = ListView(
       controller: scrollController,
       padding: const EdgeInsets.only(top: WorkspaceGeometry.treeTop, bottom: 8),
@@ -8935,18 +9079,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               child: ListTile(
                 dense: true,
                 minTileHeight: WorkspaceGeometry.rowHeight,
-                minLeadingWidth: WorkspaceGeometry.smallIcon,
+                minLeadingWidth: WorkspaceGeometry.smallIcon * scale,
                 horizontalTitleGap: 5,
                 minVerticalPadding: 0,
                 contentPadding: const EdgeInsets.only(left: 25),
                 visualDensity: VisualDensity.standard,
                 leading: Icon(kind.icon,
-                    size: WorkspaceGeometry.smallIcon,
+                    size: WorkspaceGeometry.smallIcon * scale,
                     color: const Color(0xff33434f)),
                 title: Text(
                   kind.label,
-                  style: WorkspaceGeometry.bodyStyle,
-                  strutStyle: WorkspaceGeometry.bodyStrut,
+                  style: WorkspaceGeometry.bodyStyle.copyWith(
+                    fontSize: WorkspaceGeometry.fontSize * scale,
+                  ),
+                  strutStyle: StrutStyle(
+                    fontSize: WorkspaceGeometry.fontSize * scale,
+                    height: WorkspaceGeometry.bodyStrut.height,
+                    forceStrutHeight: true,
+                  ),
                   maxLines: 1,
                   softWrap: false,
                   overflow: TextOverflow.visible,
@@ -9466,10 +9616,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool compactRows = false,
     ScrollController? scrollController,
   }) {
-    final rowHeight = spbEntryRowHeight;
+    final rowHeight = spbEntryRowHeight * 1.2;
     final iconSize = spbEntryTreeIconSize;
-    final labelStyle = spbEntryTreeStyle;
-    final labelStrut = spbEntryTreeStrut;
+    final labelStyle = spbTemplateTreeStyle;
+    final labelStrut = spbTemplateTreeStrut;
     final query = searchController.text.trim().toLowerCase();
     final visible = templates
         .where(
@@ -12773,6 +12923,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required VoidCallback onExpand,
     required VoidCallback onCollapse,
     bool shellStyle = false,
+    double additionalFontSize = 0,
     Widget? trailing,
   }) {
     final narrowAndroid = spbNarrowAndroid;
@@ -12801,9 +12952,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               overflow: TextOverflow.ellipsis,
               style: narrowAndroid || wideAndroid
                   ? WorkspaceGeometry.enlargeActionText(
-                      WorkspaceGeometry.androidActionHeadingStyle)
+                      WorkspaceGeometry.androidActionHeadingStyle,
+                      increase: 2 + additionalFontSize)
                   : WorkspaceGeometry.enlargeActionText(
-                      WorkspaceGeometry.headingStyle),
+                      WorkspaceGeometry.headingStyle,
+                      increase: 2 + additionalFontSize),
             ),
           ),
           if (trailing != null) trailing,
@@ -12858,6 +13011,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final narrowAndroid = spbNarrowAndroid;
     final wideAndroid = spbWideAndroid;
     final androidSpacing = narrowAndroid || wideAndroid;
+    final taskFontIncrease =
+        (androidSpacing || defaultTargetPlatform == TargetPlatform.windows) &&
+                title == 'Задачи'
+            ? 1.0
+            : 0.0;
     final actionIconSize = androidSpacing
         ? WorkspaceGeometry.narrowActionIcon
         : WorkspaceGeometry.actionIcon;
@@ -12883,9 +13041,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               overflow: TextOverflow.ellipsis,
               style: narrowAndroid || wideAndroid
                   ? WorkspaceGeometry.enlargeActionText(
-                      WorkspaceGeometry.androidActionHeadingStyle)
+                      WorkspaceGeometry.androidActionHeadingStyle,
+                      increase: 2 + taskFontIncrease)
                   : WorkspaceGeometry.enlargeActionText(
-                      WorkspaceGeometry.headingStyle),
+                      WorkspaceGeometry.headingStyle,
+                      increase: 2 + taskFontIncrease),
             ),
           )
         : buildSpbCollapsibleHeader(
@@ -12894,6 +13054,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             onExpand: onExpand!,
             onCollapse: onCollapse!,
             shellStyle: shellStyle,
+            additionalFontSize: taskFontIncrease,
           );
     if (sectionExpanded == false) return header;
     final actionTiles = [
@@ -12914,23 +13075,27 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     ? WorkspaceGeometry.enlargeActionText(
                         WorkspaceGeometry.androidActionItemNameStyle)
                     : WorkspaceGeometry.enlargeActionText(
-                        WorkspaceGeometry.androidActionBodyStyle))
+                        WorkspaceGeometry.androidActionBodyStyle,
+                        increase: 2 + taskFontIncrease))
                 : (frequentRows
                     ? WorkspaceGeometry.enlargeActionText(
                         WorkspaceGeometry.itemNameStyle)
                     : WorkspaceGeometry.enlargeActionText(
-                        WorkspaceGeometry.bodyStyle));
+                        WorkspaceGeometry.bodyStyle,
+                        increase: 2 + taskFontIncrease));
             final rowStrutStyle = narrowAndroid || wideAndroid
                 ? (frequentRows
                     ? WorkspaceGeometry.enlargeActionStrut(
                         WorkspaceGeometry.androidActionItemNameStrut)
                     : WorkspaceGeometry.enlargeActionStrut(
-                        WorkspaceGeometry.androidActionBodyStrut))
+                        WorkspaceGeometry.androidActionBodyStrut,
+                        increase: 2 + taskFontIncrease))
                 : (frequentRows
                     ? WorkspaceGeometry.enlargeActionStrut(
                         WorkspaceGeometry.itemNameStrut)
                     : WorkspaceGeometry.enlargeActionStrut(
-                        WorkspaceGeometry.bodyStrut));
+                        WorkspaceGeometry.bodyStrut,
+                        increase: 2 + taskFontIncrease));
             final textStyle =
                 DefaultTextStyle.of(context).style.merge(rowTextStyle);
             final painter = TextPainter(
@@ -15696,7 +15861,8 @@ class _IconPickerScrollbarState extends State<_IconPickerScrollbar> {
 }
 
 bool useFullScreenIconPicker(BuildContext context) {
-  return Platform.isAndroid || MediaQuery.sizeOf(context).width < 700;
+  return defaultTargetPlatform == TargetPlatform.android ||
+      MediaQuery.sizeOf(context).width < 700;
 }
 
 Widget iconPickerDialogTitle(BuildContext context, String title) {
@@ -16792,6 +16958,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
     try {
       final bytes = await attachmentBytes(attachment);
       if (bytes.isEmpty) return;
+      if (!mounted) return;
       await openAttachmentBytesWithSystem(attachment.fileName, bytes);
     } catch (error) {
       if (!mounted) return;
@@ -17045,6 +17212,8 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
             height: 72,
             child: Center(child: CircularProgressIndicator()),
           );
+        } else if (attachmentIsPdf(attachment.fileName)) {
+          content = InlinePdfAttachmentPreview(bytes: bytes);
         } else if (attachmentIsCopyableImage(attachment.fileName)) {
           content = ConstrainedBox(
             constraints: const BoxConstraints(maxHeight: 320),
@@ -18668,6 +18837,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
             height: 72,
             child: Center(child: CircularProgressIndicator()),
           );
+        } else if (attachmentIsPdf(attachment.fileName)) {
+          content = InlinePdfAttachmentPreview(bytes: bytes);
         } else if (isText) {
           content = selectableTextAttachmentPreview(
             attachment.fileName,
@@ -19105,6 +19276,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     try {
       final bytes = await editorAttachmentBytes(attachment);
       if (bytes.isEmpty) return;
+      if (!mounted) return;
       await openAttachmentBytesWithSystem(attachment.fileName, bytes);
     } catch (error) {
       if (!mounted) return;
@@ -20769,17 +20941,31 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   }
 
   Future<void> pickPictogram() async {
-    final picked = await showIconPickerDialog(context, iconId);
+    final picked = await showIconPickerDialog(
+      context,
+      iconId,
+      fullScreenOnNarrow: defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.windows,
+    );
     if (picked != null && mounted) changeIcon(picked);
   }
 
   Future<void> pickSpbIcon() async {
-    final picked = await showSpbOriginalIconPickerDialog(context, iconId);
+    final picked = await showSpbOriginalIconPickerDialog(
+      context,
+      iconId,
+      fullScreenOnNarrow: defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.windows,
+    );
     if (picked != null && mounted) changeIcon(picked);
   }
 
   Future<void> pickBrandIcon() async {
-    final picked = await showBrandIconPickerDialog(context);
+    final picked = await showBrandIconPickerDialog(
+      context,
+      fullScreenOnNarrow: defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.windows,
+    );
     if (picked == null || !mounted) return;
     final bytes = brandIconPngs[picked];
     if (bytes == null) return;
@@ -20787,7 +20973,14 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   }
 
   Future<void> pickThirdPartyIcon() async {
-    final picked = await showThirdPartyIconPickerDialog(context);
+    final android = defaultTargetPlatform == TargetPlatform.android;
+    final matchCardPicker =
+        android || defaultTargetPlatform == TargetPlatform.windows;
+    final picked = await showThirdPartyIconPickerDialog(
+      context,
+      fullScreenOnNarrow: matchCardPicker,
+      hideSearch: matchCardPicker,
+    );
     if (picked == null || !mounted) return;
     final bytes = thirdPartyIconPngs[picked];
     if (bytes == null) return;
