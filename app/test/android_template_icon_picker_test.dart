@@ -9,54 +9,41 @@ void main() {
       testWidgets('${platform.name} template icon selection at $size can undo',
           (tester) async {
         debugDefaultTargetPlatformOverride = platform;
-        final previousManagedFuture = managedIconLibraryFuture;
-        managedIconLibraryFuture = Future<void>.value();
         await tester.binding.setSurfaceSize(size);
-        try {
-          await tester
-              .pumpWidget(const MaterialApp(home: TemplateEditorDialog()));
-          await tester.pumpAndSettle();
-          final dynamic editor =
-              tester.state(find.byType(TemplateEditorDialog));
-          final original = editor.iconId as String;
-          final ids = managedIconIdsFor(IconCatalogKind.pictograms).toList()
-            ..sort();
-          final picked = ids.firstWhere((id) => id != original);
-
-          await tester.longPress(find.byKey(const Key('templateBoundIcon')));
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('Пиктограммы'));
-          await tester.pumpAndSettle();
-          expect(find.byType(ManagedIconSelectionDialog), findsOneWidget);
-          await tester
-              .tap(find.byKey(ValueKey('selectManagedIcon-$picked')));
-          await tester.pump();
-          expect(editor.iconId, original);
-          await tester.tap(find.byKey(const Key('confirmIconSelection')));
-          await tester.pumpAndSettle();
-          expect(find.byType(ManagedIconSelectionDialog), findsNothing);
-          expect(editor.iconId, picked);
-
-          await tester.tap(find.byKey(const Key('templateUndoButton')));
-          await tester.pumpAndSettle();
-          expect(editor.iconId, original);
-
-          await tester.longPress(find.byKey(const Key('templateBoundIcon')));
-          await tester.pumpAndSettle();
-          await tester.tap(find.text('Пиктограммы'));
-          await tester.pumpAndSettle();
-          await tester
-              .tap(find.byKey(ValueKey('selectManagedIcon-$picked')));
-          await tester.pump();
-          await tester.tap(find.byKey(const Key('cancelIconSelection')));
-          await tester.pumpAndSettle();
-          expect(editor.iconId, original);
-          expect(tester.takeException(), isNull);
-        } finally {
+        addTearDown(() {
           debugDefaultTargetPlatformOverride = null;
-          managedIconLibraryFuture = previousManagedFuture;
-          await tester.binding.setSurfaceSize(null);
+          tester.binding.setSurfaceSize(null);
+        });
+        await tester
+            .pumpWidget(const MaterialApp(home: TemplateEditorDialog()));
+        await tester.pumpAndSettle();
+        final dynamic editor = tester.state(find.byType(TemplateEditorDialog));
+        final original = editor.iconId as String;
+        await tester.tap(find.byKey(const Key('templatePictogramsButton')));
+        await tester.pumpAndSettle();
+        final dialog = find.byKey(const Key('pictogramPickerDialog'));
+        if (platform == TargetPlatform.android || size.width < 700) {
+          expect(tester.getSize(dialog), size);
+        } else {
+          expect(tester.widget(dialog), isA<AlertDialog>());
         }
+        expect(
+            find.byKey(const Key('pictogramPickerScrollbar')), findsOneWidget);
+        final picked = templateIcons.firstWhere((icon) => icon.id != original);
+        await tester.tap(find.byTooltip(picked.label).first);
+        await tester.pumpAndSettle();
+        expect(dialog, findsNothing);
+        expect(editor.iconId, picked.id);
+        await tester.tap(find.byKey(const Key('templateUndoButton')));
+        await tester.pumpAndSettle();
+        expect(editor.iconId, original);
+        await tester.tap(find.byKey(const Key('templatePictogramsButton')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('iconPickerCloseButton')));
+        await tester.pumpAndSettle();
+        expect(editor.iconId, original);
+        expect(tester.takeException(), isNull);
+        debugDefaultTargetPlatformOverride = null;
       });
     }
   }
