@@ -684,9 +684,9 @@ void main() {
     });
     final icons = (await tester.runAsync(loadThirdPartyIconAssets))!;
 
-    expect(icons, hasLength(1012));
-    expect(icons, contains('third-party://NewIcons/1.2-Discover-4.png'));
-    expect(icons, contains('third-party://NewIcons/Ziraat_Bank_3.png'));
+    expect(icons, hasLength(952));
+    expect(icons, contains('third-party://NewIcons/Geely_pale_purple.png'));
+    expect(icons, contains('third-party://NewIcons/Ukraine.png'));
     expect(thirdPartyIconPngs[icons.first], isNotEmpty);
   });
 
@@ -741,14 +741,14 @@ void main() {
     });
     final icons = await loadBrandIconAssets();
 
-    expect(icons, hasLength(433));
+    expect(icons, hasLength(438));
     expect(
       icons,
       contains('brand://BrendLogo-3D-inner/apple-pay.png'),
     );
     expect(
       icons,
-      contains('brand://BrendLogo-3D-inner/Apple_3.png'),
+      contains('brand://BrendLogo-3D-inner/Ajax_1.png'),
     );
     expect(brandIconPngs[icons.first], isNotEmpty);
   });
