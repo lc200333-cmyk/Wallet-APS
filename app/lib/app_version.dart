@@ -1,2 +1,2 @@
 // Updated by tools/bump_version.js during the release workflow.
-const currentAppVersion = '0.7.2';
+const currentAppVersion = '0.7.3';
