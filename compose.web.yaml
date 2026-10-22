@@ -1,0 +1,20 @@
+services:
+  wallet-aps-web:
+    container_name: wallet-aps-web
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+    ports:
+      - "8080:80"
+    volumes:
+      - wallet-aps-web-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1/vnc.html"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  wallet-aps-web-data:

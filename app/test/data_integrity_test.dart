@@ -231,7 +231,7 @@ void main() {
     );
   });
 
-  testWidgets('template name is fixed below palette and required',
+  testWidgets('template name aligns beside icon above palette and is required',
       (tester) async {
     CardTemplate? saved;
     await tester.pumpWidget(
@@ -261,7 +261,12 @@ void main() {
         .dy;
     final nameTop =
         tester.getTopLeft(find.byKey(const Key('templateNameField'))).dy;
-    expect(nameTop, greaterThan(colorTop));
+    expect(nameTop, lessThan(colorTop));
+    final icon = find.byKey(const Key('templateBoundIcon'));
+    final nameField = find.byKey(const Key('templateNameField'));
+    expect(nameTop, closeTo(tester.getTopLeft(icon).dy, 0.01));
+    expect(tester.getTopLeft(nameField).dx,
+        greaterThan(tester.getTopRight(icon).dx));
     expect(find.byKey(const Key('templateCategoryField')), findsNothing);
 
     await tester.tap(find.byKey(const Key('templateSaveButton')));

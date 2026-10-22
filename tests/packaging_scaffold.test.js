@@ -30,8 +30,8 @@ function exists(relativePath) {
 const app = read('app/lib/main.dart');
 [
   'Wallet APS',
-  'Открыть кошелёк',
-  'Создать кошелёк',
+  'Открыть базу',
+  'Создать базу',
   'Банковская карта',
   'Номер карты',
   'CVV',

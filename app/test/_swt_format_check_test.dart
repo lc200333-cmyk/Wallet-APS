@@ -131,7 +131,16 @@ void main() {
       find.byKey(const Key('createTemplateFromIconContextAction')),
       findsOneWidget,
     );
-    expect(find.text('Создать'), findsOneWidget);
+    expect(find.text('Создать шаблон'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('createTemplateFromIconContextAction')),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Image || widget is Icon,
+        ),
+      ),
+      findsOneWidget,
+    );
     expect(find.byKey(const Key('viewTemplateContextAction')), findsOneWidget);
     expect(find.byKey(const Key('editTemplateContextAction')), findsOneWidget);
     expect(
@@ -152,6 +161,73 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('templateEditorSurface')), findsOneWidget);
+  });
+
+  testWidgets('navigator sections keep accordion order and template menu',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await tester.pumpWidget(
+      const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+    );
+    await tester.pumpAndSettle();
+
+    final navigatorContent = find.byKey(const Key('spbNavigatorScrollbar'));
+    expect(
+      tester.getBottomLeft(find.byKey(const Key('spbMyCardsModeButton'))).dy,
+      lessThanOrEqualTo(tester.getTopLeft(navigatorContent).dy),
+    );
+    expect(
+      tester.getBottomLeft(navigatorContent).dy,
+      lessThanOrEqualTo(
+        tester.getTopLeft(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      ),
+    );
+
+    await tester.tap(
+      find.byKey(const Key('spbTemplatesModeButton')),
+      buttons: kSecondaryMouseButton,
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('Создать шаблон'), findsOneWidget);
+    expect(find.text('Импортировать шаблон'), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('createTemplateContextAction')),
+        matching: find.byWidgetPredicate(
+          (widget) => widget is Image || widget is Icon,
+        ),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('importTemplateContextAction')),
+        matching: find.byIcon(Icons.file_open_outlined),
+      ),
+      findsOneWidget,
+    );
+    await tester.tapAt(const Offset(1100, 800));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('spbTemplatesModeButton')));
+    await tester.pumpAndSettle();
+    expect(
+      tester.getBottomLeft(find.byKey(const Key('spbMyCardsModeButton'))).dy,
+      lessThanOrEqualTo(
+        tester.getTopLeft(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      ),
+    );
+    expect(
+      tester.getBottomLeft(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      lessThanOrEqualTo(tester.getTopLeft(navigatorContent).dy),
+    );
+    expect(
+      tester.getBottomLeft(navigatorContent).dy,
+      lessThanOrEqualTo(
+        tester.getTopLeft(find.byKey(const Key('spbIconsModeButton'))).dy,
+      ),
+    );
   });
 
   testWidgets('template opens in preview by double click', (tester) async {
@@ -195,7 +271,7 @@ void main() {
 
     expect(
         find.byKey(const Key('createTemplateContextAction')), findsOneWidget);
-    expect(find.text('Создать'), findsOneWidget);
+    expect(find.text('Создать шаблон'), findsOneWidget);
     expect(
         find.byKey(const Key('importTemplateContextAction')), findsOneWidget);
 
@@ -204,6 +280,28 @@ void main() {
     expect(find.byKey(const Key('templateEditorSurface')), findsOneWidget);
     expect(find.byKey(const Key('templateNameField')), findsOneWidget);
     expect(find.byKey(const Key('templateBoundIcon')), findsOneWidget);
+    expect(find.text('Новый шаблон'), findsOneWidget);
+    final newTemplateName = tester.widget<TextField>(
+      find.byKey(const Key('templateNameField')),
+    );
+    expect(newTemplateName.decoration!.fillColor, Colors.white);
+    final newTemplateColorPicker = tester.widget<ColorPicker>(
+      find.descendant(
+        of: find.byKey(const Key('templateEditorSurface')),
+        matching: find.byType(ColorPicker),
+      ),
+    );
+    expect(newTemplateColorPicker.value, 'template_white');
+    expect(
+      tester.getTopLeft(find.byKey(const Key('templateNameField'))).dy,
+      tester.getTopLeft(find.byKey(const Key('templateBoundIcon'))).dy,
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const Key('templateNameField'))).dx,
+      greaterThan(
+        tester.getTopRight(find.byKey(const Key('templateBoundIcon'))).dx,
+      ),
+    );
     expect(find.byKey(const Key('templateUndoButton')), findsOneWidget);
     expect(find.byKey(const Key('templateSaveButton')), findsOneWidget);
     expect(find.byKey(const Key('templateCloseButton')), findsOneWidget);
@@ -234,7 +332,7 @@ void main() {
       find.byKey(const Key('importTemplateRightContextAction')),
       findsOneWidget,
     );
-    expect(find.text('Создать'), findsOneWidget);
+    expect(find.text('Создать шаблон'), findsOneWidget);
   });
 
   testWidgets('card menus are identical in tree and central workspace',

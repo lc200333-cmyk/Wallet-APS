@@ -117,6 +117,24 @@ Offset textOffsetPosition(
 }
 
 void main() {
+  test('editor palette has seven colours and retains legacy colour mappings',
+      () {
+    expect(templateColorPalette.map((color) => color.id), [
+      'template_white',
+      'template_yellow',
+      'template_green',
+      'template_sky',
+      'template_red',
+      'template_violet',
+      'template_gray',
+    ]);
+    for (final color in storedTemplateColorPalette) {
+      expect(colorById(color.id).bg, color.bg);
+      expect(
+          spbTemplateColorToPaletteId(paletteColorToSpb(color.id)), color.id);
+    }
+  });
+
   test('GitHub release response returns a normalized version', () {
     expect(
       parseGithubReleaseVersion('{"tag_name":"v0.5.10"}'),
@@ -490,7 +508,8 @@ void main() {
         matching: find.byType(ExternalImageDropTarget),
       ),
     );
-    expect(cardTarget.enableClipboardPaste, isTrue);
+    expect(cardTarget.enableClipboardPaste, isFalse);
+    expect(find.byType(IconEditorTarget), findsOneWidget);
 
     await tester.pumpWidget(
       const MaterialApp(
@@ -508,7 +527,8 @@ void main() {
         matching: find.byType(ExternalImageDropTarget),
       ),
     );
-    expect(categoryTarget.enableClipboardPaste, isTrue);
+    expect(categoryTarget.enableClipboardPaste, isFalse);
+    expect(find.byType(IconEditorTarget), findsOneWidget);
 
     await tester.pumpWidget(
       const MaterialApp(home: TemplateEditorDialog()),
@@ -520,7 +540,8 @@ void main() {
         matching: find.byType(ExternalImageDropTarget),
       ),
     );
-    expect(templateTarget.enableClipboardPaste, isTrue);
+    expect(templateTarget.enableClipboardPaste, isFalse);
+    expect(find.byType(IconEditorTarget), findsOneWidget);
   });
 
   testWidgets('long press pastes and normalizes a clipboard image',
@@ -840,7 +861,7 @@ void main() {
       await tester.pumpAndSettle();
 
       final editorFrame = find.byKey(const Key('templateBoundIcon'));
-      expect(tester.getSize(editorFrame), const Size.square(frameSize));
+      expect(tester.getSize(editorFrame), const Size.square(100));
       expect(
         tester
             .widget<Icon>(
@@ -850,7 +871,7 @@ void main() {
               ),
             )
             .size,
-        iconSize,
+        100 * WorkspaceGeometry.framedIconScale,
       );
       expect(tester.takeException(), isNull);
       debugDefaultTargetPlatformOverride = null;
@@ -941,11 +962,11 @@ void main() {
     expect(find.byKey(const Key('templateNameField')), findsOneWidget);
     expect(find.byKey(const Key('templateBoundIcon')), findsOneWidget);
     expect(find.text('Выбрать иконку'), findsNothing);
-    expect(find.byKey(const Key('templateSpbDefaultButton')), findsOneWidget);
-    expect(find.byKey(const Key('templatePictogramsButton')), findsOneWidget);
-    expect(find.byKey(const Key('templateBrandPicker')), findsOneWidget);
-    expect(find.byKey(const Key('templateIconsButton')), findsOneWidget);
-    expect(find.byKey(const Key('templateUploadIconButton')), findsOneWidget);
+    expect(find.byKey(const Key('templateSpbDefaultButton')), findsNothing);
+    expect(find.byKey(const Key('templatePictogramsButton')), findsNothing);
+    expect(find.byKey(const Key('templateBrandPicker')), findsNothing);
+    expect(find.byKey(const Key('templateIconsButton')), findsNothing);
+    expect(find.byKey(const Key('templateUploadIconButton')), findsNothing);
     expect(
       find.byWidgetPredicate(
         (widget) =>
@@ -954,42 +975,18 @@ void main() {
                 .value
                 .startsWith('templateColor-'),
       ),
-      findsNWidgets(16),
+      findsNWidgets(7),
     );
     expect(find.byKey(const Key('templateUndoButton')), findsOneWidget);
     expect(find.byKey(const Key('templateSaveButton')), findsOneWidget);
     expect(find.byKey(const Key('templateCloseButton')), findsOneWidget);
-    final externalIcons = tester.widget<InkWell>(
-      find.descendant(
-        of: find.byKey(const Key('templateIconsButton')),
-        matching: find.byType(InkWell),
-      ),
-    );
-    expect(externalIcons.onTap, isNotNull);
-    final brandIcons = tester.widget<InkWell>(
-      find.descendant(
-        of: find.byKey(const Key('templateBrandPicker')),
-        matching: find.byType(InkWell),
-      ),
-    );
-    expect(brandIcons.onTap, isNotNull);
-    final uploadIcon = tester.widget<InkWell>(
-      find.descendant(
-        of: find.byKey(const Key('templateUploadIconButton')),
-        matching: find.byType(InkWell),
-      ),
-    );
-    expect(uploadIcon.onTap, isNotNull);
+    expect(find.byType(IconEditorTarget), findsOneWidget);
     final iconFrame = tester.widget<Container>(
       find.byKey(const Key('templateBoundIcon')),
     );
     expect(
       tester.getSize(find.byKey(const Key('templateBoundIcon'))),
-      const Size(88, 88),
-    );
-    expect(
-      tester.widget(find.byKey(const Key('templateSpbDefaultButton'))),
-      isA<SpbGrayPickerButton>(),
+      const Size(100, 100),
     );
     final iconDecoration = iconFrame.decoration! as BoxDecoration;
     expect((iconDecoration.border! as Border).top.width, 2);
@@ -1017,7 +1014,7 @@ void main() {
     );
     expect(
       coloredPictogram.size,
-      88 * WorkspaceGeometry.framedIconScale,
+      100 * WorkspaceGeometry.framedIconScale,
     );
     expect(coloredPictogram.color, templatePictogramColor('template_sky'));
     expect(tester.takeException(), isNull);
@@ -1117,22 +1114,7 @@ void main() {
           ?.fontWeight,
       FontWeight.bold,
     );
-    final original = find.byKey(const Key('spbCardIconPicker'));
-    final pictogram = find.byKey(const Key('cardPictogramPicker'));
-    final brands = find.byKey(const Key('cardBrandPicker'));
-    final thirdParty = find.byKey(const Key('cardThirdPartyPicker'));
-    final upload = find.byKey(const Key('cardUploadIconButton'));
-    expect(original, findsOneWidget);
-    expect(pictogram, findsOneWidget);
-    expect(brands, findsOneWidget);
-    expect(thirdParty, findsOneWidget);
-    expect(upload, findsOneWidget);
-    expect(tester.getTopLeft(original).dx,
-        lessThan(tester.getTopLeft(pictogram).dx));
-    expect(tester.getTopLeft(pictogram).dx,
-        lessThan(tester.getTopLeft(brands).dx));
-    expect(tester.getTopLeft(brands).dx,
-        lessThan(tester.getTopLeft(thirdParty).dx));
+    expect(find.byType(SpbGrayPickerButton), findsNothing);
     for (final color in templateColorPalette) {
       expect(find.byKey(ValueKey('cardColor-${color.id}')), findsOneWidget);
     }
@@ -1145,8 +1127,6 @@ void main() {
         tester.getTopLeft(find.byKey(const Key('cardBoundIcon'))).dy;
     final iconLeft =
         tester.getTopLeft(find.byKey(const Key('cardBoundIcon'))).dx;
-    final pickerBottom = tester.getBottomLeft(upload).dy;
-    final pickerTop = tester.getTopLeft(upload).dy;
     final colorTop = tester
         .getTopLeft(
           find.byKey(ValueKey('cardColor-${templateColorPalette.first.id}')),
@@ -1172,12 +1152,11 @@ void main() {
     );
     expect(titleTop, closeTo(iconTop, 0.01));
     expect(
-      pickerTop -
-          tester.getBottomLeft(find.byKey(const Key('cardTitleField'))).dy,
-      closeTo(7, 0.01),
-    );
-    expect(pickerBottom, closeTo(iconBottom, 0.01));
-    expect(colorTop, greaterThan(iconBottom));
+        tester
+            .getBottomLeft(find
+                .byKey(ValueKey('cardColor-${templateColorPalette.first.id}')))
+            .dy,
+        closeTo(iconBottom, 0.01));
     expect(templateTop, greaterThan(colorTop));
     expect(tester.getSize(templatePreview), const Size(41, 41));
     expect(tester.getSize(categoryPreview), const Size(41, 41));
@@ -1229,7 +1208,7 @@ void main() {
             ),
           )
           .dx,
-      closeTo(iconLeft, 0.01),
+      greaterThan(iconLeft + 100),
     );
     expect(
       tester
@@ -1335,37 +1314,20 @@ void main() {
     );
     expect(tester.takeException(), isNull);
 
-    await tester.ensureVisible(original);
+    await tester.ensureVisible(find.byKey(const Key('cardBoundIcon')));
     await tester.pumpAndSettle();
-    await tester.tap(original);
-    await tester.pumpAndSettle();
-    expect(find.text('Иконки SPB Wallet'), findsOneWidget);
-    final closeButton = find.byKey(const Key('iconPickerCloseButton'));
-    expect(closeButton, findsOneWidget);
-    expect(
-      find.descendant(of: closeButton, matching: find.byIcon(Icons.close)),
-      findsOneWidget,
-    );
-    expect(
-      tester.widget<SpbGradientActionButton>(closeButton).colors,
-      const [Color(0xffff5a5f), Color(0xffa90000)],
-    );
-    await tester.tap(closeButton);
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('cardBrandPicker')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('brandIconSearch')), findsOneWidget);
-    expect(find.byKey(const Key('brandIconPickerDialog')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('iconPickerCloseButton')));
-    await tester.pumpAndSettle();
-    await tester.runAsync(loadThirdPartyIconAssets);
-    await tester.tap(find.byKey(const Key('cardThirdPartyPicker')));
+    await tester.runAsync(loadManagedIconLibrary);
+    await tester.tap(find.byKey(const Key('cardBoundIcon')),
+        buttons: kSecondaryMouseButton);
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pumpAndSettle();
-    expect(find.byKey(const Key('thirdPartyIconSearch')), findsNothing);
-    expect(tester.takeException(), isNull);
-    await tester.tap(find.byKey(const Key('iconPickerCloseButton')));
+    expect(find.text('Базовые'), findsOneWidget);
+    await tester.tap(find.text('Базовые'));
     await tester.pumpAndSettle();
+    expect(find.byType(ManagedIconSelectionDialog), findsOneWidget);
+    await tester.tap(find.byKey(const Key('cancelIconSelection')));
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('narrow card editor matches the adaptive reference layout',
@@ -1387,8 +1349,6 @@ void main() {
 
     final boundIcon = find.byKey(const Key('cardBoundIcon'));
     final titleField = find.byKey(const Key('cardTitleField'));
-    final original = find.byKey(const Key('spbCardIconPicker'));
-    final upload = find.byKey(const Key('cardUploadIconButton'));
     final firstColor = find.byKey(
       ValueKey('cardColor-${templateColorPalette.first.id}'),
     );
@@ -1420,25 +1380,18 @@ void main() {
       tester.widget<TextField>(titleField).style?.fontWeight,
       FontWeight.bold,
     );
-    expect(tester.widget<SpbGrayPickerButton>(original).compact, isTrue);
-    expect(titleTop, lessThan(iconTop));
+    expect(find.byType(SpbGrayPickerButton), findsNothing);
+    expect(titleTop, closeTo(iconTop, 0.01));
     expect(
       tester.getTopLeft(titleField).dx,
-      closeTo(tester.getTopLeft(boundIcon).dx, 0.01),
+      greaterThan(tester.getTopRight(boundIcon).dx),
     );
     expect(
       tester.getTopRight(titleField).dx,
       closeTo(tester.getTopRight(categoryField).dx, 0.01),
     );
-    expect(tester.getSize(original).height, 88);
-    expect(tester.getSize(upload).height, 88);
-    expect(tester.getTopLeft(original).dy, closeTo(iconTop, 0.01));
-    expect(tester.getBottomLeft(upload).dy, closeTo(iconBottom, 0.01));
-    expect(
-      iconTop - tester.getBottomLeft(titleField).dy,
-      closeTo(14, 0.01),
-    );
-    expect(colorTop - iconBottom, closeTo(10, 0.01));
+    expect(find.text('Выбор цвета карточки'), findsNothing);
+    expect(colorTop + 27, closeTo(iconBottom, 0.01));
     expect(tester.getSize(firstColor).height, 27);
     expect(
       tester.getSize(firstColor).width,
@@ -1446,7 +1399,7 @@ void main() {
     );
     expect(
       tester.getTopLeft(firstColor).dx,
-      closeTo(tester.getTopLeft(boundIcon).dx, 0.01),
+      greaterThan(tester.getTopRight(boundIcon).dx),
     );
     expect(
       tester.getTopRight(lastColor).dx,
@@ -2344,11 +2297,11 @@ void main() {
     expect(editorSize.width, 360);
     expect(editorSize.height, greaterThanOrEqualTo(500));
     expect(find.byKey(const Key('categoryBoundIcon')), findsOneWidget);
-    expect(find.byKey(const Key('spbFolderIconPicker')), findsOneWidget);
-    expect(find.byKey(const Key('categoryPictogramPicker')), findsOneWidget);
-    expect(find.byKey(const Key('categoryBrandPicker')), findsOneWidget);
-    expect(find.byKey(const Key('categoryThirdPartyPicker')), findsOneWidget);
-    expect(find.byKey(const Key('categoryUploadIconButton')), findsOneWidget);
+    expect(find.byKey(const Key('spbFolderIconPicker')), findsNothing);
+    expect(find.byKey(const Key('categoryPictogramPicker')), findsNothing);
+    expect(find.byKey(const Key('categoryBrandPicker')), findsNothing);
+    expect(find.byKey(const Key('categoryThirdPartyPicker')), findsNothing);
+    expect(find.byKey(const Key('categoryUploadIconButton')), findsNothing);
     expect(find.byKey(const Key('categoryDeleteButton')), findsOneWidget);
     expect(find.byKey(const Key('categorySaveButton')), findsOneWidget);
     expect(find.byKey(const Key('categoryCloseButton')), findsOneWidget);
@@ -2374,6 +2327,15 @@ void main() {
     final field = tester.widget<TextField>(nameField);
     expect(field.autofocus, isTrue);
     expect(field.decoration!.hintText, 'Введите имя папки');
+    final folderColors = tester.widget<ColorPicker>(find.byType(ColorPicker));
+    expect(folderColors.value, 'template_white');
+    expect(find.text('Новая папка'), findsOneWidget);
+    expect(find.text('Выбор цвета папки'), findsNothing);
+    final folderIcon = find.byKey(const Key('categoryBoundIcon'));
+    expect(tester.getTopLeft(nameField).dy,
+        closeTo(tester.getTopLeft(folderIcon).dy, 0.01));
+    expect(tester.getTopLeft(nameField).dx,
+        greaterThan(tester.getTopRight(folderIcon).dx));
     expect(find.byKey(const Key('categorySaveButton')), findsNothing);
 
     await tester.enterText(nameField, 'Архив');
@@ -2459,7 +2421,7 @@ void main() {
 
     expect(find.text('Мои карточки'), findsNWidgets(2));
     expect(find.text('Задачи'), findsOneWidget);
-    expect(find.text('Создать кошелёк'), findsOneWidget);
+    expect(find.text('Создать базу'), findsOneWidget);
     expect(find.byKey(const Key('spbCreateWalletAppIcon')), findsOneWidget);
     expect(find.byKey(const Key('spbArchiveTaskIcon')), findsOneWidget);
     expect(find.byKey(const Key('spbRepairTaskIcon')), findsOneWidget);
@@ -2644,23 +2606,21 @@ void main() {
     expect(find.byKey(const Key('spbTemplatesModeButton')), findsOneWidget);
     expect(find.byKey(const Key('spbIconsModeButton')), findsOneWidget);
     expect(
+      tester.getCenter(find.byKey(const Key('spbIconsModeButton'))).dy,
+      greaterThan(
+        tester.getCenter(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      ),
+    );
+    expect(
       tester.getCenter(find.byKey(const Key('spbMyCardsModeButton'))).dy,
       lessThan(
         tester.getCenter(find.byKey(const Key('spbTemplatesModeButton'))).dy,
       ),
     );
     expect(
-      tester.getCenter(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      tester.getCenter(find.byKey(const Key('spbIconsModeButton'))).dy,
       lessThan(
         tester.getCenter(find.byKey(const ValueKey('spbIconCatalog-spb'))).dy,
-      ),
-    );
-    expect(
-      tester
-          .getCenter(find.byKey(const ValueKey('spbIconCatalog-thirdParty')))
-          .dy,
-      lessThan(
-        tester.getCenter(find.byKey(const Key('spbIconsModeButton'))).dy,
       ),
     );
     for (final kind in IconCatalogKind.values) {
@@ -2669,7 +2629,7 @@ void main() {
         findsOneWidget,
       );
     }
-    expect(find.text('Иконки SPB'), findsWidgets);
+    expect(find.text('Базовые'), findsWidgets);
     expect(find.byKey(const Key('uploadManagedIconButton')), findsOneWidget);
     expect(find.byKey(const Key('pasteManagedIconButton')), findsOneWidget);
     expect(find.byKey(const Key('managedIconUploadTaskIcon')), findsOneWidget);
@@ -4474,12 +4434,6 @@ void main() {
     // Первая панель содержит список шаблонов.
     expect(find.text('Шаблоны'), findsOneWidget);
     expect(find.text('Мои карточки'), findsOneWidget);
-    expect(
-      tester.getCenter(find.text('Мои карточки')).dy,
-      greaterThan(
-        tester.getCenter(find.byKey(const Key('spbSearchInput'))).dy,
-      ),
-    );
     expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
     final templateTreeEntries = find.byWidgetPredicate(
       (widget) =>
@@ -4487,6 +4441,22 @@ void main() {
           (widget.key! as ValueKey<String>).value.startsWith('spbTemplate-'),
     );
     expect(templateTreeEntries, findsWidgets);
+    expect(
+      tester.getBottomLeft(find.byKey(const Key('spbMyCardsModeButton'))).dy,
+      lessThanOrEqualTo(
+        tester.getTopLeft(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      ),
+    );
+    expect(
+      tester.getBottomLeft(find.byKey(const Key('spbTemplatesModeButton'))).dy,
+      lessThanOrEqualTo(tester.getTopLeft(templateTreeEntries.first).dy),
+    );
+    expect(
+      tester.getBottomLeft(templateTreeEntries.last).dy,
+      lessThanOrEqualTo(
+        tester.getTopLeft(find.byKey(const Key('spbIconsModeButton'))).dy,
+      ),
+    );
     expect(find.byKey(const Key('mobilePaneBack')), findsOneWidget);
     expect(find.byKey(const Key('mobilePaneForward')), findsOneWidget);
 
@@ -4580,7 +4550,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('CLR'), findsOneWidget);
-    expect(find.text('<-'), findsOneWidget);
+    expect(find.text('⌫'), findsOneWidget);
     expect(find.text('OK'), findsOneWidget);
     expect(
       find.descendant(
@@ -4594,6 +4564,48 @@ void main() {
     expect(find.text('abc'), findsOneWidget);
     expect(find.text('123'), findsOneWidget);
     expect(find.text('#!?'), findsOneWidget);
+    for (final tooltip in const [
+      'Заглавные',
+      'Строчные',
+      'Цифры',
+      'Символы',
+      'Подсказка пароля',
+      'Открыть другую базу…',
+      'Создать новую базу',
+      'Очистить',
+      'Удалить символ',
+    ]) {
+      expect(
+        find.byWidgetPredicate(
+          (widget) => widget is Tooltip && widget.message == tooltip,
+        ),
+        findsOneWidget,
+      );
+    }
+
+    BoxDecoration keyDecoration(String key) => tester
+        .widget<Ink>(
+          find.descendant(
+            of: find.byKey(Key(key)),
+            matching: find.byType(Ink),
+          ),
+        )
+        .decoration! as BoxDecoration;
+    expect(
+      (keyDecoration('keypadModeNumeric').border! as Border).top.width,
+      2,
+    );
+    expect(
+      (keyDecoration('keypadModeUppercase').border! as Border).top.width,
+      1,
+    );
+
+    await tester.tap(find.byKey(const Key('keypadModeUppercase')));
+    await tester.pump();
+    expect(
+      (keyDecoration('keypadModeUppercase').border! as Border).top.width,
+      2,
+    );
   });
 
   testWidgets('login password eye toggles password visibility', (tester) async {
@@ -4980,6 +4992,8 @@ void main() {
     expect(find.byKey(const Key('newVaultPasswordHint')), findsOneWidget);
     final confirmButton = find.byKey(const Key('confirmCreateVault'));
     final cancelButton = find.byKey(const Key('cancelCreateVault'));
+    expect(tester.getCenter(cancelButton).dx,
+        lessThan(tester.getCenter(confirmButton).dx));
     expect(
       find.descendant(of: confirmButton, matching: find.byIcon(Icons.check)),
       findsOneWidget,

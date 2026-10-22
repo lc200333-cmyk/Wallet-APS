@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:ui' as ui;
 
 import 'package:archive/archive.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -9,6 +10,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image/image.dart' as image;
 import 'package:path_provider/path_provider.dart';
@@ -38,6 +40,7 @@ void main(List<String> arguments) {
 }
 
 final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
+final iconPickerWorkspaceKey = GlobalKey();
 final appUserActivityPulse = ValueNotifier<int>(0);
 const appWindowBackgroundColor = Color(0xffe6e6e6);
 
@@ -488,28 +491,36 @@ List<String> brandIconAssets = [];
 Future<List<String>>? brandIconAssetsFuture;
 Map<String, Uint8List> brandIconPngs = {};
 
-enum IconCatalogKind { spb, pictograms, brands, thirdParty }
+class IconCatalogKind {
+  const IconCatalogKind(this.storageKey, this.label,
+      {this.iconId = 'folder', this.colorId = 'template_gray'});
+  final String storageKey;
+  final String label;
+  final String iconId;
+  final String colorId;
+  static const spb = IconCatalogKind('spb', 'Базовые');
+  static const pictograms = IconCatalogKind('pictograms', 'Значки');
+  static const brands = IconCatalogKind('brands', 'Логотипы компаний');
+  static const thirdParty = IconCatalogKind('thirdParty', 'Дополнительные');
+  static List<IconCatalogKind> get values =>
+      [spb, pictograms, brands, thirdParty, ...customIconCatalogs];
+  bool get isCustom => storageKey.startsWith('custom-');
+  @override
+  bool operator ==(Object other) =>
+      other is IconCatalogKind && storageKey == other.storageKey;
+  @override
+  int get hashCode => storageKey.hashCode;
+}
+
+List<IconCatalogKind> customIconCatalogs = [];
 
 extension IconCatalogKindUi on IconCatalogKind {
-  String get storageKey => switch (this) {
-        IconCatalogKind.spb => 'spb',
-        IconCatalogKind.pictograms => 'pictograms',
-        IconCatalogKind.brands => 'brands',
-        IconCatalogKind.thirdParty => 'thirdParty',
-      };
-
-  String get label => switch (this) {
-        IconCatalogKind.spb => 'Иконки SPB',
-        IconCatalogKind.pictograms => 'Пиктограммы',
-        IconCatalogKind.brands => 'Бренды',
-        IconCatalogKind.thirdParty => 'Сторонние',
-      };
-
   IconData get icon => switch (this) {
         IconCatalogKind.spb => Icons.account_balance_wallet_outlined,
         IconCatalogKind.pictograms => Icons.category_outlined,
         IconCatalogKind.brands => Icons.storefront_outlined,
         IconCatalogKind.thirdParty => Icons.public_outlined,
+        _ => Icons.folder_outlined,
       };
 }
 
@@ -589,11 +600,36 @@ Future<void> loadManagedIconLibrary() {
     if (thirdPartyIconAssets.isEmpty) await loadThirdPartyIconAssets();
     final locations = <String, IconCatalogKind>{};
     final hidden = <String>{};
+    customIconCatalogs = [];
     try {
       final stateFile = await managedIconCatalogStateFile();
       if (await stateFile.exists()) {
         final decoded = jsonDecode(await stateFile.readAsString());
         if (decoded is Map) {
+          final folders = decoded['folders'];
+          customIconCatalogs = [
+            if (folders is List)
+              for (final folder in folders)
+                if (folder is Map &&
+                    folder['id'] is String &&
+                    (folder['id'] as String).startsWith('custom-') &&
+                    folder['name'] is String)
+                  IconCatalogKind(
+                      folder['id'] as String, folder['name'] as String,
+                      iconId: folder['iconId'] as String? ?? 'folder',
+                      colorId: folder['colorId'] as String? ?? 'template_gray'),
+          ];
+          if (folders is List) {
+            for (final folder in folders) {
+              if (folder is Map &&
+                  folder['iconData'] is String &&
+                  folder['iconId'] is String) {
+                spbEmbeddedIconPngs[
+                        (folder['iconId'] as String).toUpperCase()] =
+                    base64Decode(folder['iconData'] as String);
+              }
+            }
+          }
           final rawLocations = decoded['locations'];
           if (rawLocations is Map) {
             for (final entry in rawLocations.entries) {
@@ -646,7 +682,19 @@ Future<void> _writeManagedIconLibraryState() async {
   try {
     await temporary.writeAsString(
       const JsonEncoder.withIndent('  ').convert({
-        'version': 1,
+        'version': 2,
+        'folders': [
+          for (final folder in customIconCatalogs)
+            {
+              'id': folder.storageKey,
+              'name': folder.label,
+              'iconId': folder.iconId,
+              'colorId': folder.colorId,
+              if (spbEmbeddedIconPngs[folder.iconId.toUpperCase()] != null)
+                'iconData': base64Encode(
+                    spbEmbeddedIconPngs[folder.iconId.toUpperCase()]!),
+            },
+        ],
         'locations': {
           for (final entry in locations) entry.key: entry.value.storageKey,
         },
@@ -919,8 +967,8 @@ void showThirdPartyIconRegistrationMessage(
       SnackBar(
         content: Text(
           registration.added
-              ? 'Иконка добавлена в каталог «Сторонние».'
-              : 'Такая иконка уже есть в каталоге «Сторонние».',
+              ? 'Иконка добавлена в каталог «Дополнительные».'
+              : 'Такая иконка уже есть в каталоге «Дополнительные».',
         ),
         duration: const Duration(seconds: 2),
       ),
@@ -945,13 +993,29 @@ Future<ThirdPartyIconRegistration?> registerUserThirdPartyIconWithFeedback(
         ..showSnackBar(
           SnackBar(
             content: Text(
-              'Не удалось добавить иконку в каталог «Сторонние»: $error',
+              'Не удалось добавить иконку в каталог «Дополнительные»: $error',
             ),
           ),
         );
     }
     return null;
   }
+}
+
+Future<Uint8List>? iconsModeImageFuture;
+
+Future<Uint8List> loadIconsModeImage() {
+  return iconsModeImageFuture ??= () async {
+    final data = await rootBundle.load(thirdPartyIconBundleAsset);
+    final archive = ZipDecoder().decodeBytes(
+      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+      verify: true,
+    );
+    final file = archive.files.firstWhere(
+      (file) => file.name.replaceAll('\\', '/') == 'NewIcons/Icons0573.png',
+    );
+    return Uint8List.fromList(file.content);
+  }();
 }
 
 Future<List<String>> loadThirdPartyIconAssets() {
@@ -1723,7 +1787,7 @@ class ExistingVault {
     final displayPath = json['displayPath']?.toString();
     return ExistingVault(
       title: title == null || title.isEmpty
-          ? _vaultTitleFromPath(displayPath ?? path ?? uri ?? '.swl база')
+          ? _vaultTitleFromPath(displayPath ?? path ?? uri ?? 'База')
           : title,
       path: path,
       uri: uri,
@@ -1733,7 +1797,7 @@ class ExistingVault {
 }
 
 String _vaultTitleFromPath(String path) {
-  if (path.startsWith('content://')) return '.swl база';
+  if (path.startsWith('content://')) return 'База';
   final normalized = path.replaceAll('\\', '/');
   final slash = normalized.lastIndexOf('/');
   return slash < 0 ? path : normalized.substring(slash + 1);
@@ -1749,7 +1813,8 @@ const palette = [
   PaletteColor('amber', 'Янтарный', Color(0xfff3e7ca), Color(0xff5d4318)),
 ];
 
-const templateColorPalette = [
+// Retain all stored colour IDs for legacy wallets and imported objects.
+const storedTemplateColorPalette = [
   PaletteColor(
     'template_gray',
     'Бледно-серый',
@@ -1843,6 +1908,22 @@ const templateColorPalette = [
   PaletteColor('template_white', 'Белый', Color(0xffffffff), Color(0xff222222)),
 ];
 
+const templateColorPalette = [
+  PaletteColor('template_white', 'Белый', Color(0xffffffff), Color(0xff222222)),
+  PaletteColor(
+      'template_yellow', 'Бледно-жёлтый', Color(0xfffbf3c4), Color(0xff51491e)),
+  PaletteColor(
+      'template_green', 'Бледно-зелёный', Color(0xffdaf1d8), Color(0xff294b2a)),
+  PaletteColor(
+      'template_sky', 'Бледно-голубой', Color(0xffd8ecfa), Color(0xff24445a)),
+  PaletteColor(
+      'template_red', 'Бледно-красный', Color(0xfff8d7da), Color(0xff54292d)),
+  PaletteColor('template_violet', 'Бледно-фиолетовый', Color(0xffeaddf6),
+      Color(0xff49335c)),
+  PaletteColor(
+      'template_gray', 'Бледно-серый', Color(0xffe8e8e8), Color(0xff242424)),
+];
+
 const templateIcons = [
   TemplateIcon('key', 'Ключ', '🔑'),
   TemplateIcon('note', 'Заметка', '📝'),
@@ -1865,7 +1946,7 @@ const templateIcons = [
   TemplateIcon('receipt', 'Чек', '🧾'),
   TemplateIcon('money', 'Деньги', '💵'),
   TemplateIcon('coin', 'Монеты', '🪙'),
-  TemplateIcon('wallet', 'Кошелек', '👛'),
+  TemplateIcon('wallet', 'База', '👛'),
   TemplateIcon('chart', 'График', '📈'),
   TemplateIcon('calculator', 'Калькулятор', '🧮'),
   TemplateIcon('home', 'Дом', '🏠'),
@@ -2323,13 +2404,12 @@ List<CardTemplate> builtInTemplates() => const [
       ),
       CardTemplate(
         id: 'tpl_crypto_wallet',
-        name: 'Криптокошелек',
+        name: 'Криптобаза',
         iconId: 'crypto',
         colorId: 'amber',
         builtIn: true,
         fields: [
-          FieldDefinition(
-              id: 'wallet', label: 'Название кошелька', type: 'text'),
+          FieldDefinition(id: 'wallet', label: 'Название базы', type: 'text'),
           FieldDefinition(id: 'address', label: 'Адрес', type: 'text'),
           FieldDefinition(
             id: 'seed',
@@ -2435,7 +2515,7 @@ List<CardTemplate> builtInTemplates() => const [
     ];
 
 PaletteColor colorById(String id) {
-  for (final color in [...palette, ...templateColorPalette]) {
+  for (final color in [...palette, ...storedTemplateColorPalette]) {
     if (color.id == id) return color;
   }
   return palette.first;
@@ -2465,7 +2545,7 @@ String spbColorToPaletteId(int color) {
 
 String spbTemplateColorToPaletteId(int color) {
   final normalized = color & 0x00ffffff;
-  for (final candidate in templateColorPalette) {
+  for (final candidate in storedTemplateColorPalette) {
     if ((candidate.bg.toARGB32() & 0x00ffffff) == normalized) {
       return candidate.id;
     }
@@ -2974,27 +3054,20 @@ Future<({Uint8List bytes, String fileName})?> pickUserIconFile(
   BuildContext context,
 ) async {
   try {
-    final picked = Platform.isAndroid
-        ? await FilePicker.platform.pickFiles(
-            type: FileType.image,
-            withData: true,
-            // Android converts gallery formats such as HEIC into an image
-            // that the Dart decoder can reliably read.
-            compressionQuality: 95,
-          )
-        : await FilePicker.platform.pickFiles(
-            type: FileType.custom,
-            allowedExtensions: const [
-              'png',
-              'ico',
-              'jpg',
-              'jpeg',
-              'bmp',
-              'gif',
-              'webp',
-            ],
-            withData: true,
-          );
+    final picked = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const [
+        'png',
+        'ico',
+        'jpg',
+        'jpeg',
+        'bmp',
+        'gif',
+        'webp',
+        'svg',
+      ],
+      withData: true,
+    );
     final file = picked?.files.single;
     if (file == null) return null;
     Uint8List? bytes = file.bytes;
@@ -3004,17 +3077,7 @@ Future<({Uint8List bytes, String fileName})?> pickUserIconFile(
     if (bytes == null || bytes.isEmpty) {
       throw const FormatException('Выбранный файл пуст или недоступен.');
     }
-    image.Image? decoded;
-    try {
-      decoded = image.IcoDecoder().decodeImageLargest(bytes);
-    } catch (_) {
-      // The selected file can be a regular bitmap rather than ICO.
-    }
-    decoded ??= image.decodeImage(bytes);
-    if (decoded == null) {
-      throw const FormatException('Формат изображения не поддерживается.');
-    }
-    final pngBytes = normalizeUserIconPng(decoded);
+    final pngBytes = await decodeIconFileToPng(bytes, file.name);
     final baseName = file.name.replaceFirst(RegExp(r'\.[^.]+$'), '');
     final fileName = '${baseName.isEmpty ? 'icon' : baseName}.png';
     if (!context.mounted) return null;
@@ -3024,10 +3087,7 @@ Future<({Uint8List bytes, String fileName})?> pickUserIconFile(
       fileName: fileName,
     );
     if (!confirmed) return null;
-    return (
-      bytes: pngBytes,
-      fileName: fileName,
-    );
+    return (bytes: pngBytes, fileName: fileName);
   } catch (error) {
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -3036,6 +3096,54 @@ Future<({Uint8List bytes, String fileName})?> pickUserIconFile(
     }
     return null;
   }
+}
+
+Future<Uint8List> decodeIconFileToPng(Uint8List bytes, String fileName) async {
+  if (fileName.toLowerCase().endsWith('.svg')) {
+    final picture = await vg.loadPicture(SvgBytesLoader(bytes), null);
+    try {
+      if (picture.size.isEmpty) {
+        throw const FormatException('SVG не имеет размера');
+      }
+      const dimension = 128;
+      final scale =
+          min(dimension / picture.size.width, dimension / picture.size.height);
+      final recorder = ui.PictureRecorder();
+      final canvas = ui.Canvas(recorder);
+      canvas.translate((dimension - picture.size.width * scale) / 2,
+          (dimension - picture.size.height * scale) / 2);
+      canvas.scale(scale);
+      canvas.drawPicture(picture.picture);
+      final scaled = recorder.endRecording();
+      try {
+        final raster = await scaled.toImage(dimension, dimension);
+        try {
+          final png = await raster.toByteData(format: ui.ImageByteFormat.png);
+          if (png == null) {
+            throw const FormatException('Не удалось прочитать SVG');
+          }
+          return png.buffer.asUint8List(png.offsetInBytes, png.lengthInBytes);
+        } finally {
+          raster.dispose();
+        }
+      } finally {
+        scaled.dispose();
+      }
+    } finally {
+      picture.picture.dispose();
+    }
+  }
+  image.Image? decoded;
+  try {
+    decoded = image.IcoDecoder().decodeImageLargest(bytes);
+  } catch (_) {
+    // The selected file can be a regular bitmap rather than ICO.
+  }
+  decoded ??= image.decodeImage(bytes);
+  if (decoded == null) {
+    throw const FormatException('Формат изображения не поддерживается.');
+  }
+  return normalizeUserIconPng(decoded);
 }
 
 Future<bool> showUserIconUploadConfirmation(
@@ -5066,7 +5174,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final password = passwordController.text;
     if (entryMode == EntryMode.openSwl) {
       if (spbWalletPath == null || spbWalletPath!.isEmpty) {
-        setState(() => message = 'Выберите файл базы .swl.');
+        setState(() => message = 'Выберите файл базы.');
         return;
       }
       try {
@@ -5156,7 +5264,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         passwordController.clear();
         confirmController.clear();
       } catch (error) {
-        setState(() => message = 'Не удалось создать .swl базу: $error');
+        setState(() => message = 'Не удалось создать базу: $error');
       } finally {
         if (mounted) {
           setState(() => creatingVault = false);
@@ -5243,7 +5351,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           );
         }
       } catch (error) {
-        setState(() => message = 'Не удалось выбрать .swl файл: $error');
+        setState(() => message = 'Не удалось выбрать файл базы: $error');
       }
       return;
     }
@@ -5711,7 +5819,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         controller: nameController,
                         decoration: const InputDecoration(
                           labelText: 'Название базы',
-                          suffixText: '.swl',
                           border: OutlineInputBorder(),
                           isDense: true,
                           contentPadding: EdgeInsets.symmetric(
@@ -5783,6 +5890,23 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ),
           actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
           actions: [
+            SizedBox.square(
+              dimension: 48,
+              child: IgnorePointer(
+                ignoring: isCreating,
+                child: Opacity(
+                  opacity: isCreating ? 0.6 : 1,
+                  child: SpbGradientActionButton(
+                    key: const Key('cancelCreateVault'),
+                    icon: Icons.close,
+                    tooltip: 'Отмена',
+                    colors: const [Color(0xffd32b31), Color(0xff7f0609)],
+                    onTap: () => Navigator.of(dialogContext).pop(),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
             SizedBox.square(
               dimension: 48,
               child: IgnorePointer(
@@ -5904,29 +6028,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         if (dialogContext.mounted) {
                           setDialogState(() {
                             isCreating = false;
-                            dialogError =
-                                'Не удалось создать .swl базу: $error';
+                            dialogError = 'Не удалось создать базу: $error';
                           });
                         }
                       }
                     },
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox.square(
-              dimension: 48,
-              child: IgnorePointer(
-                ignoring: isCreating,
-                child: Opacity(
-                  opacity: isCreating ? 0.6 : 1,
-                  child: SpbGradientActionButton(
-                    key: const Key('cancelCreateVault'),
-                    icon: Icons.close,
-                    tooltip: 'Отмена',
-                    colors: const [Color(0xffd32b31), Color(0xff7f0609)],
-                    onTap: () => Navigator.of(dialogContext).pop(),
                   ),
                 ),
               ),
@@ -5966,7 +6072,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final wallet = spbWallet;
     final path = spbWalletPath;
     if (wallet == null || path == null || path.isEmpty) {
-      throw StateError('Кошелек не открыт.');
+      throw StateError('База не открыта.');
     }
     wallet.saveRecentlyOpenedCardIds(recentlyOpenedItemIds);
     wallet.flushToDisk();
@@ -6283,7 +6389,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     hintController.dispose();
     if (passwordChanged == true && mounted) {
       setState(() {});
-      showSpbOperationMessage('Пароль кошелька изменен.');
+      showSpbOperationMessage('Пароль базы изменён.');
     }
   }
 
@@ -6296,7 +6402,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         );
         final localPath = copied?['localPath']?.toString();
         if (localPath == null || localPath.isEmpty) {
-          throw StateError('Не удалось открыть выбранную .swl базу.');
+          throw StateError('Не удалось открыть выбранную базу.');
         }
         final closed = await closeCurrentVaultForPasswordPrompt();
         if (!closed || !mounted) return;
@@ -6344,7 +6450,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       }
     } catch (error) {
       setState(
-        () => message = 'Не удалось открыть последнюю .swl базу: $error',
+        () => message = 'Не удалось открыть последнюю базу: $error',
       );
     }
   }
@@ -6433,7 +6539,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       if (mounted) {
         final failure =
             'Изменения сохранены в рабочей копии, но не записаны в исходную '
-            '.swl базу: $error';
+            'базу: $error';
         setState(() => message = failure);
         showSpbOperationMessage(failure);
       }
@@ -6461,7 +6567,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Future<void> createDatedArchiveCopy() async {
     if (spbWallet == null || spbWalletPath == null) {
-      setState(() => message = 'Сначала откройте .swl базу.');
+      setState(() => message = 'Сначала откройте базу.');
       return;
     }
     final saved = await writeBackSpbWallet();
@@ -6725,7 +6831,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       return SecretItem(
         id: card.id,
         templateId: card.templateId,
-        title: card.title.isEmpty ? '.swl карточка' : card.title,
+        title: card.title.isEmpty ? 'Карточка базы' : card.title,
         category: card.categoryPath,
         colorId: spbColorToPaletteId(card.cardColor),
         iconId: iconId,
@@ -7647,19 +7753,21 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                               key: const Key('spbCentralWorkspaceFocus'),
                               focusNode: spbCentralWorkspaceFocusNode,
                               onKeyEvent: handleSpbCentralWorkspaceKeyEvent,
-                              child: spbWorkspaceScrollbarTheme(
-                                iconLibraryOpen
-                                    ? buildSpbIconWorkspace(
-                                        showPersistentScrollbar: true,
-                                      )
-                                    : mobileTemplatesOpen
-                                        ? buildSpbTemplateWorkspace(
+                              child: KeyedSubtree(
+                                  key: iconPickerWorkspaceKey,
+                                  child: spbWorkspaceScrollbarTheme(
+                                    iconLibraryOpen
+                                        ? buildSpbIconWorkspace(
                                             showPersistentScrollbar: true,
                                           )
-                                        : buildSpbFolderGrid(
-                                            showPersistentScrollbar: true,
-                                          ),
-                              ),
+                                        : mobileTemplatesOpen
+                                            ? buildSpbTemplateWorkspace(
+                                                showPersistentScrollbar: true,
+                                              )
+                                            : buildSpbFolderGrid(
+                                                showPersistentScrollbar: true,
+                                              ),
+                                  )),
                             ),
                           ),
                           const VerticalDivider(
@@ -7739,6 +7847,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget buildSpbMobileShell() {
     final modified = selectedVaultModifiedText;
+    final cardsModeOpen = !mobileTemplatesOpen && !iconLibraryOpen;
     return Scaffold(
       backgroundColor: appWindowBackgroundColor,
       body: SafeArea(
@@ -7798,79 +7907,51 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               ),
             ),
             buildSpbSearchBar(mobile: true),
-            if (mobilePane == 0 && (mobileTemplatesOpen || iconLibraryOpen))
-              buildSpbModeButton(
-                key: const Key('spbMyCardsModeButton'),
-                label: 'Мои карточки',
-                iconFile: 'icon_wallets.png',
-                selected: false,
-                onTap: showSpbCardsMode,
-                opensRootCreationMenu: true,
-              ),
-            if (mobilePane == 0 && iconLibraryOpen)
-              buildSpbModeButton(
-                key: const Key('spbTemplatesModeButton'),
-                label: 'Шаблоны',
-                iconFile: 'icon_templates.png',
-                selected: false,
-                onTap: showSpbTemplatesMode,
-              ),
-            Expanded(
-              child: spbWorkspaceScrollbarTheme(
-                iconLibraryOpen
-                    ? switch (mobilePane) {
-                        1 => buildSpbIconWorkspace(
-                            showPersistentScrollbar: true,
-                          ),
-                        2 => buildSpbActionsPanel(),
-                        _ => buildSpbIconCatalogTree(),
-                      }
-                    : mobileTemplatesOpen
-                        ? switch (mobilePane) {
-                            1 => buildSpbTemplateWorkspace(
-                                showHeader: false,
-                                showPersistentScrollbar: true,
-                              ),
-                            2 => buildSpbActionsPanel(),
-                            _ => buildSpbTemplateTree(),
-                          }
-                        : switch (mobilePane) {
-                            1 => buildSpbFolderGrid(
-                                showPersistentScrollbar: true,
-                                allowItemDragging: false,
-                              ),
-                            2 => buildSpbActionsPanel(),
-                            _ => buildSpbTreeBody(showWalletRoot: false),
-                          },
-              ),
-            ),
             if (mobilePane == 0) ...[
-              const SizedBox(height: WorkspaceGeometry.sectionDivider),
-              if (!mobileTemplatesOpen && !iconLibraryOpen)
-                buildSpbModeButton(
-                  key: const Key('spbMyCardsModeButton'),
-                  label: 'Мои карточки',
-                  iconFile: 'icon_wallets.png',
-                  selected: true,
-                  onTap: showSpbCardsMode,
-                  opensRootCreationMenu: true,
+              buildSpbMyCardsModeButton(selected: cardsModeOpen),
+              if (cardsModeOpen)
+                Expanded(
+                  child: spbWorkspaceScrollbarTheme(
+                    buildSpbTreeBody(showWalletRoot: false),
+                  ),
                 ),
-              if (!iconLibraryOpen)
-                buildSpbModeButton(
-                  key: const Key('spbTemplatesModeButton'),
-                  label: 'Шаблоны',
-                  iconFile: 'icon_templates.png',
-                  selected: mobileTemplatesOpen,
-                  onTap: showSpbTemplatesMode,
+              buildSpbTemplatesModeButton(selected: mobileTemplatesOpen),
+              if (mobileTemplatesOpen)
+                Expanded(
+                  child: spbWorkspaceScrollbarTheme(buildSpbTemplateTree()),
                 ),
-              buildSpbModeButton(
-                key: const Key('spbIconsModeButton'),
-                label: 'Иконки',
-                icon: Icons.collections_outlined,
-                selected: iconLibraryOpen,
-                onTap: showSpbIconsMode,
+              buildSpbIconsModeButton(selected: iconLibraryOpen),
+              if (iconLibraryOpen)
+                Expanded(
+                  child: spbWorkspaceScrollbarTheme(buildSpbIconCatalogTree()),
+                ),
+            ] else
+              Expanded(
+                child: spbWorkspaceScrollbarTheme(
+                  iconLibraryOpen
+                      ? switch (mobilePane) {
+                          1 => buildSpbIconWorkspace(
+                              showPersistentScrollbar: true,
+                            ),
+                          _ => buildSpbActionsPanel(),
+                        }
+                      : mobileTemplatesOpen
+                          ? switch (mobilePane) {
+                              1 => buildSpbTemplateWorkspace(
+                                  showHeader: false,
+                                  showPersistentScrollbar: true,
+                                ),
+                              _ => buildSpbActionsPanel(),
+                            }
+                          : switch (mobilePane) {
+                              1 => buildSpbFolderGrid(
+                                  showPersistentScrollbar: true,
+                                  allowItemDragging: false,
+                                ),
+                              _ => buildSpbActionsPanel(),
+                            },
+                ),
               ),
-            ],
             buildSpbMobileArrows(
               allowBack: mobilePane > 0,
               allowForward: mobilePane < 2,
@@ -7997,6 +8078,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget buildSpbNavigator() {
     final modified = selectedVaultModifiedText;
+    final cardsModeOpen = !mobileTemplatesOpen && !iconLibraryOpen;
     return Material(
       color: Colors.white,
       child: Column(
@@ -8034,23 +8116,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               ),
             ),
           ),
-          if (mobileTemplatesOpen || iconLibraryOpen)
-            buildSpbModeButton(
-              key: const Key('spbMyCardsModeButton'),
-              label: 'Мои карточки',
-              iconFile: 'icon_wallets.png',
-              selected: false,
-              onTap: showSpbCardsMode,
-              opensRootCreationMenu: true,
-            ),
-          if (iconLibraryOpen)
-            buildSpbModeButton(
-              key: const Key('spbTemplatesModeButton'),
-              label: 'Шаблоны',
-              iconFile: 'icon_templates.png',
-              selected: false,
-              onTap: showSpbTemplatesMode,
-            ),
+          buildSpbMyCardsModeButton(selected: cardsModeOpen),
+          if (!cardsModeOpen)
+            buildSpbTemplatesModeButton(selected: mobileTemplatesOpen),
+          if (iconLibraryOpen) buildSpbIconsModeButton(selected: true),
           Expanded(
             child: Scrollbar(
               key: const Key('spbNavigatorScrollbar'),
@@ -8075,33 +8144,59 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         ),
             ),
           ),
-          const SizedBox(height: WorkspaceGeometry.sectionDivider),
-          if (!mobileTemplatesOpen && !iconLibraryOpen)
-            buildSpbModeButton(
-              key: const Key('spbMyCardsModeButton'),
-              label: 'Мои карточки',
-              iconFile: 'icon_wallets.png',
-              selected: true,
-              onTap: showSpbCardsMode,
-              opensRootCreationMenu: true,
-            ),
-          if (!iconLibraryOpen)
-            buildSpbModeButton(
-              key: const Key('spbTemplatesModeButton'),
-              label: 'Шаблоны',
-              iconFile: 'icon_templates.png',
-              selected: mobileTemplatesOpen,
-              onTap: showSpbTemplatesMode,
-            ),
-          buildSpbModeButton(
-            key: const Key('spbIconsModeButton'),
-            label: 'Иконки',
-            icon: Icons.collections_outlined,
-            selected: iconLibraryOpen,
-            onTap: showSpbIconsMode,
-          ),
+          if (cardsModeOpen) ...[
+            buildSpbTemplatesModeButton(selected: false),
+            buildSpbIconsModeButton(selected: false),
+          ] else if (mobileTemplatesOpen)
+            buildSpbIconsModeButton(selected: false),
         ],
       ),
+    );
+  }
+
+  Widget buildSpbMyCardsModeButton({required bool selected}) =>
+      buildSpbModeButton(
+        key: const Key('spbMyCardsModeButton'),
+        label: 'Мои карточки',
+        iconFile: 'icon_wallets.png',
+        selected: selected,
+        onTap: showSpbCardsMode,
+        opensRootCreationMenu: true,
+      );
+
+  Widget buildSpbTemplatesModeButton({required bool selected}) =>
+      buildSpbModeButton(
+        key: const Key('spbTemplatesModeButton'),
+        label: 'Шаблоны',
+        iconFile: 'icon_templates.png',
+        selected: selected,
+        onTap: showSpbTemplatesMode,
+        opensTemplateCreationMenu: true,
+      );
+
+  Widget buildSpbIconsModeButton({required bool selected}) =>
+      buildSpbModeButton(
+        key: const Key('spbIconsModeButton'),
+        label: 'Иконки',
+        iconWidget: buildIconsModeImage(),
+        selected: selected,
+        onTap: showSpbIconsMode,
+      );
+
+  Widget buildIconsModeImage() {
+    return FutureBuilder<Uint8List>(
+      future: loadIconsModeImage(),
+      builder: (context, snapshot) {
+        final bytes = snapshot.data;
+        if (bytes == null) {
+          return const SizedBox.square(
+              dimension: WorkspaceGeometry.sectionIcon);
+        }
+        return Image.memory(bytes,
+            width: WorkspaceGeometry.sectionIcon,
+            height: WorkspaceGeometry.sectionIcon,
+            fit: BoxFit.contain);
+      },
     );
   }
 
@@ -8110,9 +8205,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required String label,
     String? iconFile,
     IconData? icon,
+    Widget? iconWidget,
     required bool selected,
     required VoidCallback onTap,
     bool opensRootCreationMenu = false,
+    bool opensTemplateCreationMenu = false,
   }) {
     final scale = defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.windows
@@ -8126,13 +8223,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       ),
       child: Row(
         children: [
-          iconFile == null
-              ? Icon(
-                  icon ?? Icons.folder_outlined,
-                  size: WorkspaceGeometry.sectionIcon,
-                  color: const Color(0xff33434f),
-                )
-              : spbResourceIcon(iconFile, WorkspaceGeometry.sectionIcon),
+          iconWidget ??
+              (iconFile == null
+                  ? Icon(
+                      icon ?? Icons.folder_outlined,
+                      size: WorkspaceGeometry.sectionIcon,
+                      color: const Color(0xff33434f),
+                    )
+                  : spbResourceIcon(iconFile, WorkspaceGeometry.sectionIcon)),
           const SizedBox(width: 5),
           Expanded(
             child: Text(
@@ -8153,13 +8251,26 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ? spbRootCreationMenuTarget(child: button)
           : InkWell(onTap: onTap, child: button),
     );
+    final menuSurface = opensTemplateCreationMenu
+        ? spbTemplateCreationMenuTarget(child: surface)
+        : surface;
     return KeyedSubtree(
       key: key,
       child: opensRootCreationMenu
           ? buildSpbCategoryDropTarget(categoryPath: '', child: surface)
-          : surface,
+          : menuSurface,
     );
   }
+
+  Widget spbTemplateCreationMenuTarget({required Widget child}) =>
+      GestureDetector(
+        behavior: HitTestBehavior.translucent,
+        onSecondaryTapDown: (details) =>
+            showSpbTemplateImportMenu(details.globalPosition),
+        onLongPressStart: (details) =>
+            showSpbTemplateImportMenu(details.globalPosition),
+        child: child,
+      );
 
   Widget spbRootCreationMenuTarget({Key? key, required Widget child}) {
     Offset? primaryTapPosition;
@@ -8308,15 +8419,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
     if (iconLibraryOpen) {
       for (final kind in IconCatalogKind.values) {
-        measure(kind.label, 0,
-            trailing: 40,
-            style: WorkspaceGeometry.bodyStyle.copyWith(
-              fontSize: WorkspaceGeometry.fontSize *
-                  (defaultTargetPlatform == TargetPlatform.android ||
-                          defaultTargetPlatform == TargetPlatform.windows
-                      ? 1.15
-                      : 1),
-            ));
+        measure(kind.label, 0, trailing: 40, style: spbTreeFolderStyle);
       }
     } else if (mobileTemplatesOpen) {
       for (final template in templates) {
@@ -8498,23 +8601,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final desktopFolderLayout =
         defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux;
-    final folderRowHeight = max(spbEntryRowHeight, spbEntryTreeIconSize);
+    final folderRowHeight = spbTreeFolderRowHeight;
     final treeIconSize = spbEntryTreeIconSize;
     final expansionSize = androidLayout
         ? WorkspaceGeometry.androidListExpansionSize
         : desktopFolderLayout
             ? WorkspaceGeometry.desktopFolderExpansionSize
             : WorkspaceGeometry.expansionSize;
-    final folderStyle = androidLayout
-        ? WorkspaceGeometry.androidTreeFolderStyle
-        : desktopFolderLayout
-            ? spbTreeDesktopFolderStyle
-            : WorkspaceGeometry.folderStyle;
-    final folderStrut = androidLayout
-        ? WorkspaceGeometry.androidTreeFolderStrut
-        : desktopFolderLayout
-            ? spbTreeDesktopFolderStrut
-            : WorkspaceGeometry.bodyStrut;
+    final folderStyle = spbTreeFolderStyle;
+    final folderStrut = spbTreeFolderStrut;
     final itemStyle = spbEntryTreeStyle;
     final itemStrut = spbEntryTreeStrut;
     final result = <Widget>[];
@@ -8698,6 +8793,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               fontSize: WorkspaceGeometry.desktopFolderStyle.fontSize! * 1.15)
           : WorkspaceGeometry.desktopFolderStyle;
 
+  double get spbTreeFolderRowHeight =>
+      max(spbEntryRowHeight, spbEntryTreeIconSize);
+
+  TextStyle get spbTreeFolderStyle => spbNarrowAndroid || spbWideAndroid
+      ? WorkspaceGeometry.androidTreeFolderStyle
+      : spbDesktopLayout
+          ? spbTreeDesktopFolderStyle
+          : WorkspaceGeometry.folderStyle;
+
+  StrutStyle get spbTreeFolderStrut => spbNarrowAndroid || spbWideAndroid
+      ? WorkspaceGeometry.androidTreeFolderStrut
+      : spbDesktopLayout
+          ? spbTreeDesktopFolderStrut
+          : WorkspaceGeometry.bodyStrut;
   StrutStyle get spbTreeDesktopFolderStrut => StrutStyle(
         fontSize: spbTreeDesktopFolderStyle.fontSize,
         height: WorkspaceGeometry.desktopFolderStrut.height,
@@ -9055,10 +9164,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool compactRows = false,
     ScrollController? scrollController,
   }) {
-    final scale = defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.windows
-        ? 1.15
-        : 1.0;
+    final iconSize = spbEntryTreeIconSize * 1.2;
     final tree = ListView(
       controller: scrollController,
       padding: const EdgeInsets.only(top: WorkspaceGeometry.treeTop, bottom: 8),
@@ -9076,45 +9182,162 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   : selectedIconCatalog == kind
                       ? const Color(0xffdbeaf5)
                       : Colors.transparent,
-              child: ListTile(
-                dense: true,
-                minTileHeight: WorkspaceGeometry.rowHeight,
-                minLeadingWidth: WorkspaceGeometry.smallIcon * scale,
-                horizontalTitleGap: 5,
-                minVerticalPadding: 0,
-                contentPadding: const EdgeInsets.only(left: 25),
-                visualDensity: VisualDensity.standard,
-                leading: Icon(kind.icon,
-                    size: WorkspaceGeometry.smallIcon * scale,
-                    color: const Color(0xff33434f)),
-                title: Text(
-                  kind.label,
-                  style: WorkspaceGeometry.bodyStyle.copyWith(
-                    fontSize: WorkspaceGeometry.fontSize * scale,
-                  ),
-                  strutStyle: StrutStyle(
-                    fontSize: WorkspaceGeometry.fontSize * scale,
-                    height: WorkspaceGeometry.bodyStrut.height,
-                    forceStrutHeight: true,
-                  ),
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.visible,
-                ),
-                trailing: iconLibraryLoading
-                    ? const SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Text('${managedIconIdsFor(kind).length}',
-                        style: WorkspaceGeometry.bodyStyle),
-                onTap: () => selectManagedIconCatalog(kind),
-              ),
+              child: GestureDetector(
+                  onSecondaryTapDown: kind.isCustom
+                      ? (details) =>
+                          showIconFolderMenu(kind, details.globalPosition)
+                      : null,
+                  onLongPressStart: kind.isCustom
+                      ? (details) =>
+                          showIconFolderMenu(kind, details.globalPosition)
+                      : null,
+                  child: ListTile(
+                    dense: true,
+                    minTileHeight: spbTreeFolderRowHeight * 1.25 * 1.2,
+                    minLeadingWidth: iconSize,
+                    horizontalTitleGap: 5,
+                    contentPadding: const EdgeInsets.only(left: 25),
+                    visualDensity: VisualDensity.standard,
+                    leading: SizedBox(
+                      width: iconSize,
+                      height: spbTreeFolderRowHeight * 1.25 * 1.2,
+                      child: Center(
+                          child: buildSpbIconCatalogIcon(kind, iconSize)),
+                    ),
+                    title: Text(
+                      kind.label,
+                      style: spbTreeFolderStyle,
+                      strutStyle: spbTreeFolderStrut,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.visible,
+                    ),
+                    trailing: iconLibraryLoading
+                        ? const SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Text('${managedIconIdsFor(kind).length}',
+                            style: WorkspaceGeometry.bodyStyle),
+                    onTap: () => selectManagedIconCatalog(kind),
+                  )),
             ),
           ),
       ],
     );
     return buildSpbTreeViewport(tree);
+  }
+
+  Widget buildSpbIconCatalogIcon(IconCatalogKind kind, double size) {
+    switch (kind) {
+      case IconCatalogKind.spb:
+        return spbSizedDataIcon(
+          'spb://apk_icons/res/drawable-hdpi/icon_path_wallet.png',
+          size,
+        );
+      case IconCatalogKind.pictograms:
+        return managedIconWidget('third-party://NewIcons/Icons0401.png', size);
+      case IconCatalogKind.brands:
+        return managedIconWidget('brand://BrendLogo-3D-inner/avg.png', size);
+      case IconCatalogKind.thirdParty:
+        return managedIconWidget('third-party://NewIcons/Icons0322.png', size);
+      default:
+        return templateIconWidget(kind.iconId,
+            size: size,
+            color: templatePictogramColor(kind.colorId),
+            scaleOriginalToFit: true);
+    }
+  }
+
+  Future<void> editIconFolder([IconCatalogKind? folder]) async {
+    await loadManagedIconLibrary();
+    if (!mounted) return;
+    final result =
+        await showDialog<({String name, String iconId, String colorId})>(
+      context: context,
+      builder: (_) => CategoryEditorDialog(
+        editing: folder != null,
+        initialName: folder?.label ?? '',
+        initialIconId: folder?.iconId ?? 'folder',
+        initialColorId: folder?.colorId ?? 'template_white',
+      ),
+    );
+    if (result == null || !mounted) return;
+    if (result.name == '__delete__') {
+      if (folder != null) await deleteIconFolder(folder);
+      return;
+    }
+    final updated = IconCatalogKind(
+      folder?.storageKey ?? 'custom-${SpbWalletDatabase.makeId()}',
+      result.name,
+      iconId: result.iconId,
+      colorId: result.colorId,
+    );
+    final previous = [...customIconCatalogs];
+    customIconCatalogs = [
+      for (final item in customIconCatalogs)
+        if (item != folder) item,
+      updated,
+    ];
+    try {
+      await saveManagedIconLibraryState();
+      if (mounted) setState(() => selectedIconCatalog = updated);
+    } catch (error) {
+      customIconCatalogs = previous;
+      if (mounted) {
+        showSpbOperationMessage('Не удалось сохранить папку: $error');
+      }
+    }
+  }
+
+  Future<void> deleteIconFolder(IconCatalogKind folder) async {
+    final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+                title: Text('Удалить папку «${folder.label}»?'),
+                content: const Text(
+                    'Иконки сохранятся и вернутся в исходные разделы.'),
+                actions: [
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      child: const Text('Отмена')),
+                  TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      child: const Text('Удалить')),
+                ]));
+    if (confirmed != true || !mounted) return;
+    final folders = [...customIconCatalogs];
+    final locations = {...managedIconLocations};
+    customIconCatalogs.removeWhere((item) => item == folder);
+    managedIconLocations.removeWhere((_, target) => target == folder);
+    try {
+      await saveManagedIconLibraryState();
+      if (mounted) {
+        setState(() {
+          selectedIconCatalog = IconCatalogKind.thirdParty;
+        });
+      }
+    } catch (error) {
+      customIconCatalogs = folders;
+      managedIconLocations = locations;
+      if (mounted) showSpbOperationMessage('Не удалось удалить папку: $error');
+    }
+  }
+
+  Future<void> showIconFolderMenu(
+      IconCatalogKind folder, Offset position) async {
+    final action = await showMenu<String>(
+        context: context,
+        position: RelativeRect.fromSize(
+            Rect.fromLTWH(position.dx, position.dy, 0, 0),
+            MediaQuery.sizeOf(context)),
+        items: const [
+          PopupMenuItem(value: 'edit', child: Text('Редактировать папку')),
+          PopupMenuItem(value: 'delete', child: Text('Удалить папку')),
+        ]);
+    if (!mounted) return;
+    if (action == 'edit') await editIconFolder(folder);
+    if (action == 'delete') await deleteIconFolder(folder);
   }
 
   Future<void> uploadManagedIcon() async {
@@ -9385,45 +9608,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return iconId.split('/').last;
   }
 
-  Widget managedIconPickerFrame(
-    String iconId, {
-    required bool selected,
-    Key? key,
-  }) {
-    final compact = managedIconUsesCompactPickerFrame;
-    final theme = Theme.of(context);
-    final baseColor = selectedIconCatalog == IconCatalogKind.brands ||
-            selectedIconCatalog == IconCatalogKind.thirdParty
-        ? Colors.white
-        : theme.colorScheme.surface;
-    final frame = DecoratedBox(
-      key: key,
-      decoration: BoxDecoration(
-        color: selected ? theme.colorScheme.primaryContainer : baseColor,
-        border: Border.all(
-          color: selected ? theme.colorScheme.primary : theme.dividerColor,
-        ),
-        borderRadius: BorderRadius.circular(compact ? 8 : 7),
-      ),
-      child: compact
-          ? Center(
-              child: Transform.scale(
-                scale: managedIconPickerImageScale,
-                child: SizedBox.square(
-                  key: ValueKey('managedIconContent-$iconId'),
-                  dimension: managedIconPickerContentSize,
-                  child:
-                      managedIconWidget(iconId, managedIconPickerContentSize),
-                ),
-              ),
-            )
-          : Padding(
-              padding: const EdgeInsets.all(8),
-              child: managedIconWidget(iconId, 56),
-            ),
-    );
-    return frame;
-  }
+  Widget managedIconPickerFrame(String iconId,
+          {required bool selected, Key? key}) =>
+      managedCatalogIconFrame(context, iconId,
+          selected: selected,
+          key: key,
+          contentKey: ValueKey('managedIconContent-$iconId'),
+          baseColor: selectedIconCatalog == IconCatalogKind.brands ||
+                  selectedIconCatalog == IconCatalogKind.thirdParty
+              ? Colors.white
+              : Theme.of(context).colorScheme.surface);
 
   Widget buildManagedIconPickerEntry(String iconId) {
     final radius = BorderRadius.circular(
@@ -9514,41 +9708,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (showHeader)
-          spbSectionHeader(
-            selectedIconCatalog.label,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  key: const Key('pasteManagedIconButton'),
-                  tooltip: 'Вставить иконку из буфера',
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                    width: WorkspaceGeometry.toolbarButtonWidth,
-                    height: WorkspaceGeometry.toolbarButtonHeight,
-                  ),
-                  icon: const Icon(Icons.content_paste,
-                      size: WorkspaceGeometry.smallIcon),
-                  onPressed: pasteManagedIcon,
-                ),
-                IconButton(
-                  key: const Key('uploadManagedIconButton'),
-                  tooltip: 'Загрузить иконку',
-                  visualDensity: VisualDensity.compact,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints.tightFor(
-                    width: WorkspaceGeometry.toolbarButtonWidth,
-                    height: WorkspaceGeometry.toolbarButtonHeight,
-                  ),
-                  icon: const Icon(Icons.upload_file,
-                      size: WorkspaceGeometry.smallIcon),
-                  onPressed: uploadManagedIcon,
-                ),
-              ],
-            ),
-          ),
+        if (showHeader) spbSectionHeader(selectedIconCatalog.label),
         Expanded(
           child: iconLibraryLoading
               ? const Center(child: CircularProgressIndicator())
@@ -9607,6 +9767,37 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                               ),
                             ),
                     ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              buildSpbSearchButton(
+                key: const Key('createIconFolderButton'),
+                icon: Icons.create_new_folder_outlined,
+                tooltip: 'Создать папку иконок',
+                gradient: const [Color(0xff5bc96d), Color(0xff08772f)],
+                onTap: () => editIconFolder(),
+              ),
+              const Spacer(),
+              buildSpbSearchButton(
+                key: const Key('uploadManagedIconButton'),
+                icon: Icons.folder_open,
+                tooltip: 'Загрузить иконку',
+                gradient: const [Color(0xffffdc58), Color(0xffc58a00)],
+                onTap: uploadManagedIcon,
+              ),
+              const SizedBox(width: 4),
+              buildSpbSearchButton(
+                key: const Key('pasteManagedIconButton'),
+                icon: Icons.add,
+                tooltip: 'Вставить иконку из буфера',
+                gradient: const [Color(0xff42bff5), Color(0xff006fc4)],
+                onTap: pasteManagedIcon,
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -9698,10 +9889,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       ),
       items: [
         if (!multiple)
-          const PopupMenuItem(
-            key: Key('createTemplateFromIconContextAction'),
+          PopupMenuItem(
+            key: const Key('createTemplateFromIconContextAction'),
             value: 'create',
-            child: Text('Создать'),
+            child: Row(
+              children: [
+                spbResourceIcon('icon_add_card.png', 24),
+                const SizedBox(width: 9),
+                const Flexible(child: Text('Создать шаблон')),
+              ],
+            ),
           ),
         if (!multiple)
           const PopupMenuItem(
@@ -9731,7 +9928,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           const PopupMenuItem(
             key: Key('importTemplateFromIconContextAction'),
             value: 'import',
-            child: Text('Импортировать'),
+            child: Row(
+              children: [
+                Icon(Icons.file_open_outlined, size: 24),
+                SizedBox(width: 9),
+                Flexible(child: Text('Импортировать шаблон')),
+              ],
+            ),
           ),
         PopupMenuItem(
           key: const Key('deleteTemplateContextAction'),
@@ -9959,16 +10162,28 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
-      items: const [
+      items: [
         PopupMenuItem(
-          key: Key('createTemplateContextAction'),
+          key: const Key('createTemplateContextAction'),
           value: 'create',
-          child: Text('Создать'),
+          child: Row(
+            children: [
+              spbResourceIcon('icon_add_card.png', 24),
+              const SizedBox(width: 9),
+              const Flexible(child: Text('Создать шаблон')),
+            ],
+          ),
         ),
-        PopupMenuItem(
+        const PopupMenuItem(
           key: Key('importTemplateContextAction'),
           value: 'import',
-          child: Text('Импортировать'),
+          child: Row(
+            children: [
+              Icon(Icons.file_open_outlined, size: 24),
+              SizedBox(width: 9),
+              Flexible(child: Text('Импортировать шаблон')),
+            ],
+          ),
         ),
       ],
     );
@@ -10199,7 +10414,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final wallet = spbWallet;
     if (wallet == null) {
       showTemplateActionMessage(
-        'Откройте или создайте .swl базу перед удалением шаблонов.',
+        'Откройте или создайте базу перед удалением шаблонов.',
       );
       return false;
     }
@@ -11439,7 +11654,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       context: context,
       builder: (dialogContext) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-        title: const Text('Экспорт в SWL'),
+        title: const Text('Экспорт в базу'),
         content: TextFormField(
           autofocus: true,
           obscureText: true,
@@ -11481,7 +11696,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Введите пароль SWL'),
+        title: const Text('Введите пароль базы'),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -11763,7 +11978,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       );
       final data = await temporary.readAsBytes();
       final path = await FilePicker.platform.saveFile(
-        dialogTitle: 'Экспорт в SWL',
+        dialogTitle: 'Экспорт в базу',
         fileName: safeSpbFileName(suggestedName),
         type: FileType.custom,
         allowedExtensions: const ['swl'],
@@ -11777,7 +11992,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         await writeBytesAtomically(File(outputPath), data);
       }
     } catch (error) {
-      showSpbOperationMessage('Не удалось экспортировать SWL: $error');
+      showSpbOperationMessage('Не удалось экспортировать базу: $error');
     } finally {
       if (temporary != null && temporary.existsSync()) {
         temporary.deleteSync();
@@ -11870,7 +12085,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     if (pickerBytes != null) return pickerBytes;
     final selectedPath = selected.path;
     if (selectedPath == null || selectedPath.trim().isEmpty) {
-      throw const FormatException('Не удалось прочитать SWL.');
+      throw const FormatException('Не удалось прочитать базу.');
     }
     Object? lastError;
     const retryDelays = <Duration>[
@@ -11898,7 +12113,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       }
     }
     throw FormatException(
-      'Не удалось прочитать SWL по пути «$selectedPath»'
+      'Не удалось прочитать базу по пути «$selectedPath»'
       '${lastError == null ? '.' : ': $lastError'}',
     );
   }
@@ -12270,7 +12485,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         } catch (_) {}
       }
       discardSessionUndo(undoEntry);
-      showSpbOperationMessage('Не удалось импортировать SWL: $error');
+      showSpbOperationMessage('Не удалось импортировать базу: $error');
     } finally {
       source?.close(flush: false);
       if (temporary != null && temporary.existsSync()) {
@@ -12417,12 +12632,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           cacheWidth: 128,
           fit: BoxFit.contain,
         ),
-        'Создать кошелёк',
+        'Создать базу',
         createNewVaultFromLogin,
       ),
       (
         spbResourceIcon('icon_import.png', 40),
-        'Открыть кошелёк',
+        'Открыть базу',
         pickSpbWalletFile,
       ),
       (
@@ -12753,16 +12968,28 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
-      items: const [
+      items: [
         PopupMenuItem(
-          key: Key('createTemplateRightContextAction'),
+          key: const Key('createTemplateRightContextAction'),
           value: 'create',
-          child: Text('Создать'),
+          child: Row(
+            children: [
+              spbResourceIcon('icon_add_card.png', 24),
+              const SizedBox(width: 9),
+              const Flexible(child: Text('Создать шаблон')),
+            ],
+          ),
         ),
-        PopupMenuItem(
+        const PopupMenuItem(
           key: Key('importTemplateRightContextAction'),
           value: 'import',
-          child: Text('Импортировать'),
+          child: Row(
+            children: [
+              Icon(Icons.file_open_outlined, size: 24),
+              SizedBox(width: 9),
+              Flexible(child: Text('Импортировать шаблон')),
+            ],
+          ),
         ),
       ],
     );
@@ -13511,6 +13738,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required String label,
     required VoidCallback onPressed,
     Widget? child,
+    String? tooltip,
+    bool selected = false,
     Color top = const Color(0xff2483bc),
     Color bottom = const Color(0xff07436c),
     double fontSize = 34,
@@ -13519,53 +13748,69 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     double minimumHeight = 48,
     Key? key,
   }) {
-    return Semantics(
-      button: true,
-      label: label,
-      child: SizedBox(
-        height: max(height, minimumHeight),
-        child: Material(
-          key: key,
-          color: Colors.transparent,
-          child: Ink(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [top, bottom],
-              ),
-              border: Border.all(color: const Color(0xff5c6870)),
-              borderRadius: BorderRadius.circular(3),
-              boxShadow: const [
-                BoxShadow(
-                  color: Color(0x33000000),
-                  offset: Offset(0, 2),
-                  blurRadius: 2,
-                ),
-              ],
+    final button = SizedBox(
+      height: max(height, minimumHeight),
+      child: Material(
+        key: key,
+        color: Colors.transparent,
+        child: Ink(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [top, bottom],
             ),
-            child: InkWell(
-              onTap: onPressed,
-              borderRadius: BorderRadius.circular(3),
-              child: Center(
-                child: child ??
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: fontSize,
-                        height: 1,
-                        fontWeight: fontWeight,
-                        shadows: const [
-                          Shadow(color: Colors.black45, offset: Offset(1, 1)),
-                        ],
-                      ),
-                    ),
+            border: Border.all(
+              color:
+                  selected ? const Color(0xffffdc58) : const Color(0xff5c6870),
+              width: selected ? 2 : 1,
+            ),
+            borderRadius: BorderRadius.circular(3),
+            boxShadow: [
+              const BoxShadow(
+                color: Color(0x33000000),
+                offset: Offset(0, 2),
+                blurRadius: 2,
               ),
+              if (selected)
+                const BoxShadow(
+                  color: Color(0x99ffdc58),
+                  blurRadius: 5,
+                ),
+            ],
+          ),
+          child: InkWell(
+            onTap: onPressed,
+            borderRadius: BorderRadius.circular(3),
+            child: Center(
+              child: child ??
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: fontSize,
+                      height: 1,
+                      fontWeight: fontWeight,
+                      shadows: const [
+                        Shadow(color: Colors.black45, offset: Offset(1, 1)),
+                      ],
+                    ),
+                  ),
             ),
           ),
         ),
       ),
+    );
+    return Semantics(
+      button: true,
+      label: tooltip ?? label,
+      child: tooltip == null
+          ? button
+          : Tooltip(
+              message: tooltip,
+              excludeFromSemantics: true,
+              child: button,
+            ),
     );
   }
 
@@ -13644,7 +13889,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               symbolKey(symbol),
             passwordKey(
               key: const Key('keypadBackspace'),
-              label: '<-',
+              label: '⌫',
+              tooltip: 'Удалить символ',
               height: 42,
               minimumHeight: 42,
               fontSize: 22,
@@ -13711,6 +13957,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             passwordKey(
               key: const Key('keypadClear'),
               label: 'CLR',
+              tooltip: 'Очистить',
               height: 42,
               minimumHeight: 42,
               fontSize: 17,
@@ -13722,7 +13969,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               letterKey(letter),
             passwordKey(
               key: const Key('keypadBackspace'),
-              label: '<-',
+              label: '⌫',
+              tooltip: 'Удалить символ',
               height: 42,
               minimumHeight: 42,
               fontSize: 22,
@@ -13768,6 +14016,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           passwordKey(
             key: const Key('keypadClear'),
             label: 'CLR',
+            tooltip: 'Очистить',
             fontSize: 29,
             top: redTop,
             bottom: redBottom,
@@ -13780,7 +14029,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ),
           passwordKey(
             key: const Key('keypadBackspace'),
-            label: '<-',
+            label: '⌫',
+            tooltip: 'Удалить символ',
             fontSize: 31,
             top: redTop,
             bottom: redBottom,
@@ -13956,6 +14206,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                           dimension: 48,
                                           child: passwordKey(
                                             label: 'Подсказка пароля',
+                                            tooltip: 'Подсказка пароля',
                                             height: 48,
                                             top: const Color(0xffffdc58),
                                             bottom: const Color(0xffc58a00),
@@ -13996,6 +14247,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   passwordKey(
                                     key: const Key('keypadModeUppercase'),
                                     label: 'ABC',
+                                    tooltip: 'Заглавные',
+                                    selected: virtualKeyboardMode ==
+                                        VirtualKeyboardMode.uppercase,
                                     fontSize: 23,
                                     top: modeTop,
                                     bottom: modeBottom,
@@ -14006,6 +14260,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   passwordKey(
                                     key: const Key('keypadModeLowercase'),
                                     label: 'abc',
+                                    tooltip: 'Строчные',
+                                    selected: virtualKeyboardMode ==
+                                        VirtualKeyboardMode.lowercase,
                                     fontSize: 23,
                                     top: modeTop,
                                     bottom: modeBottom,
@@ -14016,6 +14273,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   passwordKey(
                                     key: const Key('keypadModeNumeric'),
                                     label: '123',
+                                    tooltip: 'Цифры',
+                                    selected: virtualKeyboardMode ==
+                                        VirtualKeyboardMode.numeric,
                                     fontSize: 23,
                                     top: modeTop,
                                     bottom: modeBottom,
@@ -14026,6 +14286,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   passwordKey(
                                     key: const Key('keypadModeSymbols'),
                                     label: '#!?',
+                                    tooltip: 'Символы',
+                                    selected: virtualKeyboardMode ==
+                                        VirtualKeyboardMode.symbols,
                                     fontSize: 23,
                                     top: modeTop,
                                     bottom: modeBottom,
@@ -14047,6 +14310,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                         child: passwordKey(
                                           key: const Key('fileMenu'),
                                           label: 'Открыть файл',
+                                          tooltip: 'Открыть другую базу…',
                                           child: const Icon(
                                             Icons.folder_outlined,
                                             color: Colors.white,
@@ -14065,6 +14329,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                       child: passwordKey(
                                         key: const Key('createVault'),
                                         label: '+',
+                                        tooltip: 'Создать новую базу',
                                         height: 40,
                                         fontSize: 24,
                                         fontWeight: FontWeight.bold,
@@ -14167,7 +14432,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool includeAllCategories = true,
     Iterable<String> additionalPaths = const [],
   }) {
-    final root = CategoryTreeNode('Мой кошелёк');
+    final root = CategoryTreeNode('Моя база');
     final paths = <String>{...additionalPaths};
     if (includeAllCategories) {
       paths.addAll(categoryPaths);
@@ -14245,8 +14510,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final wallet = spbWallet;
     if (wallet == null) {
       setState(
-        () =>
-            message = 'Откройте или создайте .swl базу перед изменением папок.',
+        () => message = 'Откройте или создайте базу перед изменением папок.',
       );
       return;
     }
@@ -14259,7 +14523,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         editing: editing,
         initialName: folder?.name ?? '',
         initialIconId: folder?.iconId ?? defaultIconForCategoryPath(parentPath),
-        initialColorId: folder?.colorId ?? 'template_gray',
+        initialColorId: folder?.colorId ?? 'template_white',
       ),
     );
     if (saved == null) return;
@@ -14470,8 +14734,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     });
     if (spbWallet == null) {
       setState(
-        () => message =
-            'Откройте или создайте .swl базу перед изменением карточек.',
+        () => message = 'Откройте или создайте базу перед изменением карточек.',
       );
     }
   }
@@ -14675,8 +14938,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final wallet = spbWallet;
     if (wallet == null) {
       setState(
-        () => message =
-            'Откройте или создайте .swl базу перед удалением карточек.',
+        () => message = 'Откройте или создайте базу перед удалением карточек.',
       );
       return false;
     }
@@ -14767,8 +15029,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       return saveSpbItem(saved);
     }
     setState(
-      () => message =
-          'Откройте или создайте .swl базу перед сохранением карточек.',
+      () => message = 'Откройте или создайте базу перед сохранением карточек.',
     );
     return null;
   }
@@ -14971,7 +15232,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       return cardId;
     } catch (error) {
       discardSessionUndo(undoEntry);
-      setState(() => message = 'Не удалось сохранить .swl базу: $error');
+      setState(() => message = 'Не удалось сохранить базу: $error');
       return null;
     }
   }
@@ -15157,14 +15418,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       } catch (error) {
         discardSessionUndo(undoEntry);
         setState(
-          () => message = 'Не удалось сохранить шаблон .swl базы: $error',
+          () => message = 'Не удалось сохранить шаблон базы: $error',
         );
         return false;
       }
     }
     setState(
-      () => message =
-          'Откройте или создайте .swl базу перед сохранением шаблонов.',
+      () => message = 'Откройте или создайте базу перед сохранением шаблонов.',
     );
     return false;
   }
@@ -15207,7 +15467,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Future<void> runSync() async {
     if (spbWallet == null) {
-      setState(() => message = 'Запись доступна после открытия .swl базы.');
+      setState(() => message = 'Запись доступна после открытия базы.');
       return;
     }
     if (!vaultDirty) {
@@ -15229,7 +15489,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Future<void> saveVaultThroughExplorer() async {
     final sourcePath = spbWalletPath;
     if (spbWallet == null || sourcePath == null || sourcePath.isEmpty) {
-      setState(() => message = 'Запись доступна после открытия .swl базы.');
+      setState(() => message = 'Запись доступна после открытия базы.');
       return;
     }
     final written = await writeBackSpbWallet();
@@ -16386,7 +16646,7 @@ class CategoryEditorDialog extends StatefulWidget {
     required this.editing,
     required this.initialName,
     required this.initialIconId,
-    this.initialColorId = 'template_gray',
+    this.initialColorId = 'template_white',
     super.key,
   });
 
@@ -16470,23 +16730,11 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                       bottom: BorderSide(color: Color(0xff7f8d98)),
                     ),
                   ),
-                  child: TextField(
-                    key: const Key('categoryNameField'),
-                    controller: name,
-                    autofocus: true,
-                    onChanged: (_) {
-                      setState(() => invalidName = false);
-                    },
-                    onSubmitted: (_) => save(),
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    widget.editing ? 'Редактировать папку' : 'Новая папка',
+                    key: const Key('categoryWindowTitle'),
                     style: const TextStyle(fontSize: 18),
-                    decoration: InputDecoration(
-                      hintText: widget.editing
-                          ? 'Название папки'
-                          : 'Введите имя папки',
-                      border: InputBorder.none,
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 12),
-                    ),
                   ),
                 ),
                 Expanded(
@@ -16502,115 +16750,60 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Row(
-                              crossAxisAlignment: CrossAxisAlignment.center,
-                              children: [
-                                buildCategoryBoundIcon(),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
-                                    children: [
-                                      const Text(
-                                        'Выбрать иконку',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.w600,
+                            SizedBox(
+                              height: media.width < 700 ? 88 : 100,
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  buildCategoryBoundIcon(),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        EnsureVisibleWhenFocused(
+                                          child: SizedBox(
+                                            height: 45,
+                                            child: TextField(
+                                              key: const Key(
+                                                  'categoryNameField'),
+                                              controller: name,
+                                              autofocus: true,
+                                              onChanged: (_) => setState(
+                                                  () => invalidName = false),
+                                              onSubmitted: (_) => save(),
+                                              decoration: InputDecoration(
+                                                labelText: 'Название папки',
+                                                hintText: widget.editing
+                                                    ? 'Название папки'
+                                                    : 'Введите имя папки',
+                                                border:
+                                                    const OutlineInputBorder(),
+                                                isDense: true,
+                                                contentPadding:
+                                                    const EdgeInsets.symmetric(
+                                                        horizontal: 12,
+                                                        vertical: 8),
+                                              ),
+                                            ),
+                                          ),
                                         ),
-                                      ),
-                                      const SizedBox(height: 7),
-                                      LayoutBuilder(
-                                        builder: (context, constraints) {
-                                          final buttons = [
-                                            SpbGrayPickerButton(
-                                              key: const Key(
-                                                'spbFolderIconPicker',
-                                              ),
-                                              label: 'SPB',
-                                              icon:
-                                                  Icons.photo_library_outlined,
-                                              tooltip: 'Иконки из базы SPB',
-                                              onTap: pickSpbIcon,
-                                            ),
-                                            SpbGrayPickerButton(
-                                              key: const Key(
-                                                'categoryPictogramPicker',
-                                              ),
-                                              label: 'пиктограммы',
-                                              icon: Icons.category_outlined,
-                                              tooltip: 'Выбрать пиктограмму',
-                                              onTap: pickPictogram,
-                                            ),
-                                            SpbGrayPickerButton(
-                                              key: const Key(
-                                                'categoryBrandPicker',
-                                              ),
-                                              label: 'Бренды',
-                                              icon: Icons.storefront_outlined,
-                                              tooltip: 'Иконки брендов',
-                                              onTap: pickBrandIcon,
-                                            ),
-                                            SpbGrayPickerButton(
-                                              key: const Key(
-                                                'categoryThirdPartyPicker',
-                                              ),
-                                              label: 'сторонние',
-                                              icon: Icons.public_outlined,
-                                              tooltip: 'Иконки Visual Studio',
-                                              onTap: pickThirdPartyIcon,
-                                            ),
-                                            SpbGrayPickerButton(
-                                              key: const Key(
-                                                'categoryUploadIconButton',
-                                              ),
-                                              label: 'загрузить иконку',
-                                              icon: Icons.upload_file_outlined,
-                                              tooltip:
-                                                  'Загрузить файл PNG или ICO',
-                                              onTap: pickCustomIconFile,
-                                            ),
-                                          ];
-                                          if (constraints.maxWidth >= 420) {
-                                            return Row(
-                                              children: [
-                                                for (var index = 0;
-                                                    index < buttons.length;
-                                                    index++) ...[
-                                                  if (index > 0)
-                                                    const SizedBox(width: 7),
-                                                  Expanded(
-                                                      child: buttons[index]),
-                                                ],
-                                              ],
-                                            );
-                                          }
-                                          final width =
-                                              (constraints.maxWidth - 7) / 2;
-                                          return Wrap(
-                                            spacing: 7,
-                                            runSpacing: 7,
-                                            children: [
-                                              for (final button in buttons)
-                                                SizedBox(
-                                                  width: width,
-                                                  child: button,
-                                                ),
-                                            ],
-                                          );
-                                        },
-                                      ),
-                                    ],
+                                        const Spacer(),
+                                        ColorPicker(
+                                          value: colorId,
+                                          label: 'Выбор цвета папки',
+                                          showLabel: false,
+                                          keyPrefix: 'categoryColor',
+                                          stretch: true,
+                                          onChanged: (value) =>
+                                              setState(() => colorId = value),
+                                        ),
+                                      ],
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 12),
-                            ColorPicker(
-                              value: colorId,
-                              label: 'Цвет папки',
-                              keyPrefix: 'categoryColor',
-                              onChanged: (value) =>
-                                  setState(() => colorId = value),
+                                ],
+                              ),
                             ),
                             if (invalidName) ...[
                               const SizedBox(height: 12),
@@ -16681,13 +16874,13 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
   }
 
   Widget buildCategoryBoundIcon() {
-    return ExternalImageDropTarget(
-      enableClipboardPaste: true,
+    return IconEditorTarget(
+      onSelected: (value) => setState(() => iconId = value),
       onImage: applyImportedIcon,
       child: Container(
         key: const Key('categoryBoundIcon'),
-        width: 112,
-        height: 112,
+        width: MediaQuery.sizeOf(context).width < 700 ? 88 : 100,
+        height: MediaQuery.sizeOf(context).width < 700 ? 88 : 100,
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: Colors.white,
@@ -17914,77 +18107,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     bool singleRow = false,
     bool compactButtons = false,
     double buttonHeight = 48,
-  }) {
-    final buttons = [
-      SpbGrayPickerButton(
-        key: const Key('spbCardIconPicker'),
-        label: 'SPB',
-        icon: Icons.photo_library_outlined,
-        tooltip: 'Иконки из базы SPB',
-        onTap: pickSpbCardIcon,
-        compact: compactButtons,
-        height: buttonHeight,
-      ),
-      SpbGrayPickerButton(
-        key: const Key('cardPictogramPicker'),
-        label: 'пиктограммы',
-        icon: Icons.category_outlined,
-        tooltip: 'Выбрать пиктограмму',
-        onTap: pickCardPictogram,
-        compact: compactButtons,
-        height: buttonHeight,
-      ),
-      SpbGrayPickerButton(
-        key: const Key('cardBrandPicker'),
-        label: 'Бренды',
-        icon: Icons.storefront_outlined,
-        tooltip: 'Иконки брендов',
-        onTap: pickCardBrandIcon,
-        compact: compactButtons,
-        height: buttonHeight,
-      ),
-      SpbGrayPickerButton(
-        key: const Key('cardThirdPartyPicker'),
-        label: 'сторонние',
-        icon: Icons.public_outlined,
-        tooltip: 'Иконки Visual Studio',
-        onTap: pickCardThirdPartyIcon,
-        compact: compactButtons,
-        height: buttonHeight,
-      ),
-      SpbGrayPickerButton(
-        key: const Key('cardUploadIconButton'),
-        label: 'загрузить иконку',
-        icon: Icons.upload_file_outlined,
-        tooltip: 'Загрузить файл PNG или ICO',
-        onTap: pickCardCustomIconFile,
-        compact: compactButtons,
-        height: buttonHeight,
-      ),
-    ];
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        if (singleRow || constraints.maxWidth >= 420) {
-          return Row(
-            children: [
-              for (var index = 0; index < buttons.length; index++) ...[
-                if (index > 0) const SizedBox(width: 7),
-                Expanded(child: buttons[index]),
-              ],
-            ],
-          );
-        }
-        final width = (constraints.maxWidth - 7) / 2;
-        return Wrap(
-          spacing: 7,
-          runSpacing: 7,
-          children: [
-            for (final button in buttons) SizedBox(width: width, child: button),
-          ],
-        );
-      },
-    );
-  }
+  }) =>
+      Align(
+          alignment: Alignment.bottomCenter,
+          child: ColorPicker(
+              value: colorId,
+              label: 'Выбор цвета карточки',
+              showLabel: false,
+              stretch: true,
+              onChanged: changeCardColor));
 
   Future<void> pickSpbCardIcon() async {
     final picked = await showSpbOriginalIconPickerDialog(
@@ -18233,24 +18364,25 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   }
 
   Widget buildCardEditorContent({required bool wideLayout}) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (wideLayout)
-          ...buildWideCardEditorHeader()
-        else
-          ...buildNarrowCardEditorHeader(),
-        const SizedBox(height: 10),
-        for (final field in orderedCardFields)
-          EnsureVisibleWhenFocused(
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: buildCardValueField(field),
-            ),
-          ),
-        if (widget.supportsAttachments) buildCardAttachmentsEditor(),
-      ],
-    );
+    return LayoutBuilder(
+        builder: (context, constraints) => Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (wideLayout && constraints.maxWidth >= 600)
+                  ...buildWideCardEditorHeader()
+                else
+                  ...buildNarrowCardEditorHeader(),
+                const SizedBox(height: 10),
+                for (final field in orderedCardFields)
+                  EnsureVisibleWhenFocused(
+                    child: Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: buildCardValueField(field),
+                    ),
+                  ),
+                if (widget.supportsAttachments) buildCardAttachmentsEditor(),
+              ],
+            ));
   }
 
   List<Widget> buildWideCardEditorHeader() {
@@ -18282,12 +18414,6 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         ),
       ),
       const SizedBox(height: 7),
-      ColorPicker(
-        value: colorId,
-        showLabel: false,
-        stretch: true,
-        onChanged: changeCardColor,
-      ),
       const SizedBox(height: 10),
       SizedBox(
         height: 45,
@@ -18326,36 +18452,33 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
 
   List<Widget> buildNarrowCardEditorHeader() {
     return [
-      cardTitleEditor(boldValue: true, adaptiveHeight: true),
-      const SizedBox(height: 14),
-      SizedBox(
-        height: 88,
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            cardBoundIcon(
-              dimension: 88,
-              iconSize: 80,
-              scaleOriginalToFit: true,
+      Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          cardBoundIcon(
+            dimension: 88,
+            iconSize: 80,
+            scaleOriginalToFit: true,
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                cardTitleEditor(boldValue: true, adaptiveHeight: true),
+                const SizedBox(height: 16),
+                cardIconPickers(
+                  singleRow: true,
+                  compactButtons: true,
+                  buttonHeight: 88,
+                ),
+              ],
             ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: cardIconPickers(
-                singleRow: true,
-                compactButtons: true,
-                buttonHeight: 88,
-              ),
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
       const SizedBox(height: 10),
-      ColorPicker(
-        value: colorId,
-        showLabel: false,
-        stretch: true,
-        onChanged: changeCardColor,
-      ),
       const SizedBox(height: 10),
       narrowEditorSelectionRow(
         previewKey: const Key('cardTemplatePreviewIcon'),
@@ -18408,8 +18531,11 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     double iconSize = 88,
     bool scaleOriginalToFit = false,
   }) {
-    return ExternalImageDropTarget(
-      enableClipboardPaste: true,
+    return IconEditorTarget(
+      onSelected: (value) {
+        rememberCurrentAction();
+        setState(() => iconId = value);
+      },
       onImage: applyImportedCardIcon,
       child: Container(
         key: const Key('cardBoundIcon'),
@@ -20006,7 +20132,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     name = TextEditingController(text: widget.initial?.name ?? '');
     final initialIconId = widget.initial?.iconId;
     iconId = initialIconId ?? spbPasswordTemplateIconAsset;
-    colorId = widget.initial?.colorId ?? 'neutral';
+    colorId = widget.initial?.colorId ?? 'template_white';
     categoryPath = widget.initial?.categoryPath ?? '';
     spbColor = widget.initial?.spbColor;
     customIconBytes = widget.initial?.embeddedIconBase64 == null
@@ -20093,10 +20219,6 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             templateIconPicker(),
-                            const SizedBox(height: 12),
-                            templateColorPicker(),
-                            const SizedBox(height: 10),
-                            templateNameField(),
                             const SizedBox(height: 10),
                             Row(
                               children: [
@@ -20140,18 +20262,13 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
         ),
         border: Border(bottom: BorderSide(color: Color(0xff7f8d98))),
       ),
-      child: TextField(
+      alignment: Alignment.centerLeft,
+      child: Text(
+        widget.initial?.name ?? 'Новый шаблон',
         key: const Key('templateTitleNameField'),
-        controller: name,
-        readOnly: true,
-        onChanged: rememberNameChange,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: const TextStyle(fontSize: 18),
-        decoration: const InputDecoration(
-          hintText: 'Название шаблона',
-          border: InputBorder.none,
-          isDense: true,
-          contentPadding: EdgeInsets.symmetric(vertical: 12),
-        ),
       ),
     );
   }
@@ -20183,113 +20300,47 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   }
 
   Widget templateIconPicker() {
-    final narrowLayout = Platform.isAndroid ||
-        defaultTargetPlatform == TargetPlatform.android ||
-        MediaQuery.sizeOf(context).width < 700;
-    if (narrowLayout) {
+    const dimension = 100.0;
+    return LayoutBuilder(builder: (context, constraints) {
+      final compact = constraints.maxWidth < 600 ||
+          defaultTargetPlatform == TargetPlatform.android;
       return SizedBox(
-        height: 88,
+        height: dimension,
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             templateBoundIcon(
-              dimension: 88,
-              iconSize: 88 * WorkspaceGeometry.framedIconScale,
-              scaleOriginalToFit: true,
+              dimension: dimension,
+              iconSize: dimension * WorkspaceGeometry.framedIconScale,
             ),
             const SizedBox(width: 14),
             Expanded(
-              child: templateIconPickerButtons(
-                singleRow: true,
-                compactButtons: true,
-                buttonHeight: 88,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  templateNameField(),
+                  const Spacer(),
+                  ColorPicker(
+                    value: colorId,
+                    label: 'Выбор цвета шаблона',
+                    keyPrefix: 'templateColor',
+                    showLabel: !compact,
+                    stretch: true,
+                    onChanged: (value) {
+                      rememberCurrentAction();
+                      setState(() {
+                        colorId = value;
+                        spbColor = null;
+                      });
+                    },
+                  ),
+                ],
               ),
             ),
           ],
         ),
       );
-    }
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        templateBoundIcon(),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Выбрать иконку',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 7),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final buttons = [
-                    templatePickerButton(
-                      key: const Key('templateSpbDefaultButton'),
-                      label: 'SPB',
-                      icon: Icons.photo_library_outlined,
-                      tooltip: 'Иконки из базы SPB',
-                      onPressed: pickSpbIcon,
-                    ),
-                    templatePickerButton(
-                      key: const Key('templatePictogramsButton'),
-                      label: 'пиктограммы',
-                      icon: Icons.category_outlined,
-                      tooltip: 'Выбрать пиктограмму',
-                      onPressed: pickPictogram,
-                    ),
-                    templatePickerButton(
-                      key: const Key('templateBrandPicker'),
-                      label: 'Бренды',
-                      icon: Icons.storefront_outlined,
-                      tooltip: 'Иконки брендов',
-                      onPressed: pickBrandIcon,
-                    ),
-                    templatePickerButton(
-                      key: const Key('templateIconsButton'),
-                      label: 'сторонние',
-                      icon: Icons.public_outlined,
-                      tooltip: 'Иконки Visual Studio',
-                      onPressed: pickThirdPartyIcon,
-                    ),
-                    templatePickerButton(
-                      key: const Key('templateUploadIconButton'),
-                      label: 'загрузить иконку',
-                      icon: Icons.upload_file_outlined,
-                      tooltip: 'Загрузить файл PNG или ICO',
-                      onPressed: pickCustomIconFile,
-                    ),
-                  ];
-                  if (constraints.maxWidth >= 420) {
-                    return Row(
-                      children: [
-                        for (var index = 0;
-                            index < buttons.length;
-                            index++) ...[
-                          if (index > 0) const SizedBox(width: 7),
-                          Expanded(child: buttons[index]),
-                        ],
-                      ],
-                    );
-                  }
-                  final width = (constraints.maxWidth - 7) / 2;
-                  return Wrap(
-                    spacing: 7,
-                    runSpacing: 7,
-                    children: [
-                      for (final button in buttons)
-                        SizedBox(width: width, child: button),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
+    });
   }
 
   Widget templatePickerButton({
@@ -20902,8 +20953,8 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     double iconSize = 112 * WorkspaceGeometry.framedIconScale,
     bool scaleOriginalToFit = true,
   }) {
-    return ExternalImageDropTarget(
-      enableClipboardPaste: true,
+    return IconEditorTarget(
+      onSelected: changeIcon,
       onImage: applyImportedCustomIcon,
       child: Container(
         key: const Key('templateBoundIcon'),
@@ -21039,6 +21090,241 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   }
 }
 
+Widget managedCatalogIconFrame(
+  BuildContext context,
+  String id, {
+  required bool selected,
+  required Color baseColor,
+  Key? key,
+  Key? contentKey,
+}) {
+  final theme = Theme.of(context);
+  final bytes = brandIconPngs[id] ?? thirdPartyIconPngs[id];
+  final preferred =
+      spbIconIdForDrawableDirectory(id, managedSpbPreviewDrawableDirectory);
+  final preview = spbPackedIconBytes(preferred) != null ? preferred : id;
+  return DecoratedBox(
+      key: key,
+      decoration: BoxDecoration(
+          color: selected ? theme.colorScheme.primaryContainer : baseColor,
+          border: Border.all(
+              color: selected ? theme.colorScheme.primary : theme.dividerColor),
+          borderRadius: BorderRadius.circular(8)),
+      child: Center(
+          child: SizedBox.square(
+              key: contentKey,
+              dimension: WorkspaceGeometry.iconFrameContent,
+              child: bytes != null
+                  ? Image.memory(bytes,
+                      fit: BoxFit.contain, filterQuality: FilterQuality.medium)
+                  : templateIconWidget(preview,
+                      size: WorkspaceGeometry.iconFrameContent,
+                      color: const Color(0xff6f7f89),
+                      scaleOriginalToFit: true))));
+}
+
+class IconEditorTarget extends StatelessWidget {
+  const IconEditorTarget(
+      {required this.child,
+      required this.onImage,
+      required this.onSelected,
+      super.key});
+  final Widget child;
+  final FutureOr<void> Function(Uint8List, String) onImage;
+  final ValueChanged<String> onSelected;
+
+  Future<void> openMenu(BuildContext context, Offset position) async {
+    try {
+      await loadManagedIconLibrary();
+      if (!context.mounted) return;
+      final action = await showMenu<String>(
+          context: context,
+          position: RelativeRect.fromSize(
+              Rect.fromLTWH(position.dx, position.dy, 0, 0),
+              MediaQuery.sizeOf(context)),
+          items: [
+            const PopupMenuItem(value: 'paste', child: Text('Вставить')),
+            const PopupMenuItem(value: 'file', child: Text('Выбрать файл')),
+            for (final folder in IconCatalogKind.values)
+              PopupMenuItem(
+                  value: folder.storageKey, child: Text(folder.label)),
+          ]);
+      if (action == null || !context.mounted) return;
+      if (action == 'file') {
+        final file = await pickUserIconFile(context);
+        if (file != null && context.mounted) {
+          await onImage(file.bytes, file.fileName);
+        }
+      } else if (action == 'paste') {
+        final bytes =
+            await windowChannel.invokeMethod<Uint8List>('readClipboardImage');
+        if (!context.mounted) return;
+        if (bytes == null || bytes.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+              content: Text('В буфере обмена нет изображения.')));
+          return;
+        }
+        final decoded = decodeUserIconImage(bytes);
+        if (decoded == null) {
+          throw const FormatException('Формат изображения не поддерживается');
+        }
+        await onImage(normalizeUserIconPng(decoded), 'clipboard.png');
+      } else {
+        final folder = iconCatalogKindFromStorageKey(action);
+        if (folder == null) return;
+        final id = await showManagedIconSelection(context, folder);
+        if (id == null || !context.mounted) return;
+        final bytes = brandIconPngs[id] ?? thirdPartyIconPngs[id];
+        if (bytes != null) {
+          await onImage(bytes, id.split('/').last);
+        } else {
+          onSelected(id);
+        }
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Не удалось выбрать иконку: $error')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onSecondaryTapDown: (details) =>
+            openMenu(context, details.globalPosition),
+        onLongPressStart: (details) =>
+            openMenu(context, details.globalPosition),
+        child: ExternalImageDropTarget(onImage: onImage, child: child),
+      );
+}
+
+Future<String?> showManagedIconSelection(
+    BuildContext context, IconCatalogKind folder) {
+  final workspace = activeGlobalRectForKey(iconPickerWorkspaceKey);
+  return showDialog<String>(
+      context: context,
+      useSafeArea: false,
+      builder: (_) =>
+          ManagedIconSelectionDialog(folder: folder, workspace: workspace));
+}
+
+class ManagedIconSelectionDialog extends StatefulWidget {
+  const ManagedIconSelectionDialog(
+      {required this.folder, this.workspace, super.key});
+  final IconCatalogKind folder;
+  final Rect? workspace;
+  @override
+  State<ManagedIconSelectionDialog> createState() =>
+      _ManagedIconSelectionDialogState();
+}
+
+class _ManagedIconSelectionDialogState
+    extends State<ManagedIconSelectionDialog> {
+  final controller = ScrollController();
+  String? selected;
+  String query = '';
+  @override
+  void dispose() {
+    controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final media = MediaQuery.of(context);
+    return LayoutBuilder(builder: (context, constraints) {
+      final size = Size(constraints.maxWidth, constraints.maxHeight);
+      final rect = size.width < 700 ? null : widget.workspace;
+      final icons = managedIconIdsFor(widget.folder)
+          .where((id) => id.toLowerCase().contains(query.toLowerCase()))
+          .toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+      final left = (rect?.left ?? 0.0).clamp(0.0, size.width);
+      final top = (rect?.top ?? media.padding.top).clamp(0.0, size.height);
+      return Stack(children: [
+        Positioned(
+          left: left,
+          top: top,
+          width: min(rect?.width ?? size.width, size.width - left),
+          height: max(
+              0.0,
+              min(rect?.height ?? size.height - top - media.padding.bottom,
+                  size.height - top - media.viewInsets.bottom)),
+          child: Material(
+              color: appWindowBackgroundColor,
+              elevation: 24,
+              child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                        padding: const EdgeInsets.all(8),
+                        child: Text(widget.folder.label)),
+                    Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        child: TextField(
+                            decoration: const InputDecoration(
+                                hintText: 'Поиск', isDense: true),
+                            onChanged: (value) =>
+                                setState(() => query = value))),
+                    Expanded(
+                        child: icons.isEmpty
+                            ? const Center(
+                                child: Text('В этой папке пока нет иконок.'))
+                            : Scrollbar(
+                                controller: controller,
+                                thumbVisibility: true,
+                                child: GridView.builder(
+                                    controller: controller,
+                                    padding: const EdgeInsets.only(
+                                        right: WorkspaceGeometry.treeScrollbar),
+                                    gridDelegate: const WorkspaceGridDelegate(),
+                                    itemCount: icons.length,
+                                    itemBuilder: (context, index) {
+                                      final id = icons[index];
+                                      return InkWell(
+                                        key: ValueKey('selectManagedIcon-$id'),
+                                        onTap: () =>
+                                            setState(() => selected = id),
+                                        child: managedCatalogIconFrame(
+                                            context, id,
+                                            selected: selected == id,
+                                            baseColor: widget.folder ==
+                                                        IconCatalogKind
+                                                            .brands ||
+                                                    widget.folder ==
+                                                        IconCatalogKind
+                                                            .thirdParty
+                                                ? Colors.white
+                                                : Theme.of(context)
+                                                    .colorScheme
+                                                    .surface),
+                                      );
+                                    }))),
+                    Row(mainAxisAlignment: MainAxisAlignment.end, children: [
+                      SpbGradientActionButton(
+                          key: const Key('confirmIconSelection'),
+                          icon: Icons.check,
+                          tooltip: 'Выбрать',
+                          colors: const [Color(0xff5bc96d), Color(0xff08772f)],
+                          onTap: selected == null
+                              ? null
+                              : () => Navigator.pop(context, selected)),
+                      SpbGradientActionButton(
+                          key: const Key('cancelIconSelection'),
+                          icon: Icons.close,
+                          tooltip: 'Отмена',
+                          colors: const [Color(0xffff5a5f), Color(0xffa90000)],
+                          onTap: () => Navigator.pop(context)),
+                    ]),
+                  ])),
+        )
+      ]);
+    });
+  }
+}
+
 class ColorPicker extends StatelessWidget {
   const ColorPicker({
     required this.value,
@@ -21060,9 +21346,10 @@ class ColorPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Column(
+      mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (showLabel) ...[Text(label), const SizedBox(height: 8)],
+        if (showLabel) ...[Text(label), const SizedBox(height: 5)],
         if (stretch)
           Row(
             children: [
