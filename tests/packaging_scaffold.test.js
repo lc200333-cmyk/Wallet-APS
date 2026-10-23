@@ -101,6 +101,15 @@ const releaseWorkflow = read('.github/workflows/release.yml');
   'softprops/action-gh-release',
 ].forEach((needle) => assert.ok(releaseWorkflow.includes(needle), `release workflow missing ${needle}`));
 assert.ok(releaseWorkflow.includes('app/lib/app_version.dart'));
+assert.match(releaseWorkflow, /^      - "\.dockerignore"$/m,
+  'Docker context exclusions must trigger release builds');
+
+const dockerIgnore = read('.dockerignore');
+for (const excluded of ['.git', 'app/build', 'app/.dart_tool', 'tmp',
+  '/Wallet-APS-backup.bundle', '*_conflict_current', '*_SM-*']) {
+  assert.ok(dockerIgnore.split(/\r?\n/).includes(excluded),
+    `Docker context must exclude ${excluded}`);
+}
 
 const bumpVersion = read('tools/bump_version.js');
 assert.ok(bumpVersion.includes("const dartVersionPath = 'app/lib/app_version.dart'"));
