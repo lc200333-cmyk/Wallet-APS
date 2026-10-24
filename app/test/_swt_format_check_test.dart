@@ -303,7 +303,7 @@ void main() {
       ),
     );
     expect(find.byKey(const Key('templateUndoButton')), findsOneWidget);
-    expect(find.byKey(const Key('templateSaveButton')), findsOneWidget);
+    expect(find.byKey(const Key('templateSaveButton')), findsNothing);
     expect(find.byKey(const Key('templateCloseButton')), findsOneWidget);
   });
 

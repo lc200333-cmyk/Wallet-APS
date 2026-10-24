@@ -22,9 +22,11 @@ import 'controllers/entity_index.dart';
 import 'features/cards/field_projection.dart';
 import 'features/categories/category_path_index.dart';
 import 'features/templates/template_order.dart';
+import 'features/templates/template_folders.dart';
 import 'services/wallet_rekey_service.dart';
 import 'services/platform/secure_clipboard_service.dart';
 import 'widgets/card_surface.dart';
+import 'widgets/context_menu_label.dart';
 import 'widgets/android_screen_scale.dart';
 import 'widgets/workspace_geometry.dart';
 
@@ -1408,6 +1410,11 @@ class CardTemplate {
   final String? iconFileName;
   final int? spbColor;
   final String categoryPath;
+
+  String get displayName =>
+      templateLabelInFolder(name, templateFolderFor(name, categoryPath));
+
+  String get displayCategoryPath => templateCategoryPathFor(name, categoryPath);
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -2990,7 +2997,9 @@ class _ExternalImageDropTargetState extends State<ExternalImageDropTarget> {
         Offset.zero & overlay.size,
       ),
       items: const [
-        PopupMenuItem<String>(value: 'paste', child: Text('Paste')),
+        PopupMenuItem<String>(
+            value: 'paste',
+            child: ContextMenuLabel('Paste', icon: Icons.content_paste)),
       ],
     );
     if (selected != 'paste' || !mounted) return;
@@ -3632,19 +3641,19 @@ Future<AttachmentContextAction?> showAttachmentContextMenu(
       const PopupMenuItem<AttachmentContextAction>(
         key: Key('attachmentSaveAsMenuItem'),
         value: AttachmentContextAction.saveAs,
-        child: Text('Сохранить как'),
+        child: ContextMenuLabel('Сохранить как', icon: Icons.save_alt),
       ),
       if (allowCopy)
         const PopupMenuItem<AttachmentContextAction>(
           key: Key('attachmentCopyMenuItem'),
           value: AttachmentContextAction.copy,
-          child: Text('Копировать'),
+          child: ContextMenuLabel('Копировать', icon: Icons.content_copy),
         ),
       if (allowShare)
         const PopupMenuItem<AttachmentContextAction>(
           key: Key('attachmentShareMenuItem'),
           value: AttachmentContextAction.share,
-          child: Text('Поделиться'),
+          child: ContextMenuLabel('Поделиться', icon: Icons.share_outlined),
         ),
     ],
   );
@@ -4675,6 +4684,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   String? selectedManagedIconId;
   String? selectedTemplateId;
   final Set<String> selectedTemplateIds = {};
+  String? selectedTemplateFolder;
+  final Set<String> expandedTemplateFolders = {};
+  List<SpbWalletTemplateFolder> templateFolderSettings = [];
   int mobilePane = 0;
   bool rootTreeExpanded = true;
   final Set<String> expandedCategoryPaths = {};
@@ -6720,6 +6732,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   void applySpbSnapshot(SpbWalletSnapshot snapshot) {
+    templateFolderSettings = spbWallet?.loadTemplateFolders() ?? [];
     cardLoadFailures = List.of(snapshot.cardLoadFailures);
     walletLoadReport = snapshot.loadReport.hasIssues
         ? snapshot.loadReport
@@ -6793,6 +6806,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         .toList();
     templatesById = indexEntitiesById(templates, (template) => template.id);
     itemsById = indexEntitiesById(items, (item) => item.id);
+    final folderNames = spbTemplateFolderNames.toSet();
+    if (!folderNames.contains(selectedTemplateFolder)) {
+      selectedTemplateFolder = null;
+    }
+    expandedTemplateFolders.removeWhere((name) => !folderNames.contains(name));
     selectedItemIds.removeWhere((id) => !itemsById.containsKey(id));
     selectedTemplateIds.removeWhere((id) => !templatesById.containsKey(id));
     categoryIconsByPath = spbCategoryIconsToUi(snapshot.categories)
@@ -7344,9 +7362,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           buildSpbSearchButton(
             key: const Key('spbSubmitSearchButton'),
             icon: Icons.search,
-            tooltip: 'Начать поиск',
+            tooltip: 'Точное совпадение',
+            selected: spbExactSearch,
             gradient: const [Color(0xff42bff5), Color(0xff006fc4)],
-            onTap: () => submitSpbSearch(searchController.text),
+            onTap: () => submitExactSpbSearch(searchController.text),
           ),
           if (!mobile && !enlarged) const Spacer(),
           const SizedBox(width: 4),
@@ -7387,7 +7406,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ? const [
               PopupMenuItem<int>(
                 enabled: false,
-                child: Text('Нет изменений для отмены'),
+                child: ContextMenuLabel('Нет изменений для отмены',
+                    icon: Icons.undo),
               ),
             ]
           : [
@@ -7396,22 +7416,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   index--)
                 PopupMenuItem<int>(
                   value: index,
-                  child: Row(
-                    children: [
-                      templateIconWidget(
-                        sessionUndoHistory[index].iconId,
-                        size: 28,
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          sessionUndoHistory[index].label,
-                          maxLines: 2,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: ContextMenuLabel(sessionUndoHistory[index].label,
+                      icon: Icons.undo, maxLines: 2),
                 ),
             ],
     );
@@ -7426,6 +7432,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required String tooltip,
     required List<Color> gradient,
     required VoidCallback onTap,
+    bool selected = false,
   }) {
     final scale = defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.windows
@@ -7454,7 +7461,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     colors: gradient,
                   ),
                   borderRadius: BorderRadius.circular(2.7),
-                  border: Border.all(color: const Color(0x99000000)),
+                  border: Border.all(
+                    color: selected
+                        ? const Color(0xffffdc58)
+                        : const Color(0x99000000),
+                    width: selected ? 2 : 1,
+                  ),
                 ),
                 child: InkWell(
                   borderRadius: BorderRadius.circular(2.7),
@@ -7472,9 +7484,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   void submitSpbSearch(String value) {
+    updateSpbSearch(value);
+  }
+
+  void submitExactSpbSearch(String value) {
+    updateSpbSearch(value);
     setState(() {
-      spbSubmittedSearchQuery = value.trim();
-      spbExactSearch = true;
+      spbExactSearch = value.trim().isNotEmpty;
     });
   }
 
@@ -7490,7 +7506,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       spbExactSearch = false;
       if (query.isNotEmpty &&
           (defaultTargetPlatform == TargetPlatform.android || narrowLayout)) {
-        if (!iconLibraryOpen) mobileTemplatesOpen = false;
         mobilePane = 1;
       }
     });
@@ -7683,6 +7698,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         item.title,
         item.category,
         template.name,
+        template.displayName,
         ...item.values.values,
       ];
       if (spbExactSearch) {
@@ -8035,6 +8051,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       iconLibraryOpen = false;
       mobilePane = 0;
       spbSubmittedSearchQuery = '';
+      spbExactSearch = false;
+      selectedTemplateFolder = null;
       if (templates.isNotEmpty &&
           !templates.any((template) => template.id == selectedTemplateId)) {
         selectedTemplateId = templates.first.id;
@@ -8049,6 +8067,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       iconLibraryOpen = true;
       mobilePane = 0;
       spbSubmittedSearchQuery = '';
+      spbExactSearch = false;
     });
     unawaited(ensureManagedIconLibraryLoaded());
   }
@@ -8422,10 +8441,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         measure(kind.label, 0, trailing: 40, style: spbTreeFolderStyle);
       }
     } else if (mobileTemplatesOpen) {
+      for (final folder in spbTemplateFolderNames) {
+        measure(folder, 0, trailing: 40, style: spbTreeFolderStyle);
+      }
       for (final template in templates) {
         measure(
-          template.name,
-          0,
+          templateLabelInFolder(template.name, spbTemplateFolderFor(template)),
+          1,
           style: spbTemplateTreeStyle,
         );
       }
@@ -9332,8 +9354,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             Rect.fromLTWH(position.dx, position.dy, 0, 0),
             MediaQuery.sizeOf(context)),
         items: const [
-          PopupMenuItem(value: 'edit', child: Text('Редактировать папку')),
-          PopupMenuItem(value: 'delete', child: Text('Удалить папку')),
+          PopupMenuItem(
+              value: 'edit',
+              child: ContextMenuLabel('Редактировать папку',
+                  icon: Icons.edit_outlined)),
+          PopupMenuItem(
+              value: 'delete',
+              child: ContextMenuLabel('Удалить папку',
+                  icon: Icons.delete_outline)),
         ]);
     if (!mounted) return;
     if (action == 'edit') await editIconFolder(folder);
@@ -9562,21 +9590,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           if (kind != current)
             PopupMenuItem(
               value: 'move:${kind.storageKey}',
-              child: ListTile(
-                dense: true,
-                leading: Icon(kind.icon),
-                title: Text('Переместить в «${kind.label}»'),
-              ),
+              child: ContextMenuLabel('Переместить в «${kind.label}»',
+                  icon: Icons.drive_file_move_outline),
             ),
         const PopupMenuDivider(),
         const PopupMenuItem(
           key: Key('deleteManagedIconContextAction'),
           value: 'delete',
-          child: ListTile(
-            dense: true,
-            leading: Icon(Icons.delete_outline),
-            title: Text('Удалить'),
-          ),
+          child: ContextMenuLabel('Удалить', icon: Icons.delete_outline),
         ),
       ],
     );
@@ -9812,58 +9833,245 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final labelStyle = spbTemplateTreeStyle;
     final labelStrut = spbTemplateTreeStrut;
     final query = searchController.text.trim().toLowerCase();
-    final visible = templates
-        .where(
-          (entry) => query.isEmpty || entry.name.toLowerCase().contains(query),
-        )
-        .toList()
-      ..sort(
-        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-      );
-    final tree = ListView.builder(
+    final tree = ListView(
       controller: scrollController,
       padding:
           const EdgeInsets.only(top: WorkspaceGeometry.treeTop, bottom: 12),
-      itemCount: visible.length,
-      itemBuilder: (context, index) {
-        final template = visible[index];
-        return GestureDetector(
-          key: ValueKey('spbTemplate-${template.id}'),
-          onDoubleTap: () => openTemplatePreview(template),
-          onSecondaryTapDown: (details) =>
-              showSpbTemplateMenu(template, details.globalPosition),
-          onLongPressStart: (details) =>
-              showSpbTemplateMenu(template, details.globalPosition),
-          child: ListTile(
-            dense: true,
-            minTileHeight: rowHeight,
-            minLeadingWidth: iconSize,
-            horizontalTitleGap: 5,
-            minVerticalPadding: 0,
-            contentPadding: const EdgeInsets.only(left: 25),
-            visualDensity: VisualDensity.standard,
-            selected: selectedTemplateIds.contains(template.id) ||
-                selectedTemplateId == template.id,
-            selectedTileColor: const Color(0xffcfe9fb),
-            leading: spbSizedDataIcon(
-              template.iconId,
-              iconSize,
-              fallbackColor: templateDisplayPictogramColor(template),
+      children: [
+        for (final folder in spbTemplateFolderNames)
+          if (query.isEmpty ||
+              spbTemplatesInFolder(folder, query).isNotEmpty ||
+              spbTemplateFolderMatchesQuery(folder, query)) ...[
+            GestureDetector(
+              key: ValueKey('spbTemplateFolder-$folder'),
+              onSecondaryTapDown: (details) =>
+                  showSpbTemplateFolderMenu(folder, details.globalPosition),
+              onLongPressStart: (details) =>
+                  showSpbTemplateFolderMenu(folder, details.globalPosition),
+              child: ListTile(
+                dense: true,
+                minTileHeight: rowHeight,
+                minLeadingWidth: iconSize,
+                horizontalTitleGap: 5,
+                minVerticalPadding: 0,
+                contentPadding: const EdgeInsets.only(left: 6, right: 8),
+                selected: selectedTemplateFolder == folder,
+                selectedTileColor: const Color(0xffcfe9fb),
+                leading: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    spbExpansionMark(
+                      query.isNotEmpty ||
+                          expandedTemplateFolders.contains(folder),
+                    ),
+                    const SizedBox(width: 6),
+                    spbSizedDataIcon(
+                      templateFolderSettings
+                              .where((entry) =>
+                                  entry.name == folder && !entry.hidden)
+                              .firstOrNull
+                              ?.iconId ??
+                          defaultIconForCategoryPath(folder),
+                      iconSize,
+                      fallbackColor: categoryPictogramColor(
+                          templateFolderSettings
+                              .where((entry) =>
+                                  entry.name == folder && !entry.hidden)
+                              .firstOrNull
+                              ?.colorId),
+                    ),
+                  ],
+                ),
+                title: Text(folder,
+                    style: spbTreeFolderStyle,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.visible),
+                trailing: Text(
+                  '${spbTemplatesInFolder(folder, query).length}',
+                  style: labelStyle,
+                ),
+                onTap: () => openSpbTemplateFolder(folder),
+              ),
             ),
-            title: Text(
-              template.name,
-              style: labelStyle,
-              strutStyle: labelStrut,
-              maxLines: 1,
-              softWrap: false,
-              overflow: TextOverflow.visible,
-            ),
-            onTap: () => selectSpbTemplateFromPrimaryClick(template),
-          ),
-        );
-      },
+            if (query.isNotEmpty || expandedTemplateFolders.contains(folder))
+              for (final template in spbTemplatesInFolder(folder, query))
+                GestureDetector(
+                  key: ValueKey('spbTemplate-${template.id}'),
+                  onDoubleTap: () {
+                    selectedTemplateFolder = folder;
+                    openTemplatePreview(template);
+                  },
+                  onSecondaryTapDown: (details) => showSpbTemplateTreeMenu(
+                      template, folder, details.globalPosition),
+                  onLongPressStart: (details) => showSpbTemplateTreeMenu(
+                      template, folder, details.globalPosition),
+                  child: ListTile(
+                    dense: true,
+                    minTileHeight: rowHeight,
+                    minLeadingWidth: iconSize,
+                    horizontalTitleGap: 5,
+                    minVerticalPadding: 0,
+                    contentPadding: const EdgeInsets.only(left: 46),
+                    visualDensity: VisualDensity.standard,
+                    selected: selectedTemplateIds.contains(template.id) ||
+                        selectedTemplateId == template.id,
+                    selectedTileColor: const Color(0xffcfe9fb),
+                    leading: spbSizedDataIcon(
+                      template.iconId,
+                      iconSize,
+                      fallbackColor: templateDisplayPictogramColor(template),
+                    ),
+                    title: Text(
+                      templateLabelInFolder(template.name, folder),
+                      style: labelStyle,
+                      strutStyle: labelStrut,
+                      maxLines: 1,
+                      softWrap: false,
+                      overflow: TextOverflow.visible,
+                    ),
+                    onTap: () {
+                      selectedTemplateFolder = folder;
+                      selectSpbTemplateFromPrimaryClick(template);
+                    },
+                  ),
+                ),
+          ],
+      ],
     );
     return buildSpbTreeViewport(tree);
+  }
+
+  String spbTemplateFolderFor(CardTemplate template) =>
+      templateFolderFor(template.name, template.categoryPath);
+
+  List<String> get spbTemplateFolderNames => {
+        ...defaultTemplateFolders.where((name) => !templateFolderSettings
+            .any((entry) => entry.name == name && entry.hidden)),
+        ...templateFolderSettings
+            .where((entry) => !entry.hidden)
+            .map((entry) => entry.name),
+        for (final template in templates) spbTemplateFolderFor(template),
+      }.toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+  bool spbTemplateFolderMatchesQuery(String folder, String query) =>
+      spbExactSearch
+          ? spbExactSearchMatches([folder], query)
+          : folder.toLowerCase().contains(query.toLowerCase());
+
+  bool spbTemplateMatchesQuery(CardTemplate template, String query) {
+    if (query.isEmpty) return true;
+    final folder = spbTemplateFolderFor(template);
+    final values = [
+      template.name,
+      templateLabelInFolder(template.name, folder)
+    ];
+    return spbTemplateFolderMatchesQuery(folder, query) ||
+        (spbExactSearch
+            ? spbExactSearchMatches(values, query)
+            : values.any(
+                (value) => value.toLowerCase().contains(query.toLowerCase())));
+  }
+
+  List<CardTemplate> spbTemplatesInFolder(String folder, String query) =>
+      templates
+          .where((template) =>
+              spbTemplateFolderFor(template) == folder &&
+              spbTemplateMatchesQuery(template, query))
+          .toList()
+        ..sort((a, b) {
+          final byName = templateLabelInFolder(a.name, folder)
+              .toLowerCase()
+              .compareTo(templateLabelInFolder(b.name, folder).toLowerCase());
+          return byName == 0 ? a.id.compareTo(b.id) : byName;
+        });
+
+  void openSpbTemplateFolder(String folder) {
+    setState(() {
+      selectedTemplateFolder = folder;
+      if (!expandedTemplateFolders.add(folder)) {
+        expandedTemplateFolders.remove(folder);
+      }
+      selectedTemplateIds.clear();
+      selectedTemplateId = spbTemplatesInFolder(folder, '').firstOrNull?.id;
+    });
+  }
+
+  Future<void> showSpbTemplateFolderMenu(String folder, Offset position) async {
+    setState(() {
+      selectedTemplateFolder = folder;
+      selectedTemplateIds.clear();
+      selectedTemplateId = spbTemplatesInFolder(folder, '').firstOrNull?.id;
+    });
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    await showSpbTemplateImportMenu(position, folder: folder);
+  }
+
+  Future<void> editSpbTemplateFolder(String folder) async {
+    final wallet = spbWallet;
+    if (wallet == null) {
+      showTemplateActionMessage(
+          'Откройте или создайте базу перед изменением папок.');
+      return;
+    }
+    if (!ensureSpbWalletWritable()) return;
+    final appearance = templateFolderSettings
+        .where((entry) => entry.name == folder && !entry.hidden)
+        .firstOrNull;
+    final saved =
+        await showDialog<({String name, String iconId, String colorId})>(
+      context: context,
+      builder: (_) => CategoryEditorDialog(
+        editing: true,
+        allowDelete: false,
+        initialName: folder,
+        initialIconId: appearance?.iconId ?? defaultIconForCategoryPath(folder),
+        initialColorId: appearance?.colorId ?? 'template_white',
+      ),
+    );
+    if (saved == null || !mounted) return;
+    SessionUndoEntry? undoEntry;
+    try {
+      undoEntry = await captureSessionUndo(
+          'Изменение папки шаблонов: $folder', saved.iconId);
+      wallet.editTemplateFolder(folder, saved.name,
+          iconId: saved.iconId, colorId: saved.colorId);
+      markVaultDirty();
+      final written = await writeBackSpbWallet();
+      setState(() {
+        applySpbSnapshot(wallet.loadSnapshot());
+        selectedTemplateFolder = canonicalTemplateFolder(saved.name);
+        expandedTemplateFolders.remove(folder);
+        expandedTemplateFolders.add(selectedTemplateFolder!);
+        if (written) message = null;
+      });
+      commitSessionUndo(undoEntry);
+    } catch (error) {
+      discardSessionUndo(undoEntry);
+      showTemplateActionMessage('Не удалось сохранить папку шаблонов: $error');
+    }
+  }
+
+  Future<void> showSpbTemplateTreeMenu(
+    CardTemplate template,
+    String folder,
+    Offset position,
+  ) async {
+    setState(() {
+      selectedTemplateFolder = folder;
+      if (!selectedTemplateIds.contains(template.id)) {
+        selectedTemplateIds
+          ..clear()
+          ..add(template.id);
+        selectedTemplateId = template.id;
+      }
+    });
+    // Finish changing the visible folder before attaching the menu overlay.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted) return;
+    await showSpbTemplateMenu(template, position);
   }
 
   Future<void> showSpbTemplateMenu(
@@ -9889,60 +10097,53 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       ),
       items: [
         if (!multiple)
-          PopupMenuItem(
-            key: const Key('createTemplateFromIconContextAction'),
+          const PopupMenuItem(
+            key: Key('createTemplateFromIconContextAction'),
             value: 'create',
-            child: Row(
-              children: [
-                spbResourceIcon('icon_add_card.png', 24),
-                const SizedBox(width: 9),
-                const Flexible(child: Text('Создать шаблон')),
-              ],
-            ),
+            child: ContextMenuLabel('Создать шаблон',
+                icon: Icons.note_add_outlined),
           ),
         if (!multiple)
           const PopupMenuItem(
             key: Key('viewTemplateContextAction'),
             value: 'view',
-            child: Text('Просмотр'),
+            child:
+                ContextMenuLabel('Просмотр', icon: Icons.visibility_outlined),
           ),
         if (!multiple)
           const PopupMenuItem(
             key: Key('editTemplateContextAction'),
             value: 'edit',
-            child: Text('Редактировать'),
+            child: ContextMenuLabel('Редактировать', icon: Icons.edit_outlined),
           ),
         if (!multiple)
           const PopupMenuItem(
             key: Key('copyTemplateContextAction'),
             value: 'copy',
-            child: Text('Копировать'),
+            child: ContextMenuLabel('Копировать', icon: Icons.content_copy),
           ),
         if (!multiple)
           const PopupMenuItem(
             key: Key('exportTemplateContextAction'),
             value: 'export',
-            child: Text('Экспортировать'),
+            child: ContextMenuLabel('Экспортировать',
+                icon: Icons.file_upload_outlined),
           ),
         if (!multiple)
           const PopupMenuItem(
             key: Key('importTemplateFromIconContextAction'),
             value: 'import',
-            child: Row(
-              children: [
-                Icon(Icons.file_open_outlined, size: 24),
-                SizedBox(width: 9),
-                Flexible(child: Text('Импортировать шаблон')),
-              ],
-            ),
+            child: ContextMenuLabel('Импортировать шаблон',
+                icon: Icons.file_open_outlined),
           ),
         PopupMenuItem(
           key: const Key('deleteTemplateContextAction'),
           value: 'delete',
-          child: Text(
+          child: ContextMenuLabel(
             multiple
                 ? 'Удалить шаблоны (${actionTemplates.length})'
                 : 'Удалить',
+            icon: Icons.delete_outline,
           ),
         ),
       ],
@@ -10021,7 +10222,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           SessionTrashEntry(
             kind: SessionTrashKind.template,
             id: template.id,
-            title: template.name,
+            title: template.displayName,
             iconId: template.iconId,
           ),
         );
@@ -10042,12 +10243,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Future<void> cloneSpbTemplate(CardTemplate template) async {
-    final existingNames = templates.map((entry) => entry.name).toSet();
+    final folder = spbTemplateFolderFor(template);
+    final existingNames = templates
+        .where((entry) => spbTemplateFolderFor(entry) == folder)
+        .map((entry) => entry.displayName)
+        .toSet();
     var suffix = 1;
-    var cloneName = '${template.name} ($suffix)';
+    var cloneName = '${template.displayName} ($suffix)';
     while (existingNames.contains(cloneName)) {
       suffix++;
-      cloneName = '${template.name} ($suffix)';
+      cloneName = '${template.displayName} ($suffix)';
     }
     final clone = CardTemplate(
       id: makeId('tpl'),
@@ -10055,7 +10260,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       iconId: template.iconId,
       colorId: template.colorId,
       spbColor: template.spbColor,
-      categoryPath: template.categoryPath,
+      categoryPath: template.displayCategoryPath,
       fields: [
         for (final field in template.fields)
           FieldDefinition(
@@ -10081,18 +10286,23 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final visible = templates
         .where(
           (template) =>
-              query.isEmpty || template.name.toLowerCase().contains(query),
+              (selectedTemplateFolder == null ||
+                  spbTemplateFolderFor(template) == selectedTemplateFolder) &&
+              spbTemplateMatchesQuery(template, query),
         )
         .toList()
       ..sort(
-        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        (a, b) =>
+            a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()),
       );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (showHeader)
           spbSectionHeader(
-            'Шаблоны',
+            selectedTemplateFolder == null
+                ? 'Шаблоны'
+                : 'Шаблоны / $selectedTemplateFolder',
             fontSize: spbEntryHeadingFontSize,
             trailing: spbResourceIcon(
                 'icon_templates.png', WorkspaceGeometry.smallIcon),
@@ -10107,44 +10317,58 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 showSpbTemplateImportMenu(details.globalPosition),
             child: spbTemplateGridScrollbar(
               enabled: showPersistentScrollbar,
-              child: GridView.builder(
-                controller: spbTemplateGridScrollController,
-                padding: const EdgeInsets.only(
-                    right: WorkspaceGeometry.treeScrollbar),
-                gridDelegate: spbEntryGridDelegate,
-                itemCount: visible.length,
-                itemBuilder: (context, index) {
-                  final template = visible[index];
-                  return KeyedSubtree(
-                    key: ValueKey('spbCentralTemplate-${template.id}'),
-                    child: LayoutBuilder(
-                      builder: (context, constraints) => buildSpbGridEntry(
-                        label: template.name,
-                        labelWidth:
-                            spbEntryGridLabelWidth(constraints.maxWidth),
-                        iconSize: spbEntryGridIconSize,
-                        entryHeight: spbEntryGridHeight,
-                        labelHeight: spbEntryGridLabelHeight,
-                        narrowAndroidLabel: spbNarrowAndroid,
-                        wideAndroidLabel: spbWideAndroid,
-                        desktopCardLabel: spbDesktopLayout,
-                        icon: spbSizedDataIcon(
-                          template.iconId,
-                          spbEntryGridIconSize,
-                          fallbackColor:
-                              templateDisplayPictogramColor(template),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  GridView.builder(
+                    controller: spbTemplateGridScrollController,
+                    padding: const EdgeInsets.only(
+                        right: WorkspaceGeometry.treeScrollbar),
+                    gridDelegate: spbEntryGridDelegate,
+                    itemCount: visible.length,
+                    itemBuilder: (context, index) {
+                      final template = visible[index];
+                      return KeyedSubtree(
+                        key: ValueKey('spbCentralTemplate-${template.id}'),
+                        child: LayoutBuilder(
+                          builder: (context, constraints) => buildSpbGridEntry(
+                            label: template.displayName,
+                            labelWidth:
+                                spbEntryGridLabelWidth(constraints.maxWidth),
+                            iconSize: spbEntryGridIconSize,
+                            entryHeight: spbEntryGridHeight,
+                            labelHeight: spbEntryGridLabelHeight,
+                            narrowAndroidLabel: spbNarrowAndroid,
+                            wideAndroidLabel: spbWideAndroid,
+                            desktopCardLabel: spbDesktopLayout,
+                            icon: spbSizedDataIcon(
+                              template.iconId,
+                              spbEntryGridIconSize,
+                              fallbackColor:
+                                  templateDisplayPictogramColor(template),
+                            ),
+                            onTap: () =>
+                                selectSpbTemplateFromPrimaryClick(template),
+                            onDoubleTap: () => openTemplatePreview(template),
+                            onContextMenu: (position) =>
+                                showSpbTemplateMenu(template, position),
+                            selected:
+                                selectedTemplateIds.contains(template.id) ||
+                                    selectedTemplateId == template.id,
+                          ),
                         ),
-                        onTap: () =>
-                            selectSpbTemplateFromPrimaryClick(template),
-                        onDoubleTap: () => openTemplatePreview(template),
-                        onContextMenu: (position) =>
-                            showSpbTemplateMenu(template, position),
-                        selected: selectedTemplateIds.contains(template.id) ||
-                            selectedTemplateId == template.id,
-                      ),
+                      );
+                    },
+                  ),
+                  if (visible.isEmpty)
+                    Center(
+                      child: Text(query.isNotEmpty
+                          ? 'Совпадений нет'
+                          : selectedTemplateFolder == null
+                              ? 'Шаблонов пока нет.'
+                              : 'В этой папке пока нет шаблонов.'),
                     ),
-                  );
-                },
+                ],
               ),
             ),
           ),
@@ -10153,7 +10377,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
-  Future<void> showSpbTemplateImportMenu(Offset globalPosition) async {
+  Future<void> showSpbTemplateImportMenu(Offset globalPosition,
+      {String? folder}) async {
     if (spbObjectMenuPointerActive) return;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final selected = await showMenu<String>(
@@ -10163,32 +10388,31 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         Offset.zero & overlay.size,
       ),
       items: [
-        PopupMenuItem(
-          key: const Key('createTemplateContextAction'),
-          value: 'create',
-          child: Row(
-            children: [
-              spbResourceIcon('icon_add_card.png', 24),
-              const SizedBox(width: 9),
-              const Flexible(child: Text('Создать шаблон')),
-            ],
+        if (folder != null)
+          const PopupMenuItem(
+            key: Key('editTemplateFolderContextAction'),
+            value: 'editFolder',
+            child: ContextMenuLabel('Редактировать папку',
+                icon: Icons.edit_outlined),
           ),
+        const PopupMenuItem(
+          key: Key('createTemplateContextAction'),
+          value: 'create',
+          child:
+              ContextMenuLabel('Создать шаблон', icon: Icons.note_add_outlined),
         ),
         const PopupMenuItem(
           key: Key('importTemplateContextAction'),
           value: 'import',
-          child: Row(
-            children: [
-              Icon(Icons.file_open_outlined, size: 24),
-              SizedBox(width: 9),
-              Flexible(child: Text('Импортировать шаблон')),
-            ],
-          ),
+          child: ContextMenuLabel('Импортировать шаблон',
+              icon: Icons.file_open_outlined),
         ),
       ],
     );
     if (!mounted) return;
-    if (selected == 'create') {
+    if (selected == 'editFolder' && folder != null) {
+      await editSpbTemplateFolder(folder);
+    } else if (selected == 'create') {
       await openTemplateDialog();
     } else if (selected == 'import') {
       await importSpbTemplate();
@@ -10339,7 +10563,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           title: const Text('Удалить шаблон'),
           content: linkedItems.isEmpty
               ? Text(
-                  'Шаблон «${template.name}» будет перемещён во внутреннюю корзину.',
+                  'Шаблон «${template.displayName}» будет перемещён во внутреннюю корзину.',
                 )
               : Column(
                   mainAxisSize: MainAxisSize.min,
@@ -10353,7 +10577,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     if (automaticReplacement != null)
                       Text(
                         'Найден идентичный шаблон: '
-                        '«${automaticReplacement.name}».',
+                        '«${automaticReplacement.displayName}».',
                         key: const Key('automaticTemplateReplacementText'),
                       )
                     else
@@ -10369,9 +10593,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                           for (final option in replacementOptions)
                             DropdownMenuItem(
                               value: option.id,
-                              child: Text(
-                                option.name,
-                                overflow: TextOverflow.ellipsis,
+                              child: ContextMenuLabel(
+                                option.displayName,
+                                icon: Icons.description_outlined,
+                                maxLines: 1,
                               ),
                             ),
                         ],
@@ -10421,7 +10646,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     SessionUndoEntry? undoEntry;
     try {
       undoEntry = await captureSessionUndo(
-        'Удаление шаблона: ${template.name}',
+        'Удаление шаблона: ${template.displayName}',
         template.iconId,
       );
       final reassignedItems = replacement == null
@@ -10460,7 +10685,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         SessionTrashEntry(
           kind: SessionTrashKind.template,
           id: template.id,
-          title: template.name,
+          title: template.displayName,
           iconId: template.iconId,
         ),
       );
@@ -10776,38 +11001,22 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         Offset.zero & overlay.size,
       ),
       items: [
-        PopupMenuItem(
-          key: const Key('createFolderRootContextAction'),
+        const PopupMenuItem(
+          key: Key('createFolderRootContextAction'),
           value: 'folder',
-          child: Row(
-            children: [
-              spbResourceIcon('icon_add_folder.png', 24),
-              const SizedBox(width: 9),
-              const Flexible(child: Text('Создать папку')),
-            ],
-          ),
+          child: ContextMenuLabel('Создать папку',
+              icon: Icons.create_new_folder_outlined),
         ),
-        PopupMenuItem(
-          key: const Key('createCardRootContextAction'),
+        const PopupMenuItem(
+          key: Key('createCardRootContextAction'),
           value: 'card',
-          child: Row(
-            children: [
-              spbResourceIcon('icon_add_card.png', 24),
-              const SizedBox(width: 9),
-              const Flexible(child: Text('Создать карточку')),
-            ],
-          ),
+          child: ContextMenuLabel('Создать карточку',
+              icon: Icons.note_add_outlined),
         ),
         const PopupMenuItem(
           key: Key('importRootContextAction'),
           value: 'import',
-          child: Row(
-            children: [
-              Icon(Icons.file_open_outlined, size: 24),
-              SizedBox(width: 9),
-              Flexible(child: Text('Импорт')),
-            ],
-          ),
+          child: ContextMenuLabel('Импорт', icon: Icons.file_open_outlined),
         ),
       ],
     );
@@ -10843,42 +11052,42 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           PopupMenuItem(
             key: Key('viewFolderContextAction'),
             value: 'view',
-            child: Text('Просмотр'),
+            child:
+                ContextMenuLabel('Просмотр', icon: Icons.visibility_outlined),
           ),
           PopupMenuItem(
             key: Key('createInFolderContextAction'),
             value: 'create',
-            child: Row(
-              children: [
-                Expanded(child: Text('Создать')),
-                Icon(Icons.chevron_right),
-              ],
-            ),
+            child: ContextMenuLabel('Создать',
+                icon: Icons.add, trailing: Icons.chevron_right),
           ),
           PopupMenuItem(
             key: Key('editFolderContextAction'),
             value: 'edit',
-            child: Text('Редактировать'),
+            child: ContextMenuLabel('Редактировать', icon: Icons.edit_outlined),
           ),
           PopupMenuItem(
             key: Key('moveFolderContextAction'),
             value: 'move',
-            child: Text('Переместить'),
+            child: ContextMenuLabel('Переместить',
+                icon: Icons.drive_file_move_outline),
           ),
           PopupMenuItem(
             key: Key('exportFolderContextAction'),
             value: 'export',
-            child: Text('Экспортировать'),
+            child: ContextMenuLabel('Экспортировать',
+                icon: Icons.file_upload_outlined),
           ),
           PopupMenuItem(
             key: Key('importFolderContextAction'),
             value: 'import',
-            child: Text('Импортировать'),
+            child: ContextMenuLabel('Импортировать',
+                icon: Icons.file_open_outlined),
           ),
           PopupMenuItem(
             key: Key('deleteFolderContextAction'),
             value: 'delete',
-            child: Text('Удалить'),
+            child: ContextMenuLabel('Удалить', icon: Icons.delete_outline),
           ),
         ],
       );
@@ -10947,27 +11156,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         Offset.zero & overlay.size,
       ),
       items: [
-        PopupMenuItem(
-          key: const Key('createFolderInFolderContextAction'),
+        const PopupMenuItem(
+          key: Key('createFolderInFolderContextAction'),
           value: 'folder',
-          child: Row(
-            children: [
-              spbResourceIcon('icon_add_folder.png', 24),
-              const SizedBox(width: 9),
-              const Flexible(child: Text('Создать папку')),
-            ],
-          ),
+          child: ContextMenuLabel('Создать папку',
+              icon: Icons.create_new_folder_outlined),
         ),
-        PopupMenuItem(
-          key: const Key('createCardInFolderContextAction'),
+        const PopupMenuItem(
+          key: Key('createCardInFolderContextAction'),
           value: 'card',
-          child: Row(
-            children: [
-              spbResourceIcon('icon_add_card.png', 24),
-              const SizedBox(width: 9),
-              const Flexible(child: Text('Создать карточку')),
-            ],
-          ),
+          child: ContextMenuLabel('Создать карточку',
+              icon: Icons.note_add_outlined),
         ),
       ],
     );
@@ -11000,55 +11199,61 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             const PopupMenuItem(
               key: Key('viewCardContextAction'),
               value: 'view',
-              child: Text('Просмотр'),
+              child:
+                  ContextMenuLabel('Просмотр', icon: Icons.visibility_outlined),
             ),
           if (!multiple)
             const PopupMenuItem(
               key: Key('createCardContextAction'),
               value: 'create',
-              child: Text('Создать'),
+              child: ContextMenuLabel('Создать', icon: Icons.add),
             ),
           if (!multiple)
             const PopupMenuItem(
               key: Key('editCardContextAction'),
               value: 'edit',
-              child: Text('Редактировать'),
+              child:
+                  ContextMenuLabel('Редактировать', icon: Icons.edit_outlined),
             ),
           if (!multiple)
             const PopupMenuItem(
               key: Key('copyCardContextAction'),
               value: 'copy',
-              child: Text('Копировать'),
+              child: ContextMenuLabel('Копировать', icon: Icons.content_copy),
             ),
           PopupMenuItem(
             key: const Key('moveCardContextAction'),
             value: 'move',
-            child: Text(
+            child: ContextMenuLabel(
               multiple
                   ? 'Переместить карточки (${actionItems.length})'
                   : 'Переместить',
+              icon: Icons.drive_file_move_outline,
             ),
           ),
           PopupMenuItem(
             key: const Key('exportObjectContextAction'),
             value: 'export',
-            child: Text(
+            child: ContextMenuLabel(
               multiple
                   ? 'Экспортировать карточки (${actionItems.length})'
                   : 'Экспортировать',
+              icon: Icons.file_upload_outlined,
             ),
           ),
           if (!multiple)
             const PopupMenuItem(
               key: Key('importCardContextAction'),
               value: 'import',
-              child: Text('Импортировать'),
+              child: ContextMenuLabel('Импортировать',
+                  icon: Icons.file_open_outlined),
             ),
           PopupMenuItem(
             key: const Key('deleteCardContextAction'),
             value: 'delete',
-            child: Text(
+            child: ContextMenuLabel(
               multiple ? 'Удалить карточки (${actionItems.length})' : 'Удалить',
+              icon: Icons.delete_outline,
             ),
           ),
         ],
@@ -12524,7 +12729,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   CardTemplate? selectedSpbTemplate() {
     if (templates.isEmpty) return null;
     for (final template in templates) {
-      if (template.id == selectedTemplateId) return template;
+      if (template.id == selectedTemplateId &&
+          (selectedTemplateFolder == null ||
+              spbTemplateFolderFor(template) == selectedTemplateFolder)) {
+        return template;
+      }
+    }
+    if (selectedTemplateFolder != null) {
+      return spbTemplatesInFolder(selectedTemplateFolder!, '').firstOrNull;
     }
     return templates.first;
   }
@@ -12813,7 +13025,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   const SizedBox(height: WorkspaceGeometry.blockGap),
                   if (spbFrequentExpanded)
                     buildSpbActionGroup(
-                      'Часто используемые',
+                      'Последние',
                       [
                         for (final item in frequent.take(10))
                           (
@@ -12839,7 +13051,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     )
                   else
                     buildSpbActionGroup(
-                      'Часто используемые',
+                      'Последние',
                       const [],
                       shellStyle: true,
                       sectionExpanded: false,
@@ -12907,7 +13119,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 const SizedBox(height: WorkspaceGeometry.blockGap),
                 if (spbFrequentExpanded)
                   buildSpbActionGroup(
-                    'Часто используемые',
+                    'Последние',
                     [
                       for (final item in frequent.take(10))
                         (
@@ -12931,7 +13143,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   )
                 else
                   buildSpbActionGroup(
-                    'Часто используемые',
+                    'Последние',
                     const [],
                     sectionExpanded: false,
                     onExpand: () => setState(() => spbFrequentExpanded = true),
@@ -12969,27 +13181,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         Offset.zero & overlay.size,
       ),
       items: [
-        PopupMenuItem(
-          key: const Key('createTemplateRightContextAction'),
+        const PopupMenuItem(
+          key: Key('createTemplateRightContextAction'),
           value: 'create',
-          child: Row(
-            children: [
-              spbResourceIcon('icon_add_card.png', 24),
-              const SizedBox(width: 9),
-              const Flexible(child: Text('Создать шаблон')),
-            ],
-          ),
+          child:
+              ContextMenuLabel('Создать шаблон', icon: Icons.note_add_outlined),
         ),
         const PopupMenuItem(
           key: Key('importTemplateRightContextAction'),
           value: 'import',
-          child: Row(
-            children: [
-              Icon(Icons.file_open_outlined, size: 24),
-              SizedBox(width: 9),
-              Flexible(child: Text('Импортировать шаблон')),
-            ],
-          ),
+          child: ContextMenuLabel('Импортировать шаблон',
+              icon: Icons.file_open_outlined),
         ),
       ],
     );
@@ -14400,13 +14602,26 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   List<SecretItem> filteredItems() {
+    final query = searchController.text.trim();
     final filtered = items.where((item) {
       final template = templateFor(item.templateId);
       final text =
           '${item.title} ${item.category} ${template.name} ${item.values.values.join(' ')}'
               .toLowerCase();
       return (templateFilter.isEmpty || item.templateId == templateFilter) &&
-          text.contains(searchController.text.toLowerCase());
+          (query.isEmpty ||
+              (spbExactSearch
+                  ? spbExactSearchMatches(
+                      [
+                        item.title,
+                        item.category,
+                        template.name,
+                        template.displayName,
+                        ...item.values.values
+                      ],
+                      query,
+                    )
+                  : text.contains(query.toLowerCase())));
     }).toList();
     if (sortMode == 'title_asc') {
       filtered.sort((a, b) => a.title.compareTo(b.title));
@@ -15272,7 +15487,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       final imported = decodeSwtTemplate(Uint8List.fromList(data));
       final saved = await saveSpbTemplateDefinition(imported, isNew: true);
       if (saved) {
-        showTemplateActionMessage('Шаблон «${imported.name}» импортирован.');
+        showTemplateActionMessage(
+            'Шаблон «${imported.displayName}» импортирован.');
       }
     } catch (error) {
       showTemplateActionMessage('Не удалось импортировать SWT: $error');
@@ -15293,7 +15509,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       });
       final data = Uint8List.fromList(utf8.encode(payload));
       final safeName =
-          template.name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
+          template.displayName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Экспорт шаблона',
         fileName: '${safeName.isEmpty ? 'Шаблон' : safeName}.swt',
@@ -15308,7 +15524,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ensureTargetIsNotActiveVault(outputPath);
         await writeBytesAtomically(File(outputPath), data);
       }
-      showTemplateActionMessage('Шаблон «${template.name}» экспортирован.');
+      showTemplateActionMessage(
+          'Шаблон «${template.displayName}» экспортирован.');
     } catch (error) {
       showTemplateActionMessage('Не удалось экспортировать SWT: $error');
     }
@@ -15329,7 +15546,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }) async {
     final saved = await showDialog<CardTemplate>(
       context: context,
-      builder: (context) => TemplateEditorDialog(initial: draft ?? template),
+      builder: (context) => TemplateEditorDialog(
+        initial: draft ?? template,
+        initialCategoryPath: selectedTemplateFolder ?? '',
+      ),
     );
     if (saved == null) return;
     await saveSpbTemplateDefinition(saved, isNew: template == null);
@@ -15411,6 +15631,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         setState(() {
           applySpbSnapshot(updated);
           selectedTemplateId = prepared.id;
+          selectedTemplateFolder = spbTemplateFolderFor(prepared);
+          expandedTemplateFolders.add(selectedTemplateFolder!);
           if (written) message = null;
         });
         commitSessionUndo(undoEntry);
@@ -15930,11 +16152,7 @@ class _FieldValueRowState extends State<FieldValueRow> {
       items: const [
         PopupMenuItem(
           value: 'copy',
-          child: ListTile(
-            dense: true,
-            leading: Icon(Icons.copy),
-            title: Text('Копировать'),
-          ),
+          child: ContextMenuLabel('Копировать', icon: Icons.content_copy),
         ),
       ],
     );
@@ -16647,6 +16865,7 @@ class CategoryEditorDialog extends StatefulWidget {
     required this.initialName,
     required this.initialIconId,
     this.initialColorId = 'template_white',
+    this.allowDelete = true,
     super.key,
   });
 
@@ -16654,6 +16873,7 @@ class CategoryEditorDialog extends StatefulWidget {
   final String initialName;
   final String initialIconId;
   final String initialColorId;
+  final bool allowDelete;
 
   @override
   State<CategoryEditorDialog> createState() => _CategoryEditorDialogState();
@@ -16831,7 +17051,7 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      if (widget.editing) ...[
+                      if (widget.editing && widget.allowDelete) ...[
                         SpbGradientActionButton(
                           key: const Key('categoryDeleteButton'),
                           icon: Icons.delete_outline,
@@ -17124,7 +17344,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
         PopupMenuItem(
           key: Key('copyAllCardFieldsAction'),
           value: 'copyAll',
-          child: Text('Скопировать всё'),
+          child: ContextMenuLabel('Скопировать всё', icon: Icons.content_copy),
         ),
       ],
     );
@@ -18333,16 +18553,31 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                         onTap: undoHistory.isEmpty ? null : undoLastAction,
                       ),
                       const SizedBox(width: 6),
-                      SpbGradientActionButton(
-                        key: const Key('cardSaveButton'),
-                        icon: Icons.check,
-                        tooltip: 'Сохранить карточку',
-                        tooltipPreferBelow:
-                            defaultTargetPlatform != TargetPlatform.android,
-                        colors: const [Color(0xff5bc96d), Color(0xff08772f)],
-                        onTap: saveCard,
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: title,
+                        builder: (context, value, child) {
+                          if (widget.initial == null &&
+                              value.text.trim().isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return child!;
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.only(right: 6),
+                          child: SpbGradientActionButton(
+                            key: const Key('cardSaveButton'),
+                            icon: Icons.check,
+                            tooltip: 'Сохранить карточку',
+                            tooltipPreferBelow:
+                                defaultTargetPlatform != TargetPlatform.android,
+                            colors: const [
+                              Color(0xff5bc96d),
+                              Color(0xff08772f),
+                            ],
+                            onTap: saveCard,
+                          ),
+                        ),
                       ),
-                      const SizedBox(width: 6),
                       SpbGradientActionButton(
                         key: const Key('cardCloseButton'),
                         icon: Icons.close,
@@ -18619,7 +18854,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                 child: includeMenuIcons
                     ? cardTemplateMenuLabel(entry)
                     : Text(
-                        entry.name,
+                        entry.displayName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -18632,7 +18867,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                     Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        entry.name,
+                        entry.displayName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -18728,37 +18963,11 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   }
 
   Widget cardTemplateMenuLabel(CardTemplate entry) {
-    return Row(
-      children: [
-        Container(
-          key: ValueKey('cardTemplateIcon-${entry.id}'),
-          width: 42,
-          height: 42,
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            border: Border.all(color: const Color(0xff82929d)),
-          ),
-          child: FittedBox(
-            fit: BoxFit.contain,
-            child: SizedBox(
-              width: 64,
-              height: 64,
-              child: Center(
-                child: templateIconWidget(
-                  entry.iconId,
-                  size: 60,
-                  color: templateDisplayPictogramColor(entry),
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis),
-        ),
-      ],
+    return ContextMenuLabel(
+      entry.displayName,
+      key: ValueKey('cardTemplateIcon-${entry.id}'),
+      icon: Icons.description_outlined,
+      maxLines: 1,
     );
   }
 
@@ -19184,26 +19393,13 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   }
 
   Widget cardCategoryMenuLabel(String value, String label, String iconId) {
-    return Row(
-      children: [
-        SizedBox(
-          key: ValueKey('cardCategoryMenuIcon-$value'),
-          width: 34,
-          height: 34,
-          child: Center(
-            child: templateIconWidget(
-              iconId,
-              size: 30,
-              color: pictogramColorForBackground(editorBackgroundColor),
-              scaleOriginalToFit: true,
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
-        ),
-      ],
+    return ContextMenuLabel(
+      label,
+      key: ValueKey('cardCategoryMenuIcon-$value'),
+      icon: value == newCategoryValue
+          ? Icons.create_new_folder_outlined
+          : Icons.folder_outlined,
+      maxLines: 1,
     );
   }
 
@@ -19749,7 +19945,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         PopupMenuItem<String>(
           key: Key('cardEditorPasteAttachmentMenuItem'),
           value: 'paste',
-          child: Text('Paste'),
+          child: ContextMenuLabel('Paste', icon: Icons.content_paste),
         ),
       ],
     );
@@ -19858,7 +20054,7 @@ class TemplatePreviewDialog extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        template.name,
+                        template.displayName,
                         key: const Key('templatePreviewTitle'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -20032,9 +20228,14 @@ class TemplatePreviewDialog extends StatelessWidget {
 }
 
 class TemplateEditorDialog extends StatefulWidget {
-  const TemplateEditorDialog({this.initial, super.key});
+  const TemplateEditorDialog({
+    this.initial,
+    this.initialCategoryPath = '',
+    super.key,
+  });
 
   final CardTemplate? initial;
+  final String initialCategoryPath;
 
   @override
   State<TemplateEditorDialog> createState() => _TemplateEditorDialogState();
@@ -20129,11 +20330,12 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   @override
   void initState() {
     super.initState();
-    name = TextEditingController(text: widget.initial?.name ?? '');
+    name = TextEditingController(text: widget.initial?.displayName ?? '');
     final initialIconId = widget.initial?.iconId;
     iconId = initialIconId ?? spbPasswordTemplateIconAsset;
     colorId = widget.initial?.colorId ?? 'template_white';
-    categoryPath = widget.initial?.categoryPath ?? '';
+    categoryPath =
+        widget.initial?.displayCategoryPath ?? widget.initialCategoryPath;
     spbColor = widget.initial?.spbColor;
     customIconBytes = widget.initial?.embeddedIconBase64 == null
         ? null
@@ -20264,7 +20466,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       ),
       alignment: Alignment.centerLeft,
       child: Text(
-        widget.initial?.name ?? 'Новый шаблон',
+        widget.initial?.displayName ?? 'Новый шаблон',
         key: const Key('templateTitleNameField'),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -20562,14 +20764,25 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
             onTap: undoHistory.isEmpty ? null : undoLastAction,
           ),
           const SizedBox(width: 6),
-          templateActionButton(
-            key: const Key('templateSaveButton'),
-            icon: Icons.check,
-            tooltip: 'Сохранить шаблон',
-            colors: const [Color(0xff5bc96d), Color(0xff08772f)],
-            onTap: saveTemplate,
+          ValueListenableBuilder<TextEditingValue>(
+            valueListenable: name,
+            builder: (context, value, child) {
+              if (widget.initial == null && value.text.trim().isEmpty) {
+                return const SizedBox.shrink();
+              }
+              return child!;
+            },
+            child: Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: templateActionButton(
+                key: const Key('templateSaveButton'),
+                icon: Icons.check,
+                tooltip: 'Сохранить шаблон',
+                colors: const [Color(0xff5bc96d), Color(0xff08772f)],
+                onTap: saveTemplate,
+              ),
+            ),
           ),
-          const SizedBox(width: 6),
           templateActionButton(
             key: const Key('templateCloseButton'),
             icon: Icons.close,
@@ -20681,38 +20894,54 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                         items: const [
                           DropdownMenuItem(
                             value: 'text',
-                            child: Text('Маленькая строка'),
+                            child: ContextMenuLabel('Маленькая строка',
+                                icon: Icons.short_text, maxLines: 1),
                           ),
                           DropdownMenuItem(
                             value: 'username',
-                            child: Text('Логин'),
+                            child: ContextMenuLabel('Логин',
+                                icon: Icons.person_outline, maxLines: 1),
                           ),
                           DropdownMenuItem(
                             value: 'multiline_note',
-                            child: Text('Большая строка'),
+                            child: ContextMenuLabel('Большая строка',
+                                icon: Icons.notes, maxLines: 1),
                           ),
                           DropdownMenuItem(
                             value: 'password',
-                            child: Text('Пароль'),
+                            child: ContextMenuLabel('Пароль',
+                                icon: Icons.lock_outline, maxLines: 1),
                           ),
                           DropdownMenuItem(
                             value: 'custom_secret',
-                            child: Text('Секрет'),
+                            child: ContextMenuLabel('Секрет',
+                                icon: Icons.visibility_off_outlined,
+                                maxLines: 1),
                           ),
                           DropdownMenuItem(
                             value: 'number',
-                            child: Text('Число'),
+                            child: ContextMenuLabel('Число',
+                                icon: Icons.pin_outlined, maxLines: 1),
                           ),
                           DropdownMenuItem(
                             value: 'email',
-                            child: Text('Email'),
+                            child: ContextMenuLabel('Email',
+                                icon: Icons.alternate_email, maxLines: 1),
                           ),
                           DropdownMenuItem(
                             value: 'phone',
-                            child: Text('Телефон'),
+                            child: ContextMenuLabel('Телефон',
+                                icon: Icons.phone_outlined, maxLines: 1),
                           ),
-                          DropdownMenuItem(value: 'date', child: Text('Дата')),
-                          DropdownMenuItem(value: 'url', child: Text('WEB')),
+                          DropdownMenuItem(
+                              value: 'date',
+                              child: ContextMenuLabel('Дата',
+                                  icon: Icons.calendar_today_outlined,
+                                  maxLines: 1)),
+                          DropdownMenuItem(
+                              value: 'url',
+                              child: ContextMenuLabel('WEB',
+                                  icon: Icons.language, maxLines: 1)),
                         ],
                         onChanged: (value) {
                           rememberCurrentAction();
@@ -21143,11 +21372,17 @@ class IconEditorTarget extends StatelessWidget {
               Rect.fromLTWH(position.dx, position.dy, 0, 0),
               MediaQuery.sizeOf(context)),
           items: [
-            const PopupMenuItem(value: 'paste', child: Text('Вставить')),
-            const PopupMenuItem(value: 'file', child: Text('Выбрать файл')),
+            const PopupMenuItem(
+                value: 'paste',
+                child: ContextMenuLabel('Вставить', icon: Icons.content_paste)),
+            const PopupMenuItem(
+                value: 'file',
+                child: ContextMenuLabel('Выбрать файл',
+                    icon: Icons.file_open_outlined)),
             for (final folder in IconCatalogKind.values)
               PopupMenuItem(
-                  value: folder.storageKey, child: Text(folder.label)),
+                  value: folder.storageKey,
+                  child: ContextMenuLabel(folder.label, icon: folder.icon)),
           ]);
       if (action == null || !context.mounted) return;
       if (action == 'file') {

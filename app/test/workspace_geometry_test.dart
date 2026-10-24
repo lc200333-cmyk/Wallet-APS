@@ -355,7 +355,12 @@ void main() {
             tester, '${platform.name}-${(scale * 100).round()}', scale);
 
         // The same metrics apply when switching the existing sections.
-        state.setState(() => state.mobileTemplatesOpen = true);
+        state.setState(() {
+          state.mobileTemplatesOpen = true;
+          state.expandedTemplateFolders.add(
+            state.spbTemplateFolderFor(state.templates.first),
+          );
+        });
         await tester.pumpAndSettle();
         final template = find.byKey(
           ValueKey('spbCentralTemplate-${state.templates.first.id}'),
@@ -568,6 +573,9 @@ void main() {
       state.spbSubmittedSearchQuery = '';
       state.mobileTemplatesOpen = true;
       state.mobilePane = 0;
+      state.expandedTemplateFolders.add(
+        state.spbTemplateFolderFor(state.templates.first),
+      );
     });
     await tester.pumpAndSettle();
     final templateRow = find.byKey(

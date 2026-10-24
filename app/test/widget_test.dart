@@ -1100,7 +1100,7 @@ void main() {
     expect(find.byKey(const Key('cardBoundIcon')), findsOneWidget);
     expect(find.byKey(const Key('cardUndoButton')), findsOneWidget);
     expect(find.byKey(const Key('cardCloseButton')), findsOneWidget);
-    expect(find.byKey(const Key('cardSaveButton')), findsOneWidget);
+    expect(find.byKey(const Key('cardSaveButton')), findsNothing);
     expect(
       tester
           .widget<TextField>(find.byKey(const Key('cardTitleField')))
@@ -3987,7 +3987,7 @@ void main() {
     expect(find.byKey(const ValueKey('spbCollapseЗадачи')), findsOneWidget);
     expect(find.byKey(const ValueKey('spbCollapseНайдено')), findsOneWidget);
     expect(
-      find.byKey(const ValueKey('spbCollapseЧасто используемые')),
+      find.byKey(const ValueKey('spbCollapseПоследние')),
       findsOneWidget,
     );
     expect(find.byKey(const Key('mobilePaneBack')), findsOneWidget);
@@ -4431,10 +4431,12 @@ void main() {
 
     await tester.tap(find.text('Шаблоны'));
     await tester.pumpAndSettle();
-    // Первая панель содержит список шаблонов.
+    // Первая панель содержит папки, раскрытие показывает шаблоны.
     expect(find.text('Шаблоны'), findsOneWidget);
     expect(find.text('Мои карточки'), findsOneWidget);
     expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('spbTemplateFolder-Другие')));
+    await tester.pumpAndSettle();
     final templateTreeEntries = find.byWidgetPredicate(
       (widget) =>
           widget.key is ValueKey<String> &&
@@ -4492,7 +4494,7 @@ void main() {
     expect(mobileTemplateSurfaceSize.height, greaterThanOrEqualTo(500));
     expect(find.byKey(const Key('templateBoundIcon')), findsOneWidget);
     expect(find.byKey(const Key('templateUndoButton')), findsOneWidget);
-    expect(find.byKey(const Key('templateSaveButton')), findsOneWidget);
+    expect(find.byKey(const Key('templateSaveButton')), findsNothing);
     expect(find.byKey(const Key('templateCloseButton')), findsOneWidget);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;

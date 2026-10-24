@@ -7,6 +7,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../data/legacy_swl/legacy_swl_codec.dart';
 import '../domain/card_layout.dart';
+import '../features/templates/template_folders.dart';
 import '../services/wallet_integrity_service.dart';
 import 'spb_wallet_attachment_codec.dart';
 import 'spb_wallet_crypto.dart';
@@ -915,6 +916,88 @@ class SpbWalletDatabase {
     } catch (_) {
       return const [];
     }
+  }
+
+  List<SpbWalletTemplateFolder> loadTemplateFolders() {
+    if (_columns('actitpass_TemplateFolder').isEmpty) return const [];
+    return _db.select('SELECT * FROM actitpass_TemplateFolder').map((row) {
+      return SpbWalletTemplateFolder(
+        name: crypto.decryptText(row['Name']),
+        iconId: _string(row['IconID']),
+        colorId: _string(row['ColorID']),
+        hidden: row['Hidden'] == 1,
+      );
+    }).toList();
+  }
+
+  void editTemplateFolder(String oldName, String newName,
+      {required String iconId, required String colorId}) {
+    final name = canonicalTemplateFolder(newName);
+    if (name.isEmpty || name.contains('/') || name.contains(':')) {
+      throw const SpbWalletOpenException('Некорректное имя папки шаблонов.');
+    }
+    _transaction(() {
+      final settings = loadTemplateFolders();
+      final templates = loadSnapshot().templates;
+      final hidden =
+          settings.where((folder) => folder.hidden).map((f) => f.name).toSet();
+      final names = <String>{
+        ...defaultTemplateFolders.where((folder) => !hidden.contains(folder)),
+        ...settings.where((folder) => !folder.hidden).map((f) => f.name),
+        ...templates.map((t) => templateFolderFor(t.name, t.categoryPath)),
+      };
+      if (!names.contains(oldName)) {
+        throw const SpbWalletOpenException('Папка шаблонов не найдена.');
+      }
+      if (names.any((folder) =>
+          folder != oldName && folder.toLowerCase() == name.toLowerCase())) {
+        throw const SpbWalletOpenException(
+            'Папка с таким именем уже существует.');
+      }
+      _db.execute('''CREATE TABLE IF NOT EXISTS actitpass_TemplateFolder (
+ID TEXT NOT NULL PRIMARY KEY,
+Name BLOB NOT NULL,
+IconID TEXT NOT NULL,
+ColorID TEXT NOT NULL,
+Hidden INTEGER NOT NULL DEFAULT 0
+)''');
+      void store(String folderName, bool hidden) {
+        final existing = _db
+            .select('SELECT ID, Name FROM actitpass_TemplateFolder')
+            .where((row) => crypto.decryptText(row['Name']) == folderName)
+            .firstOrNull;
+        if (existing == null) {
+          _db.execute(
+              'INSERT INTO actitpass_TemplateFolder (ID, Name, IconID, ColorID, Hidden) VALUES (?, ?, ?, ?, ?)',
+              [
+                makeId(),
+                crypto.encryptText(folderName),
+                iconId,
+                colorId,
+                hidden ? 1 : 0
+              ]);
+        } else {
+          _db.execute(
+              'UPDATE actitpass_TemplateFolder SET IconID = ?, ColorID = ?, Hidden = ? WHERE ID = ?',
+              [iconId, colorId, hidden ? 1 : 0, existing['ID']]);
+        }
+      }
+
+      if (name != oldName) {
+        // Only template names change: card folders, fields and links stay intact.
+        for (final template in templates) {
+          if (templateFolderFor(template.name, template.categoryPath) !=
+              oldName) {
+            continue;
+          }
+          final label = templateLabelInFolder(template.name, oldName);
+          _db.execute('UPDATE spbwlt_Template SET Name = ? WHERE hex(ID) = ?',
+              [crypto.encryptText('$name: $label'), template.id]);
+        }
+        store(oldName, true);
+      }
+      store(name, false);
+    });
   }
 
   void saveRecentlyOpenedCardIds(Iterable<String> cardIds) {
@@ -1967,6 +2050,19 @@ class SpbWalletCardLoadFailure {
 
   final String cardId;
   final String reason;
+}
+
+class SpbWalletTemplateFolder {
+  const SpbWalletTemplateFolder(
+      {required this.name,
+      required this.iconId,
+      required this.colorId,
+      this.hidden = false});
+
+  final String name;
+  final String iconId;
+  final String colorId;
+  final bool hidden;
 }
 
 class SpbWalletTemplateRecord {

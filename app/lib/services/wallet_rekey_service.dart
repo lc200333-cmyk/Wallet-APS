@@ -5,6 +5,7 @@ import '../spb_wallet/spb_wallet_crypto.dart';
 
 abstract final class WalletRekeyService {
   static const Map<String, List<String>> _encryptedTextColumns = {
+    'actitpass_TemplateFolder': ['Name'],
     'spbwlt_Category': ['Name', 'Description'],
     'spbwlt_Card': ['Name', 'Description'],
     'spbwlt_CardAttachment': ['Name'],

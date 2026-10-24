@@ -269,7 +269,11 @@ void main() {
         greaterThan(tester.getTopRight(icon).dx));
     expect(find.byKey(const Key('templateCategoryField')), findsNothing);
 
-    await tester.tap(find.byKey(const Key('templateSaveButton')));
+    expect(find.byKey(const Key('templateSaveButton')), findsNothing);
+    expect(saved, isNull);
+    // Keep checking the save guard independently of the hidden button.
+    final dynamic editor = tester.state(find.byType(TemplateEditorDialog));
+    editor.saveTemplate();
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('templateNameField')), findsOneWidget);
     expect(find.text('Название обязательно'), findsOneWidget);
@@ -278,6 +282,7 @@ void main() {
       find.byKey(const Key('templateNameField')),
       'Сервер',
     );
+    await tester.pump();
     await tester.tap(find.byKey(const Key('templateSaveButton')));
     await tester.pumpAndSettle();
 
@@ -475,6 +480,12 @@ void main() {
     );
     await tester.tap(find.text('Открыть'));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('cardSaveButton')), findsNothing);
+    await tester.enterText(
+      find.byKey(const Key('cardTitleField')),
+      'Карточка',
+    );
+    await tester.pump();
     expect(
       tester
           .widget<TextField>(find.byKey(const ValueKey('cardField-url')))
