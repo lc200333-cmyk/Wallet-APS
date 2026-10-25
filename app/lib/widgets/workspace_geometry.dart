@@ -25,6 +25,8 @@ abstract final class WorkspaceGeometry {
   static const navigatorWidth = 247.0;
   static const actionsContentWidth = 225.0;
   static const actionsScrollbar = 19.0;
+  // Overlay thumb: section backgrounds extend to the window's right edge.
+  static const actionsOverlayScrollbar = 4.0;
   static const actionsWidth = actionsContentWidth + actionsScrollbar;
   static const divider = 4.0;
   static const headerHeight = 25.0;

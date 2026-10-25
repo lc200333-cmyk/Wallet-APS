@@ -309,8 +309,8 @@ void main() {
         expect(gridFolderLabel.style?.fontWeight, FontWeight.normal);
         final actions = find.byKey(const Key('spbActionsPanelScrollbar'));
         expect(tester.getSize(actions).width, 244);
-        expect(tester.widget<Scrollbar>(actions).thickness, 19);
-        final taskHeader = find.byKey(const ValueKey('spbCollapseЗадачи'));
+        expect(tester.widget<Scrollbar>(actions).thickness, 4);
+        final taskHeader = find.byKey(const ValueKey('spbCollapseДействие'));
         expect(
           tester.getSize(taskHeader),
           Size.square(wideAndroid
@@ -493,7 +493,7 @@ void main() {
 
     state.setState(() => state.mobilePane = 1);
     await tester.pumpAndSettle();
-    final centerHeader = tester.widget<Text>(find.text('Мои карточки'));
+    final centerHeader = tester.widget<Text>(find.text('Мои записи'));
     expect(centerHeader.style?.fontSize, 15);
     final grid = find.descendant(
       of: find.byKey(const Key('spbCentralWorkspace')),
@@ -536,9 +536,10 @@ void main() {
 
     state.setState(() => state.mobilePane = 2);
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('spbCollapseЗадачи')), findsOneWidget);
-    final taskHeader = tester.widget<Text>(find.text('Задачи'));
-    expect(taskHeader.style?.fontSize, 17);
+    expect(find.byKey(const ValueKey('spbCollapseДействие')), findsOneWidget);
+    final taskHeader = tester.widget<Text>(find.text('Действие'));
+    expect(taskHeader.style?.fontSize,
+        closeTo(WorkspaceGeometry.menuFontSize * 1.1, 0.001));
     final taskLabel = state.spbTasksForCurrentMode().first.$2 as String;
     final taskIcon = find.byKey(ValueKey('spbActionIcon-$taskLabel'));
     expect(tester.getSize(taskIcon).width,

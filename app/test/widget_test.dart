@@ -2419,8 +2419,8 @@ void main() {
       greaterThan(tester.getTopRight(desktopSearch).dx + 5),
     );
 
-    expect(find.text('Мои карточки'), findsNWidgets(2));
-    expect(find.text('Задачи'), findsOneWidget);
+    expect(find.text('Мои записи'), findsNWidgets(2));
+    expect(find.text('Действие'), findsOneWidget);
     expect(find.text('Создать базу'), findsOneWidget);
     expect(find.byKey(const Key('spbCreateWalletAppIcon')), findsOneWidget);
     expect(find.byKey(const Key('spbArchiveTaskIcon')), findsOneWidget);
@@ -3960,9 +3960,9 @@ void main() {
       closeTo(tester.getTopRight(tabletSearch).dx + 6, 0.1),
     );
 
-    expect(find.text('Мои карточки'), findsOneWidget);
+    expect(find.text('Мои записи'), findsOneWidget);
     expect(find.text('Шаблоны'), findsOneWidget);
-    expect(find.text('Задачи'), findsNothing);
+    expect(find.text('Действие'), findsNothing);
     expect(find.text('−'), findsNothing);
     expect(find.byKey(const Key('spbWalletRoot')), findsNothing);
     expect(find.byKey(const Key('spbClearSearchButton')), findsNothing);
@@ -3983,9 +3983,9 @@ void main() {
     expect(find.byKey(const Key('mobilePaneForward')), findsOneWidget);
     await tester.tap(find.byKey(const Key('mobilePaneForward')));
     await tester.pumpAndSettle();
-    expect(find.text('Задачи'), findsOneWidget);
-    expect(find.byKey(const ValueKey('spbCollapseЗадачи')), findsOneWidget);
-    expect(find.byKey(const ValueKey('spbCollapseНайдено')), findsOneWidget);
+    expect(find.text('Действие'), findsOneWidget);
+    expect(find.byKey(const ValueKey('spbCollapseДействие')), findsOneWidget);
+    expect(find.byKey(const ValueKey('spbCollapseНайденные')), findsOneWidget);
     expect(
       find.byKey(const ValueKey('spbCollapseПоследние')),
       findsOneWidget,
@@ -3996,7 +3996,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('mobilePaneBack')));
     await tester.pumpAndSettle();
-    expect(find.text('Мои карточки'), findsOneWidget);
+    expect(find.text('Мои записи'), findsOneWidget);
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
     await tester.binding.setSurfaceSize(null);
@@ -4433,7 +4433,7 @@ void main() {
     await tester.pumpAndSettle();
     // Первая панель содержит папки, раскрытие показывает шаблоны.
     expect(find.text('Шаблоны'), findsOneWidget);
-    expect(find.text('Мои карточки'), findsOneWidget);
+    expect(find.text('Мои записи'), findsOneWidget);
     expect(find.byKey(const Key('spbMobilePaneHeader')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('spbTemplateFolder-Другие')));
     await tester.pumpAndSettle();
@@ -4481,7 +4481,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('mobilePaneForward')));
     await tester.pumpAndSettle();
-    expect(find.text('Задачи'), findsOneWidget);
+    expect(find.text('Действие'), findsOneWidget);
     expect(find.text('Удалить'), findsOneWidget);
     expect(find.text('Создать новый шаблон'), findsOneWidget);
     expect(find.byKey(const Key('mobilePaneBack')), findsOneWidget);

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_aps/main.dart';
 import 'package:wallet_aps/widgets/context_menu_label.dart';
+import 'package:wallet_aps/widgets/object_selection_menu_label.dart';
 
 Future<dynamic> pumpMenuShell(
     WidgetTester tester, TargetPlatform platform) async {
@@ -163,7 +164,7 @@ void main() {
       debugDefaultTargetPlatformOverride = null;
     });
 
-    testWidgets('selection menus use pictograms on ${platform.name}',
+    testWidgets('selection menus retain object icons on ${platform.name}',
         (tester) async {
       await pumpMenuShell(tester, platform);
       const template = CardTemplate(
@@ -181,7 +182,7 @@ void main() {
         categoryIcons: {'Работа': 'key'},
       )));
       await tester.pumpAndSettle();
-      Future<void> checkSelection(Key key) async {
+      Future<void> checkSelection(Key key, {bool objectChoices = false}) async {
         final target = find.byKey(key);
         await tester.ensureVisible(target);
         await tester.tap(target);
@@ -192,12 +193,18 @@ void main() {
           final row = find
               .byElementPredicate((candidate) => identical(candidate, entry));
           expect(
-              find.descendant(of: row, matching: find.byType(ContextMenuLabel)),
+              find.descendant(
+                  of: row,
+                  matching: find.byType(objectChoices
+                      ? ObjectSelectionMenuLabel
+                      : ContextMenuLabel)),
               findsOneWidget);
-          expect(find.descendant(of: row, matching: find.byType(Image)),
-              findsNothing);
-          expect(find.descendant(of: row, matching: find.byType(ImageIcon)),
-              findsNothing);
+          if (!objectChoices) {
+            expect(find.descendant(of: row, matching: find.byType(Image)),
+                findsNothing);
+            expect(find.descendant(of: row, matching: find.byType(ImageIcon)),
+                findsNothing);
+          }
           for (final icon in tester.widgetList<Icon>(
               find.descendant(of: row, matching: find.byType(Icon)))) {
             expect(icon.size, 24);
@@ -208,8 +215,8 @@ void main() {
         expect(tester.takeException(), isNull);
       }
 
-      await checkSelection(const Key('cardTemplateField'));
-      await checkSelection(const Key('cardCategoryField'));
+      await checkSelection(const Key('cardTemplateField'), objectChoices: true);
+      await checkSelection(const Key('cardCategoryField'), objectChoices: true);
       await tester.pumpWidget(
           const MaterialApp(home: TemplateEditorDialog(initial: template)));
       await tester.pumpAndSettle();

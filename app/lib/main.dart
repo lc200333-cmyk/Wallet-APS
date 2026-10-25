@@ -24,9 +24,12 @@ import 'features/categories/category_path_index.dart';
 import 'features/templates/template_order.dart';
 import 'features/templates/template_folders.dart';
 import 'services/wallet_rekey_service.dart';
+import 'services/password_generator.dart';
 import 'services/platform/secure_clipboard_service.dart';
 import 'widgets/card_surface.dart';
 import 'widgets/context_menu_label.dart';
+import 'widgets/object_selection_menu_label.dart';
+import 'widgets/workspace_section_bar.dart';
 import 'widgets/android_screen_scale.dart';
 import 'widgets/workspace_geometry.dart';
 
@@ -524,6 +527,40 @@ extension IconCatalogKindUi on IconCatalogKind {
         IconCatalogKind.thirdParty => Icons.public_outlined,
         _ => Icons.folder_outlined,
       };
+}
+
+Widget iconCatalogFolderImage(IconCatalogKind kind, double size) {
+  switch (kind) {
+    case IconCatalogKind.spb:
+      return templateIconWidget(
+        'spb://apk_icons/res/drawable-hdpi/icon_path_wallet.png',
+        size: size,
+        scaleOriginalToFit: true,
+      );
+    case IconCatalogKind.pictograms:
+    case IconCatalogKind.brands:
+    case IconCatalogKind.thirdParty:
+      final id = kind == IconCatalogKind.pictograms
+          ? 'third-party://NewIcons/Icons0401.png'
+          : kind == IconCatalogKind.brands
+              ? 'brand://BrendLogo-3D-inner/avg.png'
+              : 'third-party://NewIcons/Icons0322.png';
+      final bytes = brandIconPngs[id] ?? thirdPartyIconPngs[id];
+      if (bytes != null) {
+        return Image.memory(bytes,
+            width: size,
+            height: size,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) =>
+                Icon(Icons.folder_outlined, size: size));
+      }
+      return templateIconWidget(id, size: size, scaleOriginalToFit: true);
+    default:
+      return templateIconWidget(kind.iconId,
+          size: size,
+          color: templatePictogramColor(kind.colorId),
+          scaleOriginalToFit: true);
+  }
 }
 
 IconCatalogKind? iconCatalogKindFromStorageKey(String value) {
@@ -5751,7 +5788,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       });
     }
 
-    await showDialog<void>(
+    final route = DialogRoute<void>(
       context: context,
       barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
@@ -5797,9 +5834,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         onTap: () => pickNewVaultDirectory(setDialogState),
                         decoration: InputDecoration(
                           labelText: 'Назначить путь',
-                          hintText: Platform.isAndroid
-                              ? 'Выберите файл в локальном или облачном хранилище'
-                              : 'Выберите папку для новой базы',
+                          hintText: 'Назначить путь',
                           border: const OutlineInputBorder(),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
@@ -5851,6 +5886,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       ),
                       onChanged: (_) => setDialogState(() {}),
                       compact: true,
+                      allowCopy: true,
                     ),
                     const SizedBox(height: 8),
                     PasswordStrengthBar(
@@ -5867,6 +5903,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         () => showRepeatedPassword = !showRepeatedPassword,
                       ),
                       compact: true,
+                      allowCopy: true,
                     ),
                     const SizedBox(height: 8),
                     SizedBox(
@@ -5902,157 +5939,187 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ),
           actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
           actions: [
-            SizedBox.square(
-              dimension: 48,
-              child: IgnorePointer(
-                ignoring: isCreating,
-                child: Opacity(
-                  opacity: isCreating ? 0.6 : 1,
-                  child: SpbGradientActionButton(
-                    key: const Key('cancelCreateVault'),
-                    icon: Icons.close,
-                    tooltip: 'Отмена',
-                    colors: const [Color(0xffd32b31), Color(0xff7f0609)],
-                    onTap: () => Navigator.of(dialogContext).pop(),
+            SizedBox(
+              width: double.infinity,
+              child: Row(children: [
+                SpbGradientActionButton(
+                  key: const Key('generateNewVaultPassword'),
+                  icon: Icons.password,
+                  tooltip: 'Генератор паролей',
+                  hoverHighlight: true,
+                  colors: const [Color(0xff333333), Color(0xff000000)],
+                  onTap: isCreating
+                      ? null
+                      : () {
+                          final password = generateVaultPassword();
+                          setDialogState(() {
+                            newPasswordController.text = password;
+                            repeatPasswordController.text = password;
+                            dialogError = null;
+                          });
+                        },
+                ),
+                const Spacer(),
+                SizedBox.square(
+                  dimension: 48,
+                  child: IgnorePointer(
+                    ignoring: isCreating,
+                    child: Opacity(
+                      opacity: isCreating ? 0.6 : 1,
+                      child: SpbGradientActionButton(
+                        key: const Key('cancelCreateVault'),
+                        icon: Icons.close,
+                        tooltip: 'Отмена',
+                        colors: const [Color(0xffd32b31), Color(0xff7f0609)],
+                        onTap: () => Navigator.of(dialogContext).pop(),
+                      ),
+                    ),
                   ),
                 ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            SizedBox.square(
-              dimension: 48,
-              child: IgnorePointer(
-                ignoring: isCreating,
-                child: Opacity(
-                  opacity: isCreating ? 0.6 : 1,
-                  child: SpbGradientActionButton(
-                    key: const Key('confirmCreateVault'),
-                    icon: Icons.check,
-                    tooltip: 'Создать базу',
-                    colors: const [Color(0xff43a047), Color(0xff1b5e20)],
-                    onTap: () async {
-                      final selectedDirectory = pathController.text.trim();
-                      final name = nameController.text.trim().replaceAll(
-                            RegExp(r'\.swl$', caseSensitive: false),
-                            '',
-                          );
-                      final newPassword = newPasswordController.text;
-                      if (!Platform.isAndroid && selectedDirectory.isEmpty) {
-                        setDialogState(
-                          () => dialogError =
-                              'Назначьте путь для файла новой базы.',
-                        );
-                        return;
-                      }
-                      if (name.isEmpty) {
-                        setDialogState(
-                          () => dialogError = 'Введите название базы.',
-                        );
-                        return;
-                      }
-                      if (newPassword.isEmpty) {
-                        setDialogState(
-                          () => dialogError = 'Введите новый пароль.',
-                        );
-                        return;
-                      }
-                      if (newPassword != repeatPasswordController.text) {
-                        setDialogState(
-                          () => dialogError = 'Новые пароли не совпадают.',
-                        );
-                        return;
-                      }
-
-                      final previousName = vaultNameController.text;
-                      setDialogState(() {
-                        isCreating = true;
-                        dialogError = null;
-                      });
-                      vaultNameController.text = name;
-                      try {
-                        if (Platform.isAndroid) {
-                          final document = androidDocument ??
-                              await spbWalletChannel
-                                  .invokeMapMethod<String, Object?>(
-                                'createSpbWalletDocument',
-                                {
-                                  'displayName': '$normalizedVaultBaseName.swl',
-                                },
+                const SizedBox(width: 8),
+                SizedBox.square(
+                  dimension: 48,
+                  child: IgnorePointer(
+                    ignoring: isCreating,
+                    child: Opacity(
+                      opacity: isCreating ? 0.6 : 1,
+                      child: SpbGradientActionButton(
+                        key: const Key('confirmCreateVault'),
+                        icon: Icons.check,
+                        tooltip: 'Создать базу',
+                        colors: const [Color(0xff43a047), Color(0xff1b5e20)],
+                        onTap: () async {
+                          final selectedDirectory = pathController.text.trim();
+                          final name = nameController.text.trim().replaceAll(
+                                RegExp(r'\.swl$', caseSensitive: false),
+                                '',
                               );
-                          if (document == null) {
-                            if (dialogContext.mounted) {
-                              setDialogState(() => isCreating = false);
-                            }
+                          final newPassword = newPasswordController.text;
+                          if (!Platform.isAndroid &&
+                              selectedDirectory.isEmpty) {
+                            setDialogState(
+                              () => dialogError =
+                                  'Назначьте путь для файла новой базы.',
+                            );
                             return;
                           }
-                          final directory = await appVaultDirectory();
-                          final targetFile = File(
-                            '${directory.path}${Platform.pathSeparator}'
-                            '${DateTime.now().microsecondsSinceEpoch}_'
-                            '$normalizedVaultBaseName.swl',
-                          );
-                          await createSwlVault(
-                            newPassword,
-                            passwordHint: hintController.text,
-                            targetFile: targetFile,
-                            rememberLocalFile: false,
-                            unlockAfterCreate: false,
-                          );
-                          spbWalletUri = document['uri']?.toString();
-                          spbWalletDisplayPath =
-                              document['displayPath']?.toString() ??
-                                  document['displayName']?.toString();
-                          spbWalletWritable = document['writable'] != false;
-                          final written = await writeBackSpbWallet(force: true);
-                          if (!written) {
-                            throw StateError(
-                              'Не удалось записать новую базу в выбранный файл.',
+                          if (name.isEmpty) {
+                            setDialogState(
+                              () => dialogError = 'Введите название базы.',
                             );
+                            return;
                           }
-                          await rememberRecentVaultEntry(
-                            ExistingVault(
-                              title: document['displayName']?.toString() ??
-                                  '$normalizedVaultBaseName.swl',
-                              uri: spbWalletUri,
-                              displayPath: spbWalletDisplayPath,
-                            ),
-                          );
-                        } else {
-                          final targetFile = File(
-                            '${Directory(selectedDirectory).path}'
-                            '${Platform.pathSeparator}'
-                            '$normalizedVaultBaseName.swl',
-                          );
-                          await createSwlVault(
-                            newPassword,
-                            passwordHint: hintController.text,
-                            targetFile: targetFile,
-                            unlockAfterCreate: false,
-                          );
-                        }
-                        entryMode = EntryMode.openSwl;
-                        createdVault = true;
-                        if (dialogContext.mounted) {
-                          Navigator.of(dialogContext).pop();
-                        }
-                      } catch (error) {
-                        vaultNameController.text = previousName;
-                        if (dialogContext.mounted) {
+                          if (newPassword.isEmpty) {
+                            setDialogState(
+                              () => dialogError = 'Введите новый пароль.',
+                            );
+                            return;
+                          }
+                          if (newPassword != repeatPasswordController.text) {
+                            setDialogState(
+                              () => dialogError = 'Новые пароли не совпадают.',
+                            );
+                            return;
+                          }
+
+                          final previousName = vaultNameController.text;
                           setDialogState(() {
-                            isCreating = false;
-                            dialogError = 'Не удалось создать базу: $error';
+                            isCreating = true;
+                            dialogError = null;
                           });
-                        }
-                      }
-                    },
+                          vaultNameController.text = name;
+                          try {
+                            if (Platform.isAndroid) {
+                              final document = androidDocument ??
+                                  await spbWalletChannel
+                                      .invokeMapMethod<String, Object?>(
+                                    'createSpbWalletDocument',
+                                    {
+                                      'displayName':
+                                          '$normalizedVaultBaseName.swl',
+                                    },
+                                  );
+                              if (document == null) {
+                                if (dialogContext.mounted) {
+                                  setDialogState(() => isCreating = false);
+                                }
+                                return;
+                              }
+                              final directory = await appVaultDirectory();
+                              final targetFile = File(
+                                '${directory.path}${Platform.pathSeparator}'
+                                '${DateTime.now().microsecondsSinceEpoch}_'
+                                '$normalizedVaultBaseName.swl',
+                              );
+                              await createSwlVault(
+                                newPassword,
+                                passwordHint: hintController.text,
+                                targetFile: targetFile,
+                                rememberLocalFile: false,
+                                unlockAfterCreate: false,
+                              );
+                              spbWalletUri = document['uri']?.toString();
+                              spbWalletDisplayPath =
+                                  document['displayPath']?.toString() ??
+                                      document['displayName']?.toString();
+                              spbWalletWritable = document['writable'] != false;
+                              final written =
+                                  await writeBackSpbWallet(force: true);
+                              if (!written) {
+                                throw StateError(
+                                  'Не удалось записать новую базу в выбранный файл.',
+                                );
+                              }
+                              await rememberRecentVaultEntry(
+                                ExistingVault(
+                                  title: document['displayName']?.toString() ??
+                                      '$normalizedVaultBaseName.swl',
+                                  uri: spbWalletUri,
+                                  displayPath: spbWalletDisplayPath,
+                                ),
+                              );
+                            } else {
+                              final targetFile = File(
+                                '${Directory(selectedDirectory).path}'
+                                '${Platform.pathSeparator}'
+                                '$normalizedVaultBaseName.swl',
+                              );
+                              await createSwlVault(
+                                newPassword,
+                                passwordHint: hintController.text,
+                                targetFile: targetFile,
+                                unlockAfterCreate: false,
+                              );
+                            }
+                            entryMode = EntryMode.openSwl;
+                            createdVault = true;
+                            if (dialogContext.mounted) {
+                              Navigator.of(dialogContext).pop();
+                            }
+                          } catch (error) {
+                            vaultNameController.text = previousName;
+                            if (dialogContext.mounted) {
+                              setDialogState(() {
+                                isCreating = false;
+                                dialogError = 'Не удалось создать базу: $error';
+                              });
+                            }
+                          }
+                        },
+                      ),
+                    ),
                   ),
                 ),
-              ),
+              ]),
             ),
           ],
         ),
       ),
     );
+    await Navigator.of(context, rootNavigator: true).push(route);
+    // Fields can rebuild during the route's exit animation (e.g. focus/IME
+    // changes after Copy). Release their controllers after overlay removal.
+    await route.completed;
 
     pathController.dispose();
     nameController.dispose();
@@ -6252,6 +6319,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     onChanged: (_) => setDialogState(() {}),
                     onToggle: () => setDialogState(() => showNew = !showNew),
                     compact: true,
+                    allowCopy: true,
                   ),
                   const SizedBox(height: 8),
                   PasswordStrengthBar(
@@ -6267,6 +6335,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     onToggle: () =>
                         setDialogState(() => showRepeat = !showRepeat),
                     compact: true,
+                    allowCopy: true,
                   ),
                   const SizedBox(height: 8),
                   SizedBox(
@@ -6302,86 +6371,110 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             ),
             actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
             actions: [
-              IgnorePointer(
-                ignoring: saving,
-                child: Opacity(
-                  opacity: saving ? 0.6 : 1,
-                  child: SpbGradientActionButton(
-                    key: const Key('cancelChangePassword'),
-                    icon: Icons.close,
-                    tooltip: 'Отменить',
-                    colors: const [Color(0xffff5a5f), Color(0xffa90000)],
-                    onTap: () {
-                      Tooltip.dismissAllToolTips();
-                      Navigator.of(dialogContext).pop(false);
-                    },
+              SizedBox(
+                width: double.infinity,
+                child: Row(children: [
+                  SpbGradientActionButton(
+                    key: const Key('generateChangedVaultPassword'),
+                    icon: Icons.password,
+                    tooltip: 'Генератор паролей',
+                    hoverHighlight: true,
+                    colors: const [Color(0xff333333), Color(0xff000000)],
+                    onTap: saving
+                        ? null
+                        : () {
+                            final password = generateVaultPassword();
+                            setDialogState(() {
+                              newController.text = password;
+                              repeatController.text = password;
+                              errorText = null;
+                            });
+                          },
                   ),
-                ),
-              ),
-              const SizedBox(width: 8),
-              IgnorePointer(
-                ignoring: saving,
-                child: Opacity(
-                  opacity: saving ? 0.6 : 1,
-                  child: SpbGradientActionButton(
-                    key: const Key('confirmChangePassword'),
-                    icon: Icons.check,
-                    tooltip: saving ? 'Сохранение…' : 'Сохранить',
-                    colors: const [Color(0xff5bc96d), Color(0xff08772f)],
-                    onTap: () async {
-                      FocusScope.of(dialogContext).unfocus();
-                      await SystemChannels.textInput.invokeMethod<void>(
-                        'TextInput.hide',
-                      );
-                      await WidgetsBinding.instance.endOfFrame;
-                      final oldPassword = oldController.text;
-                      final newPassword = newController.text;
-                      final repeatedPassword = repeatController.text;
-                      if (oldPassword.isEmpty) {
-                        setDialogState(
-                          () => errorText = 'Введите старый пароль.',
-                        );
-                        return;
-                      }
-                      if (newPassword.isEmpty) {
-                        setDialogState(
-                            () => errorText = 'Введите новый пароль.');
-                        return;
-                      }
-                      if (newPassword != repeatedPassword) {
-                        setDialogState(
-                          () => errorText = 'Новые пароли не совпадают.',
-                        );
-                        return;
-                      }
-                      setDialogState(() {
-                        saving = true;
-                        errorText = null;
-                      });
-                      try {
-                        await (replacePassword ?? replaceCurrentWalletPassword)(
-                          oldPassword: oldPassword,
-                          newPassword: newPassword,
-                          passwordHint: hintController.text,
-                        );
-                        if (dialogContext.mounted) {
+                  const Spacer(),
+                  IgnorePointer(
+                    ignoring: saving,
+                    child: Opacity(
+                      opacity: saving ? 0.6 : 1,
+                      child: SpbGradientActionButton(
+                        key: const Key('cancelChangePassword'),
+                        icon: Icons.close,
+                        tooltip: 'Отменить',
+                        colors: const [Color(0xffff5a5f), Color(0xffa90000)],
+                        onTap: () {
                           Tooltip.dismissAllToolTips();
-                          Navigator.of(dialogContext).pop(true);
-                        }
-                      } catch (error, stackTrace) {
-                        debugPrint(
-                            'Password change failed: $error\n$stackTrace');
-                        if (dialogContext.mounted) {
-                          setDialogState(() {
-                            saving = false;
-                            errorText =
-                                'Не удалось изменить пароль. Проверьте старый пароль.';
-                          });
-                        }
-                      }
-                    },
+                          Navigator.of(dialogContext).pop(false);
+                        },
+                      ),
+                    ),
                   ),
-                ),
+                  const SizedBox(width: 8),
+                  IgnorePointer(
+                    ignoring: saving,
+                    child: Opacity(
+                      opacity: saving ? 0.6 : 1,
+                      child: SpbGradientActionButton(
+                        key: const Key('confirmChangePassword'),
+                        icon: Icons.check,
+                        tooltip: saving ? 'Сохранение…' : 'Сохранить',
+                        colors: const [Color(0xff5bc96d), Color(0xff08772f)],
+                        onTap: () async {
+                          FocusScope.of(dialogContext).unfocus();
+                          await SystemChannels.textInput.invokeMethod<void>(
+                            'TextInput.hide',
+                          );
+                          await WidgetsBinding.instance.endOfFrame;
+                          final oldPassword = oldController.text;
+                          final newPassword = newController.text;
+                          final repeatedPassword = repeatController.text;
+                          if (oldPassword.isEmpty) {
+                            setDialogState(
+                              () => errorText = 'Введите старый пароль.',
+                            );
+                            return;
+                          }
+                          if (newPassword.isEmpty) {
+                            setDialogState(
+                                () => errorText = 'Введите новый пароль.');
+                            return;
+                          }
+                          if (newPassword != repeatedPassword) {
+                            setDialogState(
+                              () => errorText = 'Новые пароли не совпадают.',
+                            );
+                            return;
+                          }
+                          setDialogState(() {
+                            saving = true;
+                            errorText = null;
+                          });
+                          try {
+                            await (replacePassword ??
+                                replaceCurrentWalletPassword)(
+                              oldPassword: oldPassword,
+                              newPassword: newPassword,
+                              passwordHint: hintController.text,
+                            );
+                            if (dialogContext.mounted) {
+                              Tooltip.dismissAllToolTips();
+                              Navigator.of(dialogContext).pop(true);
+                            }
+                          } catch (error, stackTrace) {
+                            debugPrint(
+                                'Password change failed: $error\n$stackTrace');
+                            if (dialogContext.mounted) {
+                              setDialogState(() {
+                                saving = false;
+                                errorText =
+                                    'Не удалось изменить пароль. Проверьте старый пароль.';
+                              });
+                            }
+                          }
+                        },
+                      ),
+                    ),
+                  ),
+                ]),
               ),
             ],
           );
@@ -8176,7 +8269,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Widget buildSpbMyCardsModeButton({required bool selected}) =>
       buildSpbModeButton(
         key: const Key('spbMyCardsModeButton'),
-        label: 'Мои карточки',
+        label: 'Мои записи',
         iconFile: 'icon_wallets.png',
         selected: selected,
         onTap: showSpbCardsMode,
@@ -8230,42 +8323,22 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool opensRootCreationMenu = false,
     bool opensTemplateCreationMenu = false,
   }) {
-    final scale = defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.windows
-        ? 1.1
-        : 1.0;
-    final button = Container(
-      height: WorkspaceGeometry.sectionHeight * scale,
-      padding: const EdgeInsets.symmetric(horizontal: 7.5),
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: _spbBorder)),
-      ),
-      child: Row(
-        children: [
-          iconWidget ??
-              (iconFile == null
-                  ? Icon(
-                      icon ?? Icons.folder_outlined,
-                      size: WorkspaceGeometry.sectionIcon,
-                      color: const Color(0xff33434f),
-                    )
-                  : spbResourceIcon(iconFile, WorkspaceGeometry.sectionIcon)),
-          const SizedBox(width: 5),
-          Expanded(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                  fontSize: WorkspaceGeometry.menuFontSize * scale,
-                  fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
-      ),
+    final button = WorkspaceSectionBar(
+      label: label,
+      selected: selected,
+      showBottomBorder: true,
+      alwaysHighlighted: true,
+      leading: iconWidget ??
+          (iconFile == null
+              ? Icon(
+                  icon ?? Icons.folder_outlined,
+                  size: WorkspaceGeometry.sectionIcon,
+                  color: const Color(0xff33434f),
+                )
+              : spbResourceIcon(iconFile, WorkspaceGeometry.sectionIcon)),
     );
     final surface = Material(
-      color: selected ? const Color(0xffdbeaf5) : const Color(0xfff5f5f5),
+      color: const Color(0xffdbeaf5),
       child: opensRootCreationMenu
           ? spbRootCreationMenuTarget(child: button)
           : InkWell(onTap: onTap, child: button),
@@ -9251,24 +9324,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Widget buildSpbIconCatalogIcon(IconCatalogKind kind, double size) {
-    switch (kind) {
-      case IconCatalogKind.spb:
-        return spbSizedDataIcon(
-          'spb://apk_icons/res/drawable-hdpi/icon_path_wallet.png',
-          size,
-        );
-      case IconCatalogKind.pictograms:
-        return managedIconWidget('third-party://NewIcons/Icons0401.png', size);
-      case IconCatalogKind.brands:
-        return managedIconWidget('brand://BrendLogo-3D-inner/avg.png', size);
-      case IconCatalogKind.thirdParty:
-        return managedIconWidget('third-party://NewIcons/Icons0322.png', size);
-      default:
-        return templateIconWidget(kind.iconId,
-            size: size,
-            color: templatePictogramColor(kind.colorId),
-            scaleOriginalToFit: true);
-    }
+    return iconCatalogFolderImage(kind, size);
   }
 
   Future<void> editIconFolder([IconCatalogKind? folder]) async {
@@ -10784,7 +10840,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               )
             : selectedCategoryPath.isEmpty
                 ? spbSectionHeader(
-                    'Мои карточки',
+                    'Мои записи',
                     fontSize: narrowAndroid
                         ? WorkspaceGeometry.headingFontSize +
                             WorkspaceGeometry.narrowCenterFontIncrease
@@ -11378,7 +11434,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     ),
                               title: Text(
                                 path.isEmpty
-                                    ? 'Мои карточки'
+                                    ? 'Мои записи'
                                     : categoryParts(path).last,
                               ),
                               onTap: () =>
@@ -12972,40 +13028,48 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final matchingFolders = spbMatchingFolderPaths(query);
     final matchingCards = spbMatchingCards(query);
     final foundCount = matchingFolders.length + matchingCards.length;
+    Widget withHeading(Widget body) => Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            KeyedSubtree(
+              key: const Key('spbManagementHeader'),
+              child: spbSectionHeader('Управление'),
+            ),
+            Expanded(
+              child: ScrollConfiguration(
+                behavior:
+                    ScrollConfiguration.of(context).copyWith(scrollbars: false),
+                child: body,
+              ),
+            ),
+          ],
+        );
     if (desktop) {
       return wrapSpbTemplateRightContextMenu(
         Material(
           color: Colors.white,
-          child: Scrollbar(
+          child: withHeading(Scrollbar(
             key: const Key('spbActionsPanelScrollbar'),
             controller: spbActionsPanelScrollController,
             thumbVisibility: true,
             trackVisibility: true,
             interactive: true,
-            thickness: WorkspaceGeometry.actionsScrollbar,
+            thickness: WorkspaceGeometry.actionsOverlayScrollbar,
             child: SingleChildScrollView(
               controller: spbActionsPanelScrollController,
-              padding: const EdgeInsets.fromLTRB(
-                WorkspaceGeometry.blockMargin,
-                WorkspaceGeometry.blockTop,
-                WorkspaceGeometry.blockMargin +
-                    WorkspaceGeometry.actionsScrollbar,
-                WorkspaceGeometry.blockMargin,
-              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   buildSpbActionGroup(
-                    'Задачи',
+                    'Действие',
                     spbTasksForCurrentMode(),
                     shellStyle: true,
                     sectionExpanded: spbTasksExpanded,
                     onExpand: () => setState(() => spbTasksExpanded = true),
                     onCollapse: () => setState(() => spbTasksExpanded = false),
                   ),
-                  const SizedBox(height: WorkspaceGeometry.blockGap),
                   buildSpbCollapsibleHeader(
-                    'Найдено',
+                    'Найденные',
                     expanded: spbFoundExpanded,
                     onExpand: () => setState(() => spbFoundExpanded = true),
                     onCollapse: () => setState(() => spbFoundExpanded = false),
@@ -13022,7 +13086,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       matchingFolders,
                       matchingCards,
                     ),
-                  const SizedBox(height: WorkspaceGeometry.blockGap),
                   if (spbFrequentExpanded)
                     buildSpbActionGroup(
                       'Последние',
@@ -13063,35 +13126,35 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 ],
               ),
             ),
-          ),
+          )),
         ),
       );
     }
     return wrapSpbTemplateRightContextMenu(
-      Scrollbar(
+      withHeading(Scrollbar(
         key: const Key('spbMobileActionsScrollbar'),
         controller: spbMobileActionsScrollController,
         thumbVisibility: true,
         trackVisibility: true,
         interactive: true,
+        thickness: WorkspaceGeometry.actionsOverlayScrollbar,
         child: SingleChildScrollView(
           controller: spbMobileActionsScrollController,
           child: Container(
             color: _spbRightPanel,
-            padding: const EdgeInsets.fromLTRB(12, 14, 31, 12),
+            padding: EdgeInsets.zero,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 buildSpbActionGroup(
-                  'Задачи',
+                  'Действие',
                   spbTasksForCurrentMode(),
                   sectionExpanded: spbTasksExpanded,
                   onExpand: () => setState(() => spbTasksExpanded = true),
                   onCollapse: () => setState(() => spbTasksExpanded = false),
                 ),
-                const SizedBox(height: WorkspaceGeometry.blockGap),
                 buildSpbCollapsibleHeader(
-                  'Найдено',
+                  'Найденные',
                   expanded: spbFoundExpanded,
                   onExpand: () => setState(() => spbFoundExpanded = true),
                   onCollapse: () => setState(() => spbFoundExpanded = false),
@@ -13116,7 +13179,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       controller: spbFoundScrollController,
                     ),
                   ),
-                const SizedBox(height: WorkspaceGeometry.blockGap),
                 if (spbFrequentExpanded)
                   buildSpbActionGroup(
                     'Последние',
@@ -13154,7 +13216,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             ),
           ),
         ),
-      ),
+      )),
     );
   }
 
@@ -13352,7 +13414,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required VoidCallback onExpand,
     required VoidCallback onCollapse,
     bool shellStyle = false,
-    double additionalFontSize = 0,
     Widget? trailing,
   }) {
     final narrowAndroid = spbNarrowAndroid;
@@ -13360,69 +13421,51 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final collapseSize = narrowAndroid || wideAndroid
         ? WorkspaceGeometry.narrowCollapseSize
         : WorkspaceGeometry.collapseSize;
-    return Container(
-      height: WorkspaceGeometry.headerHeight,
-      padding: const EdgeInsets.only(left: 14, right: 3.5),
-      alignment: Alignment.centerLeft,
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-        ),
-        border: shellStyle
-            ? const Border(bottom: BorderSide(color: _spbBorder))
-            : null,
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: narrowAndroid || wideAndroid
-                  ? WorkspaceGeometry.enlargeActionText(
-                      WorkspaceGeometry.androidActionHeadingStyle,
-                      increase: 2 + additionalFontSize)
-                  : WorkspaceGeometry.enlargeActionText(
-                      WorkspaceGeometry.headingStyle,
-                      increase: 2 + additionalFontSize),
-            ),
-          ),
-          if (trailing != null) trailing,
-          SizedBox(
-            width: collapseSize,
-            height: collapseSize,
-            child: Tooltip(
-              message: expanded ? 'Свернуть' : 'Развернуть',
-              child: InkWell(
-                key: ValueKey(
-                  expanded ? 'spbCollapse$title' : 'spbExpand$title',
-                ),
-                onTap: expanded ? onCollapse : onExpand,
-                child: Center(
-                  child: Icon(
-                    expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down,
-                    size: collapseSize,
-                    color: const Color(0xff168bd2),
-                    shadows: const [
-                      Shadow(
-                        color: Color(0xb3ffffff),
-                        offset: Offset(0, -1),
-                        blurRadius: 0.5,
-                      ),
-                      Shadow(
-                        color: Color(0xff075582),
-                        offset: Offset(0, 1.5),
-                        blurRadius: 1,
-                      ),
-                    ],
-                  ),
+    return WorkspaceSectionBar(
+      key: ValueKey('spbActionHeader-$title'),
+      label: title,
+      selected: expanded,
+      showBottomBorder: true,
+      leading: title == 'Последние'
+          ? buildIconsModeImage()
+          : spbResourceIcon(
+              title == 'Найденные' ? 'icon_templates.png' : 'icon_wallets.png',
+              WorkspaceGeometry.sectionIcon),
+      trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+        if (trailing != null) trailing,
+        SizedBox(
+          width: collapseSize,
+          height: collapseSize,
+          child: Tooltip(
+            message: expanded ? 'Свернуть' : 'Развернуть',
+            child: InkWell(
+              key: ValueKey(
+                expanded ? 'spbCollapse$title' : 'spbExpand$title',
+              ),
+              onTap: expanded ? onCollapse : onExpand,
+              child: Center(
+                child: Icon(
+                  expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down,
+                  size: collapseSize,
+                  color: const Color(0xff168bd2),
+                  shadows: const [
+                    Shadow(
+                      color: Color(0xb3ffffff),
+                      offset: Offset(0, -1),
+                      blurRadius: 0.5,
+                    ),
+                    Shadow(
+                      color: Color(0xff075582),
+                      offset: Offset(0, 1.5),
+                      blurRadius: 1,
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
-        ],
-      ),
+        ),
+      ]),
     );
   }
 
@@ -13442,7 +13485,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final androidSpacing = narrowAndroid || wideAndroid;
     final taskFontIncrease =
         (androidSpacing || defaultTargetPlatform == TargetPlatform.windows) &&
-                title == 'Задачи'
+                title == 'Действие'
             ? 1.0
             : 0.0;
     final actionIconSize = androidSpacing
@@ -13483,7 +13526,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             onExpand: onExpand!,
             onCollapse: onCollapse!,
             shellStyle: shellStyle,
-            additionalFontSize: taskFontIncrease,
           );
     if (sectionExpanded == false) return header;
     final actionTiles = [
@@ -15918,6 +15960,7 @@ class PasswordField extends StatelessWidget {
     this.onChanged,
     this.onSubmitted,
     this.compact = false,
+    this.allowCopy = false,
     super.key,
   });
 
@@ -15928,6 +15971,7 @@ class PasswordField extends StatelessWidget {
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
   final bool compact;
+  final bool allowCopy;
 
   @override
   Widget build(BuildContext context) {
@@ -15942,6 +15986,29 @@ class PasswordField extends StatelessWidget {
       smartQuotesType: SmartQuotesType.disabled,
       onChanged: onChanged,
       onSubmitted: onSubmitted,
+      contextMenuBuilder: allowCopy
+          ? (context, editableText) => AdaptiveTextSelectionToolbar.buttonItems(
+                anchors: editableText.contextMenuAnchors,
+                buttonItems: [
+                  if (controller.text.isNotEmpty)
+                    ContextMenuButtonItem(
+                      label: 'Copy',
+                      onPressed: () {
+                        editableText.hideToolbar();
+                        unawaited(copyCardFieldValue(controller.text));
+                      },
+                    ),
+                  ...editableText.contextMenuButtonItems.where(
+                    (item) =>
+                        item.type != ContextMenuButtonType.copy &&
+                        item.type != ContextMenuButtonType.cut,
+                  ),
+                ],
+              )
+          : (context, editableText) =>
+              AdaptiveTextSelectionToolbar.editableText(
+                editableTextState: editableText,
+              ),
       decoration: InputDecoration(
         labelText: label,
         border: const OutlineInputBorder(),
@@ -18038,6 +18105,7 @@ class SpbGradientActionButton extends StatelessWidget {
     required this.colors,
     required this.onTap,
     this.tooltipPreferBelow = true,
+    this.hoverHighlight = false,
     super.key,
   });
 
@@ -18046,6 +18114,7 @@ class SpbGradientActionButton extends StatelessWidget {
   final List<Color> colors;
   final VoidCallback? onTap;
   final bool tooltipPreferBelow;
+  final bool hoverHighlight;
 
   @override
   Widget build(BuildContext context) {
@@ -18061,6 +18130,9 @@ class SpbGradientActionButton extends StatelessWidget {
               color: Colors.transparent,
               child: InkWell(
                 onTap: onTap,
+                hoverColor: hoverHighlight ? const Color(0x40ffffff) : null,
+                focusColor: hoverHighlight ? const Color(0x60ffffff) : null,
+                highlightColor: hoverHighlight ? const Color(0x40ffffff) : null,
                 child: Ink(
                   width: 38,
                   height: 34,
@@ -18963,11 +19035,27 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   }
 
   Widget cardTemplateMenuLabel(CardTemplate entry) {
-    return ContextMenuLabel(
+    Widget icon = templateIconWidget(entry.iconId,
+        size: 24,
+        color: templatePictogramColor(entry.colorId),
+        scaleOriginalToFit: true);
+    final encoded = entry.embeddedIconBase64;
+    if (encoded != null) {
+      try {
+        final fallback = icon;
+        icon = Image.memory(base64Decode(encoded),
+            width: 24,
+            height: 24,
+            fit: BoxFit.contain,
+            errorBuilder: (_, __, ___) => fallback);
+      } on FormatException {
+        // An invalid optional preview must not prevent choosing the template.
+      }
+    }
+    return ObjectSelectionMenuLabel(
       entry.displayName,
       key: ValueKey('cardTemplateIcon-${entry.id}'),
-      icon: Icons.description_outlined,
-      maxLines: 1,
+      image: icon,
     );
   }
 
@@ -19393,13 +19481,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   }
 
   Widget cardCategoryMenuLabel(String value, String label, String iconId) {
-    return ContextMenuLabel(
+    return ObjectSelectionMenuLabel(
       label,
       key: ValueKey('cardCategoryMenuIcon-$value'),
-      icon: value == newCategoryValue
-          ? Icons.create_new_folder_outlined
-          : Icons.folder_outlined,
-      maxLines: 1,
+      image: value == newCategoryValue
+          ? templateIconWidget(
+              'spb://apk_icons/res/drawable-hdpi/icon_add_folder.png',
+              size: 24,
+              scaleOriginalToFit: true)
+          : templateIconWidget(iconId, size: 24, scaleOriginalToFit: true),
     );
   }
 
@@ -21382,7 +21472,9 @@ class IconEditorTarget extends StatelessWidget {
             for (final folder in IconCatalogKind.values)
               PopupMenuItem(
                   value: folder.storageKey,
-                  child: ContextMenuLabel(folder.label, icon: folder.icon)),
+                  child: ObjectSelectionMenuLabel(folder.label,
+                      key: ValueKey('iconEditorFolder-${folder.storageKey}'),
+                      image: iconCatalogFolderImage(folder, 24))),
           ]);
       if (action == null || !context.mounted) return;
       if (action == 'file') {
