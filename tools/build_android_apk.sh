@@ -11,6 +11,15 @@ if [ "$BUILD_MODE" != "debug" ] && [ "$BUILD_MODE" != "release" ]; then
   exit 1
 fi
 
+if [ "$BUILD_MODE" = "release" ]; then
+  : "${DESIGN_ANDROID_KEYSTORE_PATH:?Design release requires its persistent signing key}"
+  : "${DESIGN_ANDROID_KEYSTORE_PASSWORD:?Design release requires its signing password}"
+  [ -f "$DESIGN_ANDROID_KEYSTORE_PATH" ] || {
+    echo "Design signing keystore is unavailable." >&2
+    exit 1
+  }
+fi
+
 command -v flutter >/dev/null 2>&1 || {
   echo "Flutter SDK не найден. Установите Flutter stable и добавьте flutter в PATH." >&2
   exit 1
@@ -76,6 +85,10 @@ patch_plugin_compile_sdk jni
 patch_plugin_compile_sdk jni_flutter
 "$ROOT_DIR/tools/apply_branding.sh"
 flutter build apk "--$BUILD_MODE"
+
+if [ "$BUILD_MODE" = "release" ]; then
+  bash "$ROOT_DIR/tools/verify_design_apk.sh" "$APP_DIR/build/app/outputs/flutter-apk/app-release.apk"
+fi
 
 cp "$APP_DIR/build/app/outputs/flutter-apk/app-$BUILD_MODE.apk" "$DIST_DIR/Wallet-APS-android-$BUILD_MODE.apk"
 if [ "$BUILD_MODE" = "release" ]; then

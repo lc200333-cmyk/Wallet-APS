@@ -22,6 +22,9 @@ Thumbs.db
 *.key
 *.keystore
 *.jks
+*.p12
+*.pfx
+*.dpapi
 key.properties
 *_Conflict.*
 **/*_Conflict.*

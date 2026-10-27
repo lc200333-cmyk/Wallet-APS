@@ -19,6 +19,10 @@ created from main-project commit `f438ef2` (0.7.6+81), with Git history retained
   pushes/releases/settings changes still need task-specific authorization.
 - Keep design changes in small, focused commits. Separate infrastructure,
   distribution identity and version commits from portable UI changes.
+- Android releases use the permanent Design-only key in repository Secrets.
+  Never regenerate/rotate it, substitute a debug key, export its plaintext or
+  transfer it to the main project without separate explicit approval. Every
+  release APK must match `tools/design_android_certificate.sha256`.
 - To return selected work, start a fresh branch from the main project's CURRENT
   master, apply only user-selected UI changes and relevant tests, review the diff
   and use a pull request. Do NOT merge the entire experimental master or copy

@@ -4,6 +4,15 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val designKeystorePath = System.getenv("DESIGN_ANDROID_KEYSTORE_PATH")
+val designKeystorePassword = System.getenv("DESIGN_ANDROID_KEYSTORE_PASSWORD")
+val hasDesignSigning = !designKeystorePath.isNullOrBlank() &&
+    !designKeystorePassword.isNullOrBlank()
+if (gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) } &&
+    !hasDesignSigning) {
+    throw GradleException("Design release requires its persistent signing key; debug fallback is forbidden")
+}
+
 android {
     namespace = "com.lc200333cmyk.walletaps"
     compileSdk = 36
@@ -26,11 +35,25 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasDesignSigning) {
+            create("designRelease") {
+                storeFile = file(designKeystorePath!!)
+                storeType = "PKCS12"
+                storePassword = designKeystorePassword
+                keyAlias = "wallet-aps-design"
+                keyPassword = designKeystorePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (hasDesignSigning) {
+                signingConfigs.getByName("designRelease")
+            } else {
+                null
+            }
         }
     }
 }

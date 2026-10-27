@@ -180,4 +180,5 @@ assert.ok(pkg.scripts['docker:build-image'].includes('COMPOSE_HTTP_TIMEOUT=300')
 assert.ok(pkg.scripts['docker:test'].includes('COMPOSE_HTTP_TIMEOUT=300'));
 
 require('./design_repository_isolation.test.js');
+require('./design_android_signing.test.js');
 console.log('packaging_scaffold.test.js: all tests passed');

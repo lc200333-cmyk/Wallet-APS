@@ -181,10 +181,24 @@ jobs:
 
       - name: Build release APK in Docker
         shell: bash
+        env:
+          DESIGN_ANDROID_KEYSTORE_BASE64: ${{ secrets.DESIGN_ANDROID_KEYSTORE_BASE64 }}
+          DESIGN_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.DESIGN_ANDROID_KEYSTORE_PASSWORD }}
         run: |
+          set -euo pipefail
+          : "${DESIGN_ANDROID_KEYSTORE_BASE64:?Design signing key is missing}"
+          : "${DESIGN_ANDROID_KEYSTORE_PASSWORD:?Design signing password is missing}"
           mkdir -p dist
           docker compose build build-apk
-          HOST_UID="$(id -u)" HOST_GID="$(id -g)" docker compose run --rm -e BUILD_MODE=release build-apk
+          umask 077
+          DESIGN_SIGNING_DIR="$(mktemp -d "$RUNNER_TEMP/design-signing.XXXXXX")"
+          trap 'rm -f -- "$DESIGN_SIGNING_DIR/keystore.p12"; rmdir -- "$DESIGN_SIGNING_DIR"' EXIT
+          printf '%s' "$DESIGN_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$DESIGN_SIGNING_DIR/keystore.p12"
+          HOST_UID="$(id -u)" HOST_GID="$(id -g)" docker compose run --rm \
+            --volume "$DESIGN_SIGNING_DIR:/run/design-signing:ro" \
+            -e BUILD_MODE=release \
+            -e DESIGN_ANDROID_KEYSTORE_PATH=/run/design-signing/keystore.p12 \
+            -e DESIGN_ANDROID_KEYSTORE_PASSWORD build-apk
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4

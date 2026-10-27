@@ -4,6 +4,12 @@ Use [architecture](architecture.md) for code ownership and
 [testing](testing.md) for checks. End-user instructions remain in the root
 README and `docs/user-guide/`; Docker packaging details remain in [builds](builds.md).
 
+Design-only Android signing overrides the historical debug-signing note below.
+Debug CI builds need no release key. Release builds require the permanent
+Design keystore and password through `DESIGN_ANDROID_KEYSTORE_PATH` and
+`DESIGN_ANDROID_KEYSTORE_PASSWORD`; they must not fall back to debug signing.
+See [the Design workflow notes](ai-workflow.md#permanent-design-android-signing).
+
 ## Baseline and setup
 
 1. Inspect `git status --short`, `git branch -av` and `git log -5 --oneline`.

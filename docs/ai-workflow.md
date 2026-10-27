@@ -36,6 +36,44 @@ building. Its container has an independent SDK at `/opt/android-sdk`. The native
 CI APK job retains its host SDK. Application dependencies and verification stay
 unchanged; a paid larger runner is not required for this fix.
 
+### Permanent Design Android signing
+
+On 2026-10-27 the owner approved a separate permanent Android signing key and
+repository Secrets for Design only. The app ID remains
+`com.lc200333cmyk.walletaps.design`. The PKCS12 alias is `wallet-aps-design`;
+only its public certificate fingerprint is tracked in
+`tools/design_android_certificate.sha256`. Do not rotate this key casually:
+Android updates must retain the same signer and increase versionCode.
+
+`DESIGN_ANDROID_KEYSTORE_BASE64` and `DESIGN_ANDROID_KEYSTORE_PASSWORD` are
+repository Secrets, not source files. The release job decodes the keystore into
+a private temporary directory outside the checkout AFTER the image is built,
+mounts it read-only into Docker and forwards the password by environment name,
+not as a command-line value. A trap removes the temporary keystore. Nothing is
+copied into image layers or uploaded as an artifact. Docker context exclusions
+also cover local agent folders, keystores and encrypted backup files.
+
+Gradle uses the dedicated release signing config. The release script fails
+early if credentials are absent. `apksigner verify --verbose --print-certs`
+must validate the APK and match the pinned certificate before copying it into
+release assets; a missing, invalid, foreign or extra signer blocks publication.
+Debug CI remains secret-free. Local release builds require explicitly supplied
+credentials; ordinary debug builds retain their temporary debug certificate.
+
+An encrypted recovery bundle is kept locally at
+`.codex/private/design-android-signing.dpapi` (ignored by Git and Docker).
+It contains the keystore, alias, password and fingerprint, protected by Windows
+DPAPI CurrentUser; protection/unprotection was round-trip verified. This backup
+requires the owner's current Windows profile and is not a portable recovery
+file. Do not delete it, print decrypted contents or commit it. A portable backup
+or recovery on another computer needs a separately approved secure export.
+GitHub Secrets cannot be read back through the Secrets API.
+
+The first permanently signed release cannot update a previously installed
+debug-signed Design APK. Export/copy its disposable `.swl` files before removing
+that old Design installation. The stable app and its signing identity are not
+changed. Later permanently signed Design releases retain this certificate.
+
 ## Task to pull request
 
 1. Define acceptance criteria and permitted scope in an issue. Read AGENTS.md,

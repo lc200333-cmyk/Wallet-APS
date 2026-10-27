@@ -1,4 +1,12 @@
 .git
+.codex
+.agents
+**/*.keystore
+**/*.jks
+**/*.p12
+**/*.pfx
+**/*.dpapi
+**/key.properties
 .dart_tool
 .idea
 .vscode
