@@ -64,6 +64,15 @@ class MainActivity : FlutterActivity() {
         walletChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
         walletChannel!!.setMethodCallHandler { call, result ->
             when (call.method) {
+                "openDesignReleases" -> {
+                    try {
+                        startActivity(Intent(Intent.ACTION_VIEW,
+                            Uri.parse("https://github.com/lc200333-cmyk/Wallet-APS-Design/releases")))
+                        result.success(null)
+                    } catch (error: ActivityNotFoundException) {
+                        result.error("browser_unavailable", "Open Design Releases in a browser", null)
+                    }
+                }
                 "pickSpbWallet" -> pickSpbWallet(result)
                 "getLaunchWallet" -> {
                     if (launchWalletConsumed) {

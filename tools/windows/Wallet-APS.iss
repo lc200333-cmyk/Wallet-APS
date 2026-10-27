@@ -1,16 +1,16 @@
-#define MyAppName "Wallet APS"
+#define MyAppName "Wallet APS Design"
 #define MyAppVersion "0.7.6"
 #define MyAppPublisher "Wallet APS"
 #define MyAppExeName "wallet_aps.exe"
 
 [Setup]
-AppId={{94F89A42-1716-4D1F-8752-A3A3F89B1123}
+AppId={{A48D2FEA-EA47-49EF-A311-60C3761EA817}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
-AppPublisherURL=https://github.com/lc200333-cmyk/Wallet-APS
-AppSupportURL=https://github.com/lc200333-cmyk/Wallet-APS/issues
-AppUpdatesURL=https://github.com/lc200333-cmyk/Wallet-APS/releases
+AppPublisherURL=https://github.com/lc200333-cmyk/Wallet-APS-Design
+AppSupportURL=https://github.com/lc200333-cmyk/Wallet-APS-Design/issues
+AppUpdatesURL=https://github.com/lc200333-cmyk/Wallet-APS-Design/releases
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
@@ -23,7 +23,7 @@ PrivilegesRequired=lowest
 SetupIconFile=..\..\app\windows\runner\resources\app_icon.ico
 Uninstallable=yes
 UninstallFilesDir={app}\Uninstall
-UninstallDisplayName=Uninstall Wallet APS
+UninstallDisplayName=Uninstall Wallet APS Design
 UninstallDisplayIcon={uninstallexe}
 
 [Languages]
@@ -39,7 +39,7 @@ Source: "..\..\app\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags:
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{app}\Uninstall Wallet APS"; Filename: "{uninstallexe}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 31
+Name: "{app}\Uninstall Wallet APS Design"; Filename: "{uninstallexe}"; IconFilename: "{sys}\shell32.dll"; IconIndex: 31
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent

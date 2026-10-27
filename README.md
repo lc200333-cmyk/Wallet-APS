@@ -1,11 +1,52 @@
-# Wallet APS
+# Wallet APS Design
+
+Это приватная временная копия для экспериментов с дизайном. Основной
+[Wallet-APS](https://github.com/lc200333-cmyk/Wallet-APS) не изменяется.
+История основного проекта сохранена до коммита `f438ef2` (0.7.6+81).
+
+## Как работать с экспериментом
+
+1. Откройте в Codex отдельный проект: папку клона `Wallet-APS-Design`.
+   Начните отдельный чат и укажите: «Работаем только с Wallet-APS-Design».
+   Для возврата выберите прежний проект Wallet-APS и отдельный чат.
+2. Для облачного Codex предоставьте доступ именно к приватному
+   `lc200333-cmyk/Wallet-APS-Design` и создайте для него отдельное окружение.
+   Добавление репозитория на GitHub само по себе не переключает текущий проект.
+3. Перед изменениями проверяйте `git remote -v`: `origin` должен вести в Design.
+   `source` служит только для чтения основной истории; его push заблокирован.
+4. Сборки скачивайте из [Releases этой копии](../../releases), войдя в GitHub.
+   Приложение называется **Wallet APS Design** и имеет отдельные установку,
+   настройки и каталог баз. Оно не заменяет основную программу. Обновления
+   открываются в браузере: токен GitHub не встраивается в приложение.
+5. Используйте отдельную тестовую базу. Если вручную открыть исходный `.swl`,
+   экспериментальная программа сможет изменить его: изоляция установки не
+   делает выбранную пользователем базу доступной только для чтения.
+
+Публикация в `master` автоматически проверяет проект, увеличивает версию и
+собирает Windows, Android и Linux. Actions и Releases ограничены этой копией.
+Существующая очистка сохраняет только два последних релиза **в Design**.
+Приватные Actions расходуют доступную квоту GitHub; платные лимиты не менялись.
+
+## Как вернуть понравившиеся изменения
+
+Делайте каждое изменение дизайна отдельным небольшим коммитом. После отдельного
+разрешения создайте новую ветку от актуального `master` основного проекта и
+перенесите только выбранные коммиты интерфейса и их тесты через `cherry-pick`
+(либо вручную выбранные изменения, если коммит смешанный). Проверьте diff,
+тесты и создайте Pull Request. Не объединяйте целиком ветку Design с основной.
+
+Не переносите настройки CI/CD, версии, этот экспериментальный `AGENTS.md`,
+идентификаторы установки, отдельные каталоги и канал обновлений Design.
+Основную историю не переписывайте и `force push` не используйте.
+
+---
 
 Wallet APS is a local, offline password and private data manager for
 Windows, Android, and Linux. It works with password-protected `.swl` vaults
 and is compatible with SPB Wallet data, so your vault remains a file that you
 control.
 
-Project repository: [Wallet-APS](https://github.com/lc200333-cmyk/Wallet-APS).
+Project repository: [Wallet-APS-Design](https://github.com/lc200333-cmyk/Wallet-APS-Design).
 
 ## Download
 
@@ -50,7 +91,7 @@ vault stays on your device and can be used without an internet connection.
      sudo apt install ./Wallet-APS-linux-amd64.deb
      ```
 
-2. Start Wallet APS.
+2. Start Wallet APS Design.
 3. To create a vault, select **+**, choose its location and name, then enter and
    confirm a new password. To use an existing vault, select the folder button,
    choose a `.swl` file, and enter its password.

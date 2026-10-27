@@ -17,6 +17,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'app_version.dart';
+import 'design_distribution.dart';
 import 'data/spb_wallet_repository.dart';
 import 'controllers/entity_index.dart';
 import 'features/cards/field_projection.dart';
@@ -90,7 +91,7 @@ Rect? activeGlobalRectForKey(GlobalKey key) {
 }
 
 const latestGithubReleaseUri =
-    'https://api.github.com/repos/lc200333-cmyk/Wallet-APS/releases/latest';
+    'https://api.github.com/repos/lc200333-cmyk/Wallet-APS-Design/releases/latest';
 const githubVersionRequestTimeout = Duration(seconds: 4);
 const githubUpdateDownloadTimeout = Duration(minutes: 10);
 
@@ -116,7 +117,7 @@ class UpdatePackage {
 
   Uri get downloadUri => Uri.https(
         'github.com',
-        '/lc200333-cmyk/Wallet-APS/releases/download/v$version/$assetName',
+        '/lc200333-cmyk/Wallet-APS-Design/releases/download/v$version/$assetName',
       );
 }
 
@@ -306,15 +307,38 @@ Future<String> downloadUpdatePackage(UpdatePackage package) async {
   throw UnsupportedError('Обновления для этой платформы не поддерживаются');
 }
 
+Future<void> openDesignReleases() async {
+  if (Platform.isAndroid) {
+    await spbWalletChannel.invokeMethod<void>('openDesignReleases');
+  } else if (Platform.isWindows) {
+    await Process.start(
+        'rundll32.exe',
+        [
+          'url.dll,FileProtocolHandler',
+          designReleasesUrl,
+        ],
+        mode: ProcessStartMode.detached);
+  } else {
+    await Process.start(
+        Platform.isMacOS ? 'open' : 'xdg-open',
+        [
+          designReleasesUrl,
+        ],
+        mode: ProcessStartMode.detached);
+  }
+}
+
 class PasswordVersionLabel extends StatefulWidget {
   const PasswordVersionLabel({
     this.latestVersionLoader,
     this.updateDownloader,
+    this.releasesOpener,
     super.key,
   });
 
   final LatestGithubVersionLoader? latestVersionLoader;
   final UpdatePackageDownloader? updateDownloader;
+  final Future<void> Function()? releasesOpener;
 
   @override
   State<PasswordVersionLabel> createState() => _PasswordVersionLabelState();
@@ -327,10 +351,9 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
   @override
   void initState() {
     super.initState();
-    final runningFlutterTest =
-        Platform.environment.containsKey('FLUTTER_TEST') &&
-            Platform.environment['FLUTTER_TEST'] != 'false';
-    if (!runningFlutterTest || widget.latestVersionLoader != null) {
+    // Private releases require the user's browser session. Never perform an
+    // anonymous update check or embed credentials in a distributed app.
+    if (widget.latestVersionLoader != null) {
       unawaited(loadLatestGithubVersion());
     }
   }
@@ -428,6 +451,40 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.latestVersionLoader == null) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text(
+            'Design v. $currentAppVersion',
+            style: TextStyle(color: Color(0xffeeeeee), fontSize: 14),
+          ),
+          Tooltip(
+            message: 'Обновления Design: GitHub в браузере (нужен вход)',
+            child: IconButton(
+              key: const Key('designReleasesButton'),
+              icon: const Icon(Icons.open_in_browser, color: Color(0xffeeeeee)),
+              visualDensity: VisualDensity.compact,
+              onPressed: () async {
+                try {
+                  await (widget.releasesOpener ?? openDesignReleases)();
+                } catch (_) {
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Откройте Wallet-APS-Design → Releases '
+                        'в браузере и войдите в GitHub.',
+                      ),
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        ],
+      );
+    }
     final latest = latestGithubVersion;
     final updateAvailable = latest != null &&
         isVersionNewer(latest, currentAppVersion) &&
@@ -589,7 +646,7 @@ Future<Directory> managedIconCatalogStateDirectory({
   final directory = override ??
       Directory(
         '${(await getApplicationSupportDirectory()).path}'
-        '${Platform.pathSeparator}Wallet APS'
+        '${Platform.pathSeparator}Wallet APS Design'
         '${Platform.pathSeparator}IconCatalog',
       );
   if (create && !await directory.exists()) {
@@ -839,7 +896,7 @@ Future<Directory> userThirdPartyIconDirectory({bool create = false}) async {
   final directory = override ??
       Directory(
         '${(await getApplicationSupportDirectory()).path}'
-        '${Platform.pathSeparator}Wallet APS'
+        '${Platform.pathSeparator}Wallet APS Design'
         '${Platform.pathSeparator}ThirdPartyIcons',
       );
   if (create && !await directory.exists()) {
@@ -1307,7 +1364,7 @@ class WalletApsApp extends StatelessWidget {
     );
     return MaterialApp(
       scaffoldMessengerKey: rootScaffoldMessengerKey,
-      title: 'Wallet APS',
+      title: designAppName,
       debugShowCheckedModeBanner: false,
       builder: (context, child) => AppUserActivityRegion(
         child: AndroidScreenScale(
@@ -4823,7 +4880,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       }
       return directory;
     }
-    final directory = await getApplicationSupportDirectory();
+    final directory =
+        designSupportDirectory(await getApplicationSupportDirectory());
     if (!directory.existsSync()) {
       directory.createSync(recursive: true);
     }
@@ -4834,7 +4892,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final base = Platform.isAndroid
         ? await appStateDirectory()
         : await getApplicationDocumentsDirectory();
-    final directory = Directory('${base.path}/Wallet APS');
+    final directory = Directory('${base.path}/Wallet APS Design');
     if (!directory.existsSync()) {
       directory.createSync(recursive: true);
     }
@@ -5510,7 +5568,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Future<Directory> desktopRecoveryDirectory() async {
     final stateDirectory = await appStateDirectory();
     final directory = Directory(
-      '${stateDirectory.path}${Platform.pathSeparator}Wallet APS Recovery',
+      '${stateDirectory.path}${Platform.pathSeparator}Wallet APS Design Recovery',
     );
     if (!directory.existsSync()) directory.createSync(recursive: true);
     return directory;

@@ -12,13 +12,13 @@
 namespace {
 std::wstring Utf16FromUtf8(const std::string& value) {
   if (value.empty()) {
-    return L"Wallet APS";
+    return L"Wallet APS Design";
   }
   const int length = MultiByteToWideChar(
       CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
       static_cast<int>(value.size()), nullptr, 0);
   if (length <= 0) {
-    return L"Wallet APS";
+    return L"Wallet APS Design";
   }
   std::wstring result(length, L'\0');
   MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
@@ -237,7 +237,7 @@ void FlutterWindow::SetLoginWindowMode(bool expanded) {
 }
 
 void FlutterWindow::SetMainWindowMode(const std::wstring&) {
-  SetWindowMode(false, false, L"Wallet APS");
+  SetWindowMode(false, false, L"Wallet APS Design");
 }
 
 void FlutterWindow::SetWindowMode(bool login, bool expanded,

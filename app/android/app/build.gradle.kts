@@ -16,8 +16,8 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        // Keep the legacy ID so updates retain access to existing private vault files.
-        applicationId = "com.example.actit_pass_storage"
+        // Independent experimental installation and private storage.
+        applicationId = "com.lc200333cmyk.walletaps.design"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

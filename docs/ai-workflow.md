@@ -1,5 +1,34 @@
 # AI development and release workflow
 
+## Design repository override (2026-10-27)
+
+This private standalone clone preserves upstream history through `f438ef2`.
+The owner authorized independent CI/CD and separate installation identities.
+The historical preparation notes below do not describe this later setup.
+All workflow jobs are restricted to `lc200333-cmyk/Wallet-APS-Design`; release
+and retention use the current repository and its built-in `GITHUB_TOKEN`.
+There is no cross-repository publication token. Existing version increments,
+three-platform builds and retention of two releases remain enabled here only.
+
+Windows uses a new installer GUID, Design install directory and Open With
+ProgID without replacing the stable `.swl` default. Android uses a distinct
+application ID; Linux uses a distinct application/package ID and install paths.
+Settings, icons, default vault and recovery folders are separated. No stable
+profile or personal vault is migrated. Explicitly opening a shared vault can
+still modify that file: use disposable copies for experiments.
+
+Private release downloads require authentication. Instead of embedding a
+credential or silently falling back to public upstream releases, Design opens
+its Releases page in the user's authenticated browser. This deliberately trades
+automatic in-app downloads for credential safety and repository isolation.
+Generic updater characterization remains testable through injected loaders.
+
+Keep design commits separate from this repository/identity setup. Later transfer
+only selected UI and regression-test changes into a fresh upstream branch,
+excluding workflows, versions, identities and experimental instructions. Review
+the complete resulting diff before any separately authorized upstream PR/push.
+See the README for the owner's project-switching and download instructions.
+
 ## Task to pull request
 
 1. Define acceptance criteria and permitted scope in an issue. Read AGENTS.md,

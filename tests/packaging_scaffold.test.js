@@ -74,7 +74,7 @@ assert.ok(spbDatabase.includes('UPDATE spbwlt_Category SET IconID'));
 const debScript = read('tools/build_linux_deb.sh');
 assert.ok(debScript.includes('flutter build linux --release'));
 assert.ok(debScript.includes('dpkg-deb --build'));
-assert.ok(debScript.includes('wallet-aps_${VERSION}_${ARCH}.deb'));
+assert.ok(debScript.includes('wallet-aps-design_${VERSION}_${ARCH}.deb'));
 assert.ok(debScript.includes('Wallet-APS-linux-amd64.deb'));
 
 const installer = read('tools/windows/Wallet-APS.iss');

@@ -26,14 +26,12 @@ void RegisterSwlFileAssociation() {
     return;
   }
   const std::wstring classes = L"Software\\Classes\\";
-  const std::wstring prog_id = L"WalletAPS.swl";
-  SetRegistryString(HKEY_CURRENT_USER, classes + L".swl", nullptr, prog_id);
-  SetRegistryString(HKEY_CURRENT_USER, classes + L".swl", L"Content Type",
-                    L"application/x-spb-wallet");
+  const std::wstring prog_id = L"WalletAPSDesign.swl";
+  // Offer Design in Open With without replacing the stable default handler.
   SetRegistryString(HKEY_CURRENT_USER,
                     classes + L".swl\\OpenWithProgids", prog_id.c_str(), L"");
   SetRegistryString(HKEY_CURRENT_USER, classes + prog_id, nullptr,
-                    L"Wallet APS database");
+                    L"Wallet APS Design database");
   SetRegistryString(HKEY_CURRENT_USER,
                     classes + prog_id + L"\\DefaultIcon", nullptr,
                     L"\"" + std::wstring(executable) + L"\",0");
@@ -67,7 +65,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   FlutterWindow window(project);
   Win32Window::Point origin(0, 0);
   Win32Window::Size size(562, 590);
-  if (!window.Create(L"Wallet APS", origin, size)) {
+  if (!window.Create(L"Wallet APS Design", origin, size)) {
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
