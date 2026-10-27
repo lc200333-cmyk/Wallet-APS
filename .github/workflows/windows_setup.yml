@@ -1,4 +1,5 @@
 name: Windows setup
+run-name: Wallet APS Design Windows setup @ ${{ github.sha }}
 
 on:
   workflow_dispatch:
