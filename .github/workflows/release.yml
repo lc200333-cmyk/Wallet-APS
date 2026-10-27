@@ -161,6 +161,20 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.tag }}
 
+      - name: Free unused host Android SDK for Docker build
+        shell: bash
+        run: |
+          set -euo pipefail
+          # This job builds inside Docker with /opt/android-sdk, not the host SDK.
+          # Remove only this known disposable runner directory, never the checkout.
+          if [[ -d /usr/local/lib/android/sdk ]]; then
+            SDK_PATH="$(realpath -- /usr/local/lib/android/sdk)"
+            [[ "$SDK_PATH" == /usr/local/lib/android/sdk ]] || exit 1
+            du -sh -- "$SDK_PATH"
+            sudo rm -rf -- "$SDK_PATH"
+          fi
+          df -h .
+
       - name: Use public Ubuntu mirror
         shell: bash
         run: sed -i 's#^FROM ubuntu:#FROM mirror.gcr.io/library/ubuntu:#' docker/build-env/Dockerfile

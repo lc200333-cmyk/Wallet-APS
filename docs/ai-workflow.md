@@ -29,6 +29,13 @@ excluding workflows, versions, identities and experimental instructions. Review
 the complete resulting diff before any separately authorized upstream PR/push.
 See the README for the owner's project-switching and download instructions.
 
+The first proof release compiled its APK but failed copying it with only 21 MB
+free on the hosted runner. The Docker Android job now removes only the runner's
+unused native SDK at the exact resolved path `/usr/local/lib/android/sdk` before
+building. Its container has an independent SDK at `/opt/android-sdk`. The native
+CI APK job retains its host SDK. Application dependencies and verification stay
+unchanged; a paid larger runner is not required for this fix.
+
 ## Task to pull request
 
 1. Define acceptance criteria and permitted scope in an issue. Read AGENTS.md,

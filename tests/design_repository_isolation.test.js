@@ -28,6 +28,14 @@ for (const file of ['release.yml', 'release_cleanup.yml']) {
   assert.ok(!text.includes('secrets.PAT'));
 }
 assert.ok(read('AGENTS.md').includes('Non-negotiable repository boundary'));
+const release = read('.github/workflows/release.yml');
+const androidJob = release.split(/^  android:\r?$/m)[1].split(/^  linux:\r?$/m)[0];
+assert.ok(androidJob.includes('Free unused host Android SDK for Docker build'));
+assert.ok(androidJob.includes('[[ "$SDK_PATH" == /usr/local/lib/android/sdk ]] || exit 1'));
+assert.ok(androidJob.indexOf('sudo rm -rf -- "$SDK_PATH"') <
+  androidJob.indexOf('docker compose build build-apk'));
+assert.ok(!read('.github/workflows/ci.yml').includes('sudo rm -rf -- "$SDK_PATH"'),
+  'Native CI APK builds need their host Android SDK');
 const installer = read('tools/windows/Wallet-APS.iss');
 assert.ok(installer.includes('#define MyAppName "Wallet APS Design"'));
 assert.ok(installer.includes('AppId={{A48D2FEA-EA47-49EF-A311-60C3761EA817}'));
