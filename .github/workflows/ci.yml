@@ -19,6 +19,7 @@ env:
 
 jobs:
   verify:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -87,6 +88,7 @@ jobs:
           retention-days: 14
 
   dependencies:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -111,6 +113,7 @@ jobs:
           retention-days: 14
 
   build:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: verify
     strategy:
       fail-fast: false

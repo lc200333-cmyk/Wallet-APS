@@ -30,6 +30,7 @@ concurrency:
 
 jobs:
   verify:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +54,7 @@ jobs:
 
   version:
     needs: verify
-    if: github.event_name == 'workflow_dispatch' || (github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message, '[skip release]'))
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design' && (github.event_name == 'workflow_dispatch' || (github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message, '[skip release]')))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -99,6 +100,7 @@ jobs:
           git push --atomic origin HEAD:master "refs/tags/v$VERSION"
 
   windows:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: version
     runs-on: windows-latest
     steps:
@@ -150,6 +152,7 @@ jobs:
           retention-days: 1
 
   android:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: version
     runs-on: ubuntu-latest
     steps:
@@ -177,6 +180,7 @@ jobs:
           retention-days: 1
 
   linux:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: version
     runs-on: ubuntu-latest
     steps:
@@ -204,6 +208,7 @@ jobs:
           retention-days: 1
 
   publish:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: [version, windows, android, linux]
     runs-on: ubuntu-latest
     steps:
@@ -217,7 +222,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: Wallet APS ${{ needs.version.outputs.version }}
+          name: Wallet APS Design ${{ needs.version.outputs.version }}
           generate_release_notes: true
           files: |
             release-assets/Wallet-APS-Setup.exe

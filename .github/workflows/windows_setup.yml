@@ -11,6 +11,7 @@ on:
 
 jobs:
   build-setup:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     runs-on: windows-latest
 
     steps:

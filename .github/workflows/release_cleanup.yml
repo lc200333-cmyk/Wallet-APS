@@ -13,6 +13,7 @@ permissions:
 
 jobs:
   cleanup:
+    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     runs-on: ubuntu-latest
     steps:
       - name: Keep latest releases
