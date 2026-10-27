@@ -17,6 +17,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import 'app_version.dart';
+import 'appearance/appearance.dart';
+import 'appearance/appearance_controller.dart';
+import 'appearance/appearance_selector.dart';
 import 'design_distribution.dart';
 import 'data/spb_wallet_repository.dart';
 import 'controllers/entity_index.dart';
@@ -34,7 +37,12 @@ import 'widgets/workspace_section_bar.dart';
 import 'widgets/android_screen_scale.dart';
 import 'widgets/workspace_geometry.dart';
 
-void main(List<String> arguments) {
+Future<void> main(List<String> arguments) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final appearance = AppearanceController(
+    preferences: AppearancePreferences(designStateDirectory),
+  );
+  await appearance.load();
   final initialVaultPath = arguments.cast<String?>().firstWhere(
         (argument) =>
             argument != null &&
@@ -42,7 +50,8 @@ void main(List<String> arguments) {
             File(argument).existsSync(),
         orElse: () => null,
       );
-  runApp(WalletApsApp(initialVaultPath: initialVaultPath));
+  runApp(
+      WalletApsApp(initialVaultPath: initialVaultPath, appearance: appearance));
 }
 
 final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -400,8 +409,10 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
             child: FilledButton(
               key: const Key('cancelUpdateDownload'),
               style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xffc62828),
-                foregroundColor: Colors.white,
+                backgroundColor: appearanceColor(dialogContext,
+                    AppearanceRole.raisedSurface, const Color(0xffc62828)),
+                foregroundColor: appearanceColor(
+                    dialogContext, AppearanceRole.text, Colors.white),
                 padding: const EdgeInsets.symmetric(vertical: 10),
               ),
               onPressed: () => Navigator.of(dialogContext).pop(false),
@@ -413,8 +424,10 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
             child: FilledButton(
               key: const Key('confirmUpdateDownload'),
               style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xff2e7d32),
-                foregroundColor: Colors.white,
+                backgroundColor: appearanceColor(dialogContext,
+                    AppearanceRole.primary, const Color(0xff2e7d32)),
+                foregroundColor: appearanceColor(
+                    dialogContext, AppearanceRole.onPrimary, Colors.white),
                 padding: const EdgeInsets.symmetric(vertical: 10),
               ),
               onPressed: () => Navigator.of(dialogContext).pop(true),
@@ -455,15 +468,20 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
+          Text(
             'Design v. $currentAppVersion',
-            style: TextStyle(color: Color(0xffeeeeee), fontSize: 14),
+            style: TextStyle(
+                color: appearanceColor(
+                    context, AppearanceRole.text, const Color(0xffeeeeee)),
+                fontSize: 14),
           ),
           Tooltip(
             message: 'Обновления Design: GitHub в браузере (нужен вход)',
             child: IconButton(
               key: const Key('designReleasesButton'),
-              icon: const Icon(Icons.open_in_browser, color: Color(0xffeeeeee)),
+              icon: Icon(Icons.open_in_browser,
+                  color: appearanceColor(
+                      context, AppearanceRole.text, const Color(0xffeeeeee))),
               visualDensity: VisualDensity.compact,
               onPressed: () async {
                 try {
@@ -489,17 +507,18 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
     final updateAvailable = latest != null &&
         isVersionNewer(latest, currentAppVersion) &&
         updatePackageForPlatform(defaultTargetPlatform, latest) != null;
-    const versionStyle = TextStyle(
-      color: Color(0xffeeeeee),
+    final versionStyle = TextStyle(
+      color: appearanceColor(
+          context, AppearanceRole.text, const Color(0xffeeeeee)),
       fontSize: 14,
       fontWeight: FontWeight.normal,
     );
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('v. $currentAppVersion', style: versionStyle),
+        Text('v. $currentAppVersion', style: versionStyle),
         if (latest != null) ...[
-          const Text(' / ', style: versionStyle),
+          Text(' / ', style: versionStyle),
           Semantics(
             button: updateAvailable,
             label: updateAvailable
@@ -1313,71 +1332,37 @@ bool get usesTouchTextSelection =>
     defaultTargetPlatform == TargetPlatform.iOS;
 
 class WalletApsApp extends StatelessWidget {
-  const WalletApsApp({this.initialVaultPath, super.key});
+  const WalletApsApp({this.initialVaultPath, this.appearance, super.key});
 
   final String? initialVaultPath;
+  final AppearanceController? appearance;
 
   @override
   Widget build(BuildContext context) {
-    final baseTheme = ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xff2d6f73),
-        brightness: Brightness.light,
+    final controller = appearance;
+    if (controller == null) return buildApplication(AppAppearance.retro);
+    return AppearanceScope(
+      controller: controller,
+      child: ListenableBuilder(
+        listenable: controller,
+        builder: (context, _) => buildApplication(controller.mode),
       ),
-      scaffoldBackgroundColor: appWindowBackgroundColor,
-      dialogTheme: const DialogThemeData(
-        backgroundColor: appWindowBackgroundColor,
-        surfaceTintColor: Colors.transparent,
-      ),
-      visualDensity: VisualDensity.standard,
-      scrollbarTheme: const ScrollbarThemeData(
-        thickness: WidgetStatePropertyAll<double>(13.6),
-      ),
-    );
-    TextStyle enlarged(TextStyle? style, double defaultSize) =>
-        (style ?? const TextStyle()).copyWith(
-          fontSize: (style?.fontSize ?? defaultSize) + 2,
-          fontWeight: FontWeight.normal,
-        );
-    final baseText = baseTheme.textTheme;
-    final enlargedText = TextTheme(
-      displayLarge: enlarged(baseText.displayLarge, 57),
-      displayMedium: enlarged(baseText.displayMedium, 45),
-      displaySmall: enlarged(baseText.displaySmall, 36),
-      headlineLarge: enlarged(baseText.headlineLarge, 32),
-      headlineMedium: enlarged(baseText.headlineMedium, 28),
-      headlineSmall: enlarged(baseText.headlineSmall, 24),
-      titleLarge: enlarged(baseText.titleLarge, 22),
-      titleMedium: enlarged(baseText.titleMedium, 16),
-      titleSmall: enlarged(baseText.titleSmall, 14),
-      bodyLarge: enlarged(baseText.bodyLarge, 16),
-      bodyMedium: enlarged(baseText.bodyMedium, 14),
-      bodySmall: enlarged(baseText.bodySmall, 12),
-      labelLarge: enlarged(baseText.labelLarge, 14),
-      labelMedium: enlarged(baseText.labelMedium, 12),
-      labelSmall: enlarged(baseText.labelSmall, 11),
-    );
-    final popupMenuTextStyle =
-        (enlargedText.labelLarge ?? const TextStyle()).copyWith(
-      fontSize: (enlargedText.labelLarge?.fontSize ?? 16) + 1,
-    );
-    return MaterialApp(
-      scaffoldMessengerKey: rootScaffoldMessengerKey,
-      title: designAppName,
-      debugShowCheckedModeBanner: false,
-      builder: (context, child) => AppUserActivityRegion(
-        child: AndroidScreenScale(
-          child: child ?? const SizedBox.shrink(),
-        ),
-      ),
-      theme: baseTheme.copyWith(
-        textTheme: enlargedText,
-        popupMenuTheme: PopupMenuThemeData(textStyle: popupMenuTextStyle),
-      ),
-      home: VaultShell(initialVaultPath: initialVaultPath),
     );
   }
+
+  Widget buildApplication(AppAppearance mode) => MaterialApp(
+        scaffoldMessengerKey: rootScaffoldMessengerKey,
+        title: designAppName,
+        debugShowCheckedModeBanner: false,
+        builder: (context, child) => AppUserActivityRegion(
+          child: AndroidScreenScale(
+            child: child ?? const SizedBox.shrink(),
+          ),
+        ),
+        theme: appearanceThemeData(mode),
+        themeAnimationDuration: Duration.zero,
+        home: VaultShell(initialVaultPath: initialVaultPath),
+      );
 }
 
 class AppUserActivityRegion extends StatelessWidget {
@@ -3116,8 +3101,12 @@ class _ExternalImageDropTargetState extends State<ExternalImageDropTarget> {
             child: IgnorePointer(
               child: DecoratedBox(
                 decoration: BoxDecoration(
-                  color: const Color(0x33266fd5),
-                  border: Border.all(color: const Color(0xff266fd5), width: 3),
+                  color: appearanceColor(context, AppearanceRole.selected,
+                      const Color(0x33266fd5)),
+                  border: Border.all(
+                      color: appearanceColor(context, AppearanceRole.focus,
+                          const Color(0xff266fd5)),
+                      width: 3),
                   borderRadius: BorderRadius.circular(5),
                 ),
               ),
@@ -3268,8 +3257,11 @@ Future<bool> showUserIconUploadConfirmation(
             height: 136,
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: const Color(0xff82929d)),
+              color: appearanceColor(
+                  context, AppearanceRole.surface, Colors.white),
+              border: Border.all(
+                  color: appearanceColor(context, AppearanceRole.outline,
+                      const Color(0xff82929d))),
               borderRadius: BorderRadius.circular(5),
             ),
             child: Image.memory(bytes, fit: BoxFit.contain),
@@ -3517,10 +3509,13 @@ Widget selectableTextAttachmentPreview(
     return Padding(
       key: key,
       padding: const EdgeInsets.all(8),
-      child: Text(
-        'Не удалось показать текст $fileName: ${error.message}',
-        style: const TextStyle(color: Colors.redAccent),
-      ),
+      child: Builder(
+          builder: (context) => Text(
+                'Не удалось показать текст $fileName: ${error.message}',
+                style: TextStyle(
+                    color: appearanceColor(
+                        context, AppearanceRole.error, Colors.redAccent)),
+              )),
     );
   }
 }
@@ -5851,7 +5846,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: appWindowBackgroundColor,
+          backgroundColor: appearanceColor(
+              context, AppearanceRole.canvas, appWindowBackgroundColor),
           surfaceTintColor: Colors.transparent,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
           titlePadding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
@@ -5861,20 +5857,26 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             onPanStart: (_) {
               unawaited(startLoginWindowDrag());
             },
-            child: const SizedBox(
+            child: SizedBox(
               height: 38,
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text('Создание новой базы'),
+                child: AppearanceTheme.of(context).isRetro
+                    ? const Text('Создание новой базы')
+                    : const FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text('Создание новой базы')),
               ),
             ),
           ),
           content: Theme(
             data: Theme.of(context).copyWith(
-              inputDecorationTheme: const InputDecorationTheme(
-                filled: true,
-                fillColor: Colors.white,
-              ),
+              inputDecorationTheme:
+                  Theme.of(context).inputDecorationTheme.copyWith(
+                        filled: true,
+                        fillColor: appearanceColor(
+                            context, AppearanceRole.surface, Colors.white),
+                      ),
             ),
             child: SizedBox(
               width: 420,
@@ -6336,7 +6338,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               horizontal: narrow ? 4 : 40,
               vertical: narrow ? 8 : 24,
             ),
-            backgroundColor: appWindowBackgroundColor,
+            backgroundColor: appearanceColor(
+                context, AppearanceRole.canvas, appWindowBackgroundColor),
             surfaceTintColor: Colors.transparent,
             shape:
                 RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
@@ -6401,13 +6404,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     child: TextField(
                       key: const Key('changePasswordHint'),
                       controller: hintController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Подсказка',
                         filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(),
+                        fillColor: appearanceColor(
+                            context, AppearanceRole.surface, Colors.white),
+                        border: const OutlineInputBorder(),
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(
+                        contentPadding: const EdgeInsets.symmetric(
                           horizontal: 12,
                           vertical: 8,
                         ),
@@ -7388,11 +7392,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return Container(
       height: height,
       padding: padding,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+          colors: appearanceGradient(context, AppearanceRole.header,
+              [const Color(0xffa9c9e3), const Color(0xffe9f1f8)]),
         ),
-        border: Border(bottom: BorderSide(color: _spbBorder)),
+        border: Border(
+            bottom: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.divider, _spbBorder))),
       ),
       child: Row(
         children: [
@@ -7463,18 +7471,28 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         decoration: InputDecoration(
           isDense: true,
           filled: true,
-          fillColor: const Color(0xffffffff),
-          border: const OutlineInputBorder(
-            borderRadius: BorderRadius.zero,
-            borderSide: BorderSide(color: Colors.black87, width: 1),
+          fillColor: appearanceColor(
+              context, AppearanceRole.surface, const Color(0xffffffff)),
+          border: OutlineInputBorder(
+            borderRadius: appearanceRadius(context, BorderRadius.zero),
+            borderSide: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, Colors.black87),
+                width: 1),
           ),
-          enabledBorder: const OutlineInputBorder(
-            borderRadius: BorderRadius.zero,
-            borderSide: BorderSide(color: Colors.black87, width: 1),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: appearanceRadius(context, BorderRadius.zero),
+            borderSide: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, Colors.black87),
+                width: 1),
           ),
-          focusedBorder: const OutlineInputBorder(
-            borderRadius: BorderRadius.zero,
-            borderSide: BorderSide(color: Colors.black, width: 1),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: appearanceRadius(context, BorderRadius.zero),
+            borderSide: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.focus, Colors.black),
+                width: 1),
           ),
           contentPadding: const EdgeInsets.only(left: 4),
           suffixIcon: buildSearchClearButton(
@@ -7489,7 +7507,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
     return Container(
       height: WorkspaceGeometry.searchToolbarHeight,
-      color: appWindowBackgroundColor,
+      color: appearanceColor(
+          context, AppearanceRole.canvas, appWindowBackgroundColor),
       padding: EdgeInsets.only(left: 11, right: enlarged ? 0 : 11),
       child: Row(
         children: [
@@ -7499,7 +7518,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               style: TextStyle(
                 fontSize: WorkspaceGeometry.searchFontSize * searchScale,
                 fontWeight: FontWeight.bold,
-                color: const Color(0xff202020),
+                color: appearanceColor(
+                    context, AppearanceRole.text, const Color(0xff202020)),
               ),
             ),
             const SizedBox(width: 8),
@@ -7609,13 +7629,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
-                    colors: gradient,
+                    colors: appearanceActionGradient(context, gradient, icon),
                   ),
                   borderRadius: BorderRadius.circular(2.7),
                   border: Border.all(
-                    color: selected
-                        ? const Color(0xffffdc58)
-                        : const Color(0x99000000),
+                    color: appearanceColor(
+                        context,
+                        AppearanceRole.outline,
+                        selected
+                            ? const Color(0xffffdc58)
+                            : const Color(0x99000000)),
                     width: selected ? 2 : 1,
                   ),
                 ),
@@ -7623,7 +7646,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   borderRadius: BorderRadius.circular(2.7),
                   onTap: onTap,
                   child: Icon(icon,
-                      color: Colors.white,
+                      color: appearanceActionText(context, icon),
                       size: WorkspaceGeometry.smallIcon * scale),
                 ),
               ),
@@ -7862,7 +7885,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget buildSpbDesktopShell() {
     return Scaffold(
-      backgroundColor: appWindowBackgroundColor,
+      backgroundColor: appearanceColor(
+          context, AppearanceRole.canvas, appWindowBackgroundColor),
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -8016,13 +8040,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final modified = selectedVaultModifiedText;
     final cardsModeOpen = !mobileTemplatesOpen && !iconLibraryOpen;
     return Scaffold(
-      backgroundColor: appWindowBackgroundColor,
+      backgroundColor: appearanceColor(
+          context, AppearanceRole.canvas, appWindowBackgroundColor),
       body: SafeArea(
         child: Column(
           children: [
             Container(
               height: WorkspaceGeometry.headerHeight,
-              color: const Color(0xff7d7d7d),
+              color: appearanceColor(
+                  context, AppearanceRole.header, const Color(0xff7d7d7d)),
               padding: const EdgeInsets.symmetric(horizontal: 6.5),
               child: Row(
                 children: [
@@ -8046,8 +8072,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             key: const Key('spbMobileWalletTitle'),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: appearanceColor(
+                                  context, AppearanceRole.text, Colors.white),
                               fontSize:
                                   WorkspaceGeometry.navigatorHeadingFontSize,
                               fontWeight: FontWeight.bold,
@@ -8060,8 +8087,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             modified,
                             key: const Key('spbMobileVaultModified'),
                             maxLines: 1,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: appearanceColor(
+                                  context, AppearanceRole.text, Colors.white),
                               fontSize: WorkspaceGeometry.fontSize,
                               fontWeight: FontWeight.normal,
                             ),
@@ -8136,9 +8164,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return Container(
       height: 46,
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-      decoration: const BoxDecoration(
-        color: appWindowBackgroundColor,
-        border: Border(top: BorderSide(color: _spbBorder)),
+      decoration: BoxDecoration(
+        color: appearanceColor(
+            context, AppearanceRole.canvas, appWindowBackgroundColor),
+        border: Border(
+            top: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.divider, _spbBorder))),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -8250,7 +8282,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final modified = selectedVaultModifiedText;
     final cardsModeOpen = !mobileTemplatesOpen && !iconLibraryOpen;
     return Material(
-      color: Colors.white,
+      color: appearanceColor(context, AppearanceRole.surface, Colors.white),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -8391,12 +8423,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               ? Icon(
                   icon ?? Icons.folder_outlined,
                   size: WorkspaceGeometry.sectionIcon,
-                  color: const Color(0xff33434f),
+                  color: appearanceColor(
+                      context, AppearanceRole.text, const Color(0xff33434f)),
                 )
               : spbResourceIcon(iconFile, WorkspaceGeometry.sectionIcon)),
     );
     final surface = Material(
-      color: const Color(0xffdbeaf5),
+      color: appearanceColor(
+          context, AppearanceRole.selected, const Color(0xffdbeaf5)),
       child: opensRootCreationMenu
           ? spbRootCreationMenuTarget(child: button)
           : InkWell(onTap: onTap, child: button),
@@ -8469,14 +8503,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       height: size,
       alignment: Alignment.center,
       decoration: BoxDecoration(
-        color: const Color(0xfff5f5f5),
-        border: Border.all(color: const Color(0xff8d9aa3)),
+        color: appearanceColor(
+            context, AppearanceRole.raisedSurface, const Color(0xfff5f5f5)),
+        border: Border.all(
+            color: appearanceColor(
+                context, AppearanceRole.outline, const Color(0xff8d9aa3))),
       ),
       child: expanded
           ? Text(
               '−',
               style: TextStyle(
-                color: const Color(0xff526b7d),
+                color: appearanceColor(context, AppearanceRole.secondaryText,
+                    const Color(0xff526b7d)),
                 fontSize: 8 * size / WorkspaceGeometry.expansionSize,
                 height: 0.9,
                 fontWeight: FontWeight.w700,
@@ -8484,7 +8522,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             )
           : Icon(
               Icons.add,
-              color: const Color(0xff526b7d),
+              color: appearanceColor(context, AppearanceRole.secondaryText,
+                  const Color(0xff526b7d)),
               size: 7 * size / WorkspaceGeometry.expansionSize,
               weight: 700,
             ),
@@ -8715,9 +8754,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       vertical: 3,
                     ),
                     decoration: selectedCategoryPath.isEmpty
-                        ? const BoxDecoration(
+                        ? BoxDecoration(
                             gradient: LinearGradient(
-                              colors: [Color(0xffc9e5f8), Color(0xffeef8ff)],
+                              colors: appearanceGradient(
+                                  context, AppearanceRole.header, [
+                                const Color(0xffc9e5f8),
+                                const Color(0xffeef8ff)
+                              ]),
                             ),
                           )
                         : null,
@@ -8851,7 +8894,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       child: CustomPaint(
                         key: ValueKey('spbTreeFolderHighlight-${folder.path}'),
                         painter: selectedCategoryPath == folder.path
-                            ? SpbFolderHighlightPainter(folderRowHeight)
+                            ? SpbFolderHighlightPainter(folderRowHeight,
+                                colors: appearanceGradient(
+                                    context, AppearanceRole.selected, const [
+                                  Color(0xffb9dcf5),
+                                  Color(0xffedf7fe)
+                                ]))
                             : null,
                         child: Text(
                           folder.name,
@@ -8894,7 +8942,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             child: ListTile(
               selected: selectedItemIds.contains(item.id) ||
                   selectedItemId == item.id,
-              selectedTileColor: const Color(0xffcfe9fb),
+              selectedTileColor: appearanceColor(
+                  context, AppearanceRole.selected, const Color(0xffcfe9fb)),
               dense: true,
               visualDensity: VisualDensity.standard,
               minTileHeight: folderRowHeight,
@@ -9143,8 +9192,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 child: DecoratedBox(
                   key: const Key('spbCardMarquee'),
                   decoration: BoxDecoration(
-                    color: const Color(0x33367ca8),
-                    border: Border.all(color: const Color(0xff367ca8)),
+                    color: appearanceColor(context, AppearanceRole.selected,
+                        const Color(0x33367ca8)),
+                    border: Border.all(
+                        color: appearanceColor(context, AppearanceRole.focus,
+                            const Color(0xff367ca8))),
                   ),
                 ),
               ),
@@ -9330,11 +9382,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             onAcceptWithDetails: (details) =>
                 unawaited(moveManagedIconTo(details.data.iconId, kind)),
             builder: (context, candidates, rejected) => Material(
-              color: candidates.isNotEmpty
-                  ? const Color(0xffcce9cf)
-                  : selectedIconCatalog == kind
-                      ? const Color(0xffdbeaf5)
-                      : Colors.transparent,
+              color: appearanceColor(
+                  context,
+                  AppearanceRole.selected,
+                  candidates.isNotEmpty
+                      ? const Color(0xffcce9cf)
+                      : selectedIconCatalog == kind
+                          ? const Color(0xffdbeaf5)
+                          : Colors.transparent),
               child: GestureDetector(
                   onSecondaryTapDown: kind.isCustom
                       ? (details) =>
@@ -9970,7 +10025,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 minVerticalPadding: 0,
                 contentPadding: const EdgeInsets.only(left: 6, right: 8),
                 selected: selectedTemplateFolder == folder,
-                selectedTileColor: const Color(0xffcfe9fb),
+                selectedTileColor: appearanceColor(
+                    context, AppearanceRole.selected, const Color(0xffcfe9fb)),
                 leading: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -10030,7 +10086,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     visualDensity: VisualDensity.standard,
                     selected: selectedTemplateIds.contains(template.id) ||
                         selectedTemplateId == template.id,
-                    selectedTileColor: const Color(0xffcfe9fb),
+                    selectedTileColor: appearanceColor(context,
+                        AppearanceRole.selected, const Color(0xffcfe9fb)),
                     leading: spbSizedDataIcon(
                       template.iconId,
                       iconSize,
@@ -10671,7 +10728,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: appWindowBackgroundColor,
+          backgroundColor: appearanceColor(
+              context, AppearanceRole.canvas, appWindowBackgroundColor),
           surfaceTintColor: Colors.transparent,
           shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
           title: const Text('Удалить шаблон'),
@@ -10911,11 +10969,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 : Container(
                     height: WorkspaceGeometry.headerHeight,
                     padding: const EdgeInsets.only(left: 12, right: 6),
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xffb9dcf5), Color(0xfff2f9fe)],
+                        colors: appearanceGradient(
+                            context,
+                            AppearanceRole.header,
+                            [const Color(0xffb9dcf5), const Color(0xfff2f9fe)]),
                       ),
-                      border: Border(bottom: BorderSide(color: _spbBorder)),
+                      border: Border(
+                          bottom: BorderSide(
+                              color: appearanceColor(context,
+                                  AppearanceRole.divider, _spbBorder))),
                     ),
                     child: Row(
                       children: [
@@ -10925,7 +10989,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              color: const Color(0xff18364d),
+                              color: appearanceColor(context,
+                                  AppearanceRole.text, const Color(0xff18364d)),
                               fontSize: narrowAndroid
                                   ? WorkspaceGeometry.headingFontSize +
                                       WorkspaceGeometry.narrowCenterFontIncrease
@@ -10944,10 +11009,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   ),
         Expanded(
           child: ColoredBox(
-            color: selectedCategoryPath.isEmpty ||
-                    categoryColorsByPath[selectedCategoryPath] == null
-                ? Colors.transparent
-                : colorById(categoryColorsByPath[selectedCategoryPath]!).bg,
+            color: appearanceObjectSurface(
+                context,
+                selectedCategoryPath.isEmpty ||
+                        categoryColorsByPath[selectedCategoryPath] == null
+                    ? Colors.transparent
+                    : colorById(categoryColorsByPath[selectedCategoryPath]!)
+                        .bg),
             child: buildSpbCardMarqueeWorkspace(
               cards: cards,
               child: GestureDetector(
@@ -11050,13 +11118,22 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                       width: 104,
                                       padding: const EdgeInsets.all(8),
                                       decoration: BoxDecoration(
-                                        color: const Color(0xffedf7fe),
+                                        color: appearanceColor(
+                                            context,
+                                            AppearanceRole.selected,
+                                            const Color(0xffedf7fe)),
                                         border: Border.all(
-                                          color: const Color(0xff367ca8),
+                                          color: appearanceColor(
+                                              context,
+                                              AppearanceRole.outline,
+                                              const Color(0xff367ca8)),
                                         ),
-                                        boxShadow: const [
+                                        boxShadow: [
                                           BoxShadow(
-                                            color: Colors.black26,
+                                            color: appearanceColor(
+                                                context,
+                                                AppearanceRole.shadow,
+                                                Colors.black26),
                                             blurRadius: 6,
                                           ),
                                         ],
@@ -11441,9 +11518,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               media.width < 700;
           return Dialog(
             insetPadding: compact ? EdgeInsets.zero : const EdgeInsets.all(24),
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.zero,
-              side: BorderSide(color: Color(0xff7f8d98)),
+            shape: RoundedRectangleBorder(
+              borderRadius: appearanceRadius(context, BorderRadius.zero),
+              side: BorderSide(
+                  color: appearanceColor(context, AppearanceRole.outline,
+                      const Color(0xff7f8d98))),
             ),
             child: SizedBox(
               key: const Key('moveTargetSurface'),
@@ -11456,12 +11535,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       height: 48,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       alignment: Alignment.centerLeft,
-                      decoration: const BoxDecoration(
+                      decoration: BoxDecoration(
                         gradient: LinearGradient(
-                          colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+                          colors: appearanceGradient(
+                              context, AppearanceRole.header, [
+                            const Color(0xffa9c9e3),
+                            const Color(0xffe9f1f8)
+                          ]),
                         ),
                         border: Border(
-                          bottom: BorderSide(color: Color(0xff7f8d98)),
+                          bottom: BorderSide(
+                              color: appearanceColor(
+                                  context,
+                                  AppearanceRole.outline,
+                                  const Color(0xff7f8d98))),
                         ),
                       ),
                       child: const Text(
@@ -11482,7 +11569,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             child: ListTile(
                               key: ValueKey('moveTarget-$path'),
                               selected: selected,
-                              selectedTileColor: const Color(0xffcfe9fb),
+                              selectedTileColor: appearanceColor(
+                                  context,
+                                  AppearanceRole.selected,
+                                  const Color(0xffcfe9fb)),
                               leading: path.isEmpty
                                   ? const Icon(Icons.account_balance_wallet)
                                   : categoryFolderIcon(
@@ -11508,10 +11598,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         horizontal: 10,
                         vertical: 8,
                       ),
-                      decoration: const BoxDecoration(
-                        color: Color(0xffdce8f1),
+                      decoration: BoxDecoration(
+                        color: appearanceColor(context, AppearanceRole.header,
+                            const Color(0xffdce8f1)),
                         border: Border(
-                          top: BorderSide(color: Color(0xff7f8d98)),
+                          top: BorderSide(
+                              color: appearanceColor(
+                                  context,
+                                  AppearanceRole.outline,
+                                  const Color(0xff7f8d98))),
                         ),
                       ),
                       child: Row(
@@ -11701,11 +11796,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         duration: const Duration(milliseconds: 120),
         decoration: candidates.isEmpty
             ? null
-            : const BoxDecoration(color: Color(0xffd7f4df)),
+            : BoxDecoration(
+                color: appearanceColor(
+                    context, AppearanceRole.selected, const Color(0xffd7f4df))),
         foregroundDecoration: candidates.isEmpty
             ? null
             : BoxDecoration(
-                border: Border.all(color: const Color(0xff16833c), width: 2),
+                border: Border.all(
+                    color: appearanceColor(context, AppearanceRole.outline,
+                        const Color(0xff16833c)),
+                    width: 2),
               ),
         child: child,
       ),
@@ -11729,10 +11829,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           width: 104,
           padding: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xffedf7fe),
-            border: Border.all(color: const Color(0xff16833c)),
-            boxShadow: const [
-              BoxShadow(color: Colors.black26, blurRadius: 6),
+            color: appearanceColor(
+                context, AppearanceRole.selected, const Color(0xffedf7fe)),
+            border: Border.all(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, const Color(0xff16833c))),
+            boxShadow: [
+              BoxShadow(
+                  color: appearanceColor(
+                      context, AppearanceRole.shadow, Colors.black26),
+                  blurRadius: 6),
             ],
           ),
           child: Column(
@@ -11851,9 +11957,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }) {
     final stabilizeAndroidLabel =
         defaultTargetPlatform == TargetPlatform.android;
-    const selectedDecoration = BoxDecoration(
+    final selectedDecoration = BoxDecoration(
       gradient: LinearGradient(
-        colors: [Color(0xffb9dcf5), Color(0xffedf7fe)],
+        colors: appearanceGradient(context, AppearanceRole.header,
+            [const Color(0xffb9dcf5), const Color(0xffedf7fe)]),
       ),
     );
     Widget interactiveRegion(Widget child) => GestureDetector(
@@ -12875,21 +12982,23 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           moveSelectedManagedIcon,
         ),
         (
-          const Icon(
+          Icon(
             Icons.delete_outline,
-            key: Key('managedIconDeleteTaskIcon'),
+            key: const Key('managedIconDeleteTaskIcon'),
             size: 36,
-            color: Color(0xffc62828),
+            color: appearanceColor(
+                context, AppearanceRole.error, const Color(0xffc62828)),
           ),
           'Удалить',
           deleteSelectedManagedIcon,
         ),
         (
-          const Icon(
+          Icon(
             Icons.logout,
-            key: Key('managedIconExitTaskIcon'),
+            key: const Key('managedIconExitTaskIcon'),
             size: 36,
-            color: Color(0xff33434f),
+            color: appearanceColor(
+                context, AppearanceRole.text, const Color(0xff33434f)),
           ),
           'Выйти',
           exitToPasswordPrompt,
@@ -12915,11 +13024,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           exportSelectedSpbTemplate,
         ),
         (
-          const Icon(
+          Icon(
             Icons.delete_outline,
-            key: Key('templateDeleteTaskIcon'),
+            key: const Key('templateDeleteTaskIcon'),
             size: 36,
-            color: Color(0xffc62828),
+            color: appearanceColor(
+                context, AppearanceRole.error, const Color(0xffc62828)),
           ),
           'Удалить',
           deleteSelectedSpbTemplate,
@@ -12930,7 +13040,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           saveVaultThroughExplorer,
         ),
         (
-          const Icon(Icons.logout, size: 36, color: Color(0xff33434f)),
+          Icon(Icons.logout,
+              size: 36,
+              color: appearanceColor(
+                  context, AppearanceRole.text, const Color(0xff33434f))),
           'Выйти',
           exitToPasswordPrompt,
         ),
@@ -12939,10 +13052,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return [
       if (walletLoadReport.hasIssues)
         (
-          const Icon(
+          Icon(
             Icons.warning_amber_rounded,
             size: 36,
-            color: Color(0xffa65b00),
+            color: appearanceColor(
+                context, AppearanceRole.warning, const Color(0xffa65b00)),
           ),
           walletLoadReport.issues.length == cardLoadFailures.length
               ? 'Не удалось отобразить ${cardLoadFailures.length} карточек'
@@ -12967,7 +13081,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         pickSpbWalletFile,
       ),
       (
-        const Icon(Icons.password_outlined, size: 36, color: Color(0xff33434f)),
+        Icon(Icons.password_outlined,
+            size: 36,
+            color: appearanceColor(
+                context, AppearanceRole.text, const Color(0xff33434f))),
         'Изменить пароль',
         openChangePasswordDialog,
       ),
@@ -13006,7 +13123,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         saveVaultThroughExplorer,
       ),
       (
-        const Icon(Icons.logout, size: 36, color: Color(0xff33434f)),
+        Icon(Icons.logout,
+            size: 36,
+            color: appearanceColor(
+                context, AppearanceRole.text, const Color(0xff33434f))),
         'Выйти',
         exitToPasswordPrompt,
       ),
@@ -13105,7 +13225,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     if (desktop) {
       return wrapSpbTemplateRightContextMenu(
         Material(
-          color: Colors.white,
+          color: appearanceColor(context, AppearanceRole.surface, Colors.white),
           child: withHeading(Scrollbar(
             key: const Key('spbActionsPanelScrollbar'),
             controller: spbActionsPanelScrollController,
@@ -13199,7 +13319,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         child: SingleChildScrollView(
           controller: spbMobileActionsScrollController,
           child: Container(
-            color: _spbRightPanel,
+            color: appearanceColor(
+                context, AppearanceRole.surface, _spbRightPanel),
             padding: EdgeInsets.zero,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -13443,7 +13564,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                      color: const Color(0xff5f5f5f),
+                      color: appearanceColor(
+                          context,
+                          AppearanceRole.secondaryText,
+                          const Color(0xff5f5f5f)),
                       fontSize: narrowAndroid || wideAndroid
                           ? 2 +
                               WorkspaceGeometry.fontSize +
@@ -13505,16 +13629,19 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 child: Icon(
                   expanded ? Icons.arrow_drop_up : Icons.arrow_drop_down,
                   size: collapseSize,
-                  color: const Color(0xff168bd2),
-                  shadows: const [
+                  color: appearanceColor(
+                      context, AppearanceRole.primary, const Color(0xff168bd2)),
+                  shadows: [
                     Shadow(
-                      color: Color(0xb3ffffff),
-                      offset: Offset(0, -1),
+                      color: appearanceColor(context, AppearanceRole.shadow,
+                          const Color(0xb3ffffff)),
+                      offset: const Offset(0, -1),
                       blurRadius: 0.5,
                     ),
                     Shadow(
-                      color: Color(0xff075582),
-                      offset: Offset(0, 1.5),
+                      color: appearanceColor(context, AppearanceRole.shadow,
+                          const Color(0xff075582)),
+                      offset: const Offset(0, 1.5),
                       blurRadius: 1,
                     ),
                   ],
@@ -13558,11 +13685,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             padding: const EdgeInsets.only(left: 14, right: 3.5),
             alignment: Alignment.centerLeft,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+              gradient: LinearGradient(
+                colors: appearanceGradient(context, AppearanceRole.header,
+                    [const Color(0xffa9c9e3), const Color(0xffe9f1f8)]),
               ),
               border: shellStyle
-                  ? const Border(bottom: BorderSide(color: _spbBorder))
+                  ? Border(
+                      bottom: BorderSide(
+                          color: appearanceColor(
+                              context, AppearanceRole.divider, _spbBorder)))
                   : null,
             ),
             child: Text(
@@ -13675,7 +13806,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         key: const Key('frequentCardsScroll'),
         controller: scrollController,
         child: Container(
-          color: Colors.white,
+          color: appearanceColor(context, AppearanceRole.surface, Colors.white),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: actionTiles,
@@ -13699,7 +13830,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       );
     }
     final content = Container(
-      color: Colors.white,
+      color: appearanceColor(context, AppearanceRole.surface, Colors.white),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [header, ...actionTiles],
@@ -13908,9 +14039,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         builder: (context, setDialogState) {
           updateDialog = setDialogState;
           return Dialog(
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.zero,
-              side: BorderSide(color: Color(0xff7f8d98)),
+            shape: RoundedRectangleBorder(
+              borderRadius: appearanceRadius(context, BorderRadius.zero),
+              side: BorderSide(
+                  color: appearanceColor(context, AppearanceRole.outline,
+                      const Color(0xff7f8d98))),
             ),
             child: SizedBox(
               width: 440,
@@ -13921,12 +14054,19 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     height: 48,
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+                        colors: appearanceGradient(
+                            context,
+                            AppearanceRole.header,
+                            [const Color(0xffa9c9e3), const Color(0xffe9f1f8)]),
                       ),
                       border: Border(
-                        bottom: BorderSide(color: Color(0xff7f8d98)),
+                        bottom: BorderSide(
+                            color: appearanceColor(
+                                context,
+                                AppearanceRole.outline,
+                                const Color(0xff7f8d98))),
                       ),
                     ),
                     child: const Text(
@@ -13936,7 +14076,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   ),
                   Container(
                     width: double.infinity,
-                    color: appWindowBackgroundColor,
+                    color: appearanceColor(context, AppearanceRole.canvas,
+                        appWindowBackgroundColor),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 22,
                       vertical: 24,
@@ -13954,9 +14095,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       horizontal: 10,
                       vertical: 7,
                     ),
-                    decoration: const BoxDecoration(
-                      color: Color(0xffdce8f1),
-                      border: Border(top: BorderSide(color: Color(0xff7f8d98))),
+                    decoration: BoxDecoration(
+                      color: appearanceColor(context, AppearanceRole.header,
+                          const Color(0xffdce8f1)),
+                      border: Border(
+                          top: BorderSide(
+                              color: appearanceColor(
+                                  context,
+                                  AppearanceRole.outline,
+                                  const Color(0xff7f8d98)))),
                     ),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.end,
@@ -14050,6 +14197,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     double minimumHeight = 48,
     Key? key,
   }) {
+    final tokens = AppearanceTheme.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final primary = label == 'OK';
+    final background = primary
+        ? scheme.primary
+        : selected
+            ? scheme.primaryContainer
+            : tokens.resolve(AppearanceRole.raisedSurface, top);
+    final foreground = primary ? scheme.onPrimary : scheme.onSurface;
+    final displayChild = !tokens.isRetro && label == '⌫'
+        ? Icon(Icons.backspace_outlined, color: foreground, size: 28)
+        : !tokens.isRetro && child is Icon
+            ? Icon(child.icon, color: foreground, size: child.size)
+            : child;
     final button = SizedBox(
       height: max(height, minimumHeight),
       child: Material(
@@ -14060,41 +14221,47 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [top, bottom],
+              colors: tokens.isRetro ? [top, bottom] : [background, background],
             ),
             border: Border.all(
-              color:
-                  selected ? const Color(0xffffdc58) : const Color(0xff5c6870),
+              color: appearanceColor(context, AppearanceRole.outline,
+                  selected ? const Color(0xffffdc58) : const Color(0xff5c6870)),
               width: selected ? 2 : 1,
             ),
-            borderRadius: BorderRadius.circular(3),
+            borderRadius: appearanceRadius(context, BorderRadius.circular(3)),
             boxShadow: [
-              const BoxShadow(
-                color: Color(0x33000000),
-                offset: Offset(0, 2),
+              BoxShadow(
+                color: appearanceColor(
+                    context, AppearanceRole.shadow, const Color(0x33000000)),
+                offset: const Offset(0, 2),
                 blurRadius: 2,
               ),
               if (selected)
-                const BoxShadow(
-                  color: Color(0x99ffdc58),
+                BoxShadow(
+                  color: appearanceColor(
+                      context, AppearanceRole.shadow, const Color(0x99ffdc58)),
                   blurRadius: 5,
                 ),
             ],
           ),
           child: InkWell(
             onTap: onPressed,
-            borderRadius: BorderRadius.circular(3),
+            borderRadius: appearanceRadius(context, BorderRadius.circular(3)),
             child: Center(
-              child: child ??
+              child: displayChild ??
                   Text(
                     label,
                     style: TextStyle(
-                      color: Colors.white,
-                      fontSize: fontSize,
+                      color: tokens.isRetro ? Colors.white : foreground,
+                      fontSize:
+                          !tokens.isRetro && label == 'CLR' ? 14 : fontSize,
                       height: 1,
                       fontWeight: fontWeight,
-                      shadows: const [
-                        Shadow(color: Colors.black45, offset: Offset(1, 1)),
+                      shadows: [
+                        Shadow(
+                            color: appearanceColor(
+                                context, AppearanceRole.shadow, Colors.black45),
+                            offset: const Offset(1, 1)),
                       ],
                     ),
                   ),
@@ -14352,14 +14519,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     const modeBottom = Color(0xff6d3107);
 
     return Scaffold(
-      backgroundColor: appWindowBackgroundColor,
+      backgroundColor: appearanceColor(
+          context, AppearanceRole.canvas, appWindowBackgroundColor),
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
             child: SizedBox(
               key: const Key('passwordWindow'),
               width: min(MediaQuery.sizeOf(context).width, 562),
-              height: message == null && !loginHintVisible ? 590 : 650,
+              height: (message == null && !loginHintVisible ? 590.0 : 650.0) +
+                  (AppearanceScope.maybeOf(context) == null ? 0 : 120),
               child: LayoutBuilder(
                 builder: (context, constraints) => SingleChildScrollView(
                   padding: EdgeInsets.zero,
@@ -14370,8 +14539,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     child: Container(
                       width: constraints.maxWidth,
                       decoration: BoxDecoration(
-                        color: appWindowBackgroundColor,
-                        border: Border.all(color: const Color(0xffc6c6c6)),
+                        color: appearanceColor(context, AppearanceRole.canvas,
+                            appWindowBackgroundColor),
+                        border: Border.all(
+                            color: appearanceColor(
+                                context,
+                                AppearanceRole.outline,
+                                const Color(0xffc6c6c6))),
                       ),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -14383,29 +14557,41 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             },
                             child: Container(
                               height: 44,
-                              color: const Color(0xff777777),
+                              color: appearanceColor(
+                                  context,
+                                  AppearanceRole.header,
+                                  const Color(0xff777777)),
                               alignment: Alignment.centerLeft,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
                               ),
-                              child: const Row(
+                              child: Row(
                                 children: [
-                                  Expanded(
-                                    child: Text(
-                                      'Пароль',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 18,
-                                      ),
+                                  Text(
+                                    'Пароль',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      color: appearanceColor(context,
+                                          AppearanceRole.text, Colors.white),
+                                      fontSize: 18,
                                     ),
                                   ),
-                                  PasswordVersionLabel(
-                                    key: Key('passwordVersion'),
+                                  const SizedBox(width: 10),
+                                  const Expanded(
+                                    child: FittedBox(
+                                      alignment: Alignment.centerRight,
+                                      fit: BoxFit.scaleDown,
+                                      child: PasswordVersionLabel(
+                                        key: Key('passwordVersion'),
+                                      ),
+                                    ),
                                   ),
                                 ],
                               ),
                             ),
                           ),
+                          const AppearanceSelector(),
                           Padding(
                             padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
                             child: Column(
@@ -14430,9 +14616,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     ),
                                     key: const Key('passwordPrompt'),
                                     maxLines: 1,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 16,
-                                      color: Color(0xff16212a),
+                                      color: appearanceColor(
+                                          context,
+                                          AppearanceRole.text,
+                                          const Color(0xff16212a)),
                                       fontWeight: FontWeight.normal,
                                     ),
                                   ),
@@ -14446,11 +14635,25 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     children: [
                                       Expanded(
                                         child: TextSelectionTheme(
-                                          data: const TextSelectionThemeData(
-                                            cursorColor: Colors.black,
-                                            selectionColor: Colors.transparent,
+                                          data: TextSelectionThemeData(
+                                            cursorColor: appearanceColor(
+                                                context,
+                                                AppearanceRole.focus,
+                                                Colors.black),
+                                            selectionColor:
+                                                AppearanceTheme.of(context)
+                                                        .isRetro
+                                                    ? Colors.transparent
+                                                    : Theme.of(context)
+                                                        .colorScheme
+                                                        .primaryContainer,
                                             selectionHandleColor:
-                                                Colors.transparent,
+                                                AppearanceTheme.of(context)
+                                                        .isRetro
+                                                    ? Colors.transparent
+                                                    : Theme.of(context)
+                                                        .colorScheme
+                                                        .primary,
                                           ),
                                           child: TextField(
                                             key: const Key('passwordInput'),
@@ -14468,7 +14671,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                             decoration: InputDecoration(
                                               isDense: true,
                                               filled: true,
-                                              fillColor: Colors.white,
+                                              fillColor: appearanceColor(
+                                                  context,
+                                                  AppearanceRole.surface,
+                                                  Colors.white),
                                               border: const OutlineInputBorder(
                                                 borderRadius: BorderRadius.zero,
                                               ),
@@ -14531,9 +14737,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     key: const Key('loginPasswordHint'),
                                     padding: const EdgeInsets.all(10),
                                     decoration: BoxDecoration(
-                                      color: const Color(0xfffff4bc),
+                                      color: appearanceColor(
+                                          context,
+                                          AppearanceRole.warningSurface,
+                                          const Color(0xfffff4bc)),
                                       border: Border.all(
-                                        color: const Color(0xffb18b00),
+                                        color: appearanceColor(
+                                            context,
+                                            AppearanceRole.outline,
+                                            const Color(0xffb18b00)),
                                       ),
                                     ),
                                     child: Text(loginPasswordHint),
@@ -15875,9 +16087,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 }
 
 class SpbFolderHighlightPainter extends CustomPainter {
-  const SpbFolderHighlightPainter(this.highlightHeight);
+  const SpbFolderHighlightPainter(this.highlightHeight,
+      {this.colors = const [Color(0xffb9dcf5), Color(0xffedf7fe)]});
 
   final double highlightHeight;
+  final List<Color> colors;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -15888,15 +16102,16 @@ class SpbFolderHighlightPainter extends CustomPainter {
       highlightHeight,
     );
     final paint = Paint()
-      ..shader = const LinearGradient(
-        colors: [Color(0xffb9dcf5), Color(0xffedf7fe)],
+      ..shader = LinearGradient(
+        colors: colors,
       ).createShader(rect);
     canvas.drawRect(rect, paint);
   }
 
   @override
   bool shouldRepaint(covariant SpbFolderHighlightPainter oldDelegate) =>
-      oldDelegate.highlightHeight != highlightHeight;
+      oldDelegate.highlightHeight != highlightHeight ||
+      !listEquals(oldDelegate.colors, colors);
 }
 
 class _Spb3dArrowButton extends StatelessWidget {
@@ -15923,22 +16138,27 @@ class _Spb3dArrowButton extends StatelessWidget {
           width: 38,
           height: 34,
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(3),
-            border: Border.all(color: const Color(0xff676767)),
-            gradient: const LinearGradient(
+            borderRadius: appearanceRadius(context, BorderRadius.circular(3)),
+            border: Border.all(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, const Color(0xff676767))),
+            gradient: LinearGradient(
               begin: Alignment.topCenter,
               end: Alignment.bottomCenter,
-              colors: [Color(0xfff4f4f4), Color(0xff8d8d8d)],
+              colors: appearanceGradient(context, AppearanceRole.raisedSurface,
+                  [const Color(0xfff4f4f4), const Color(0xff8d8d8d)]),
             ),
-            boxShadow: const [
+            boxShadow: [
               BoxShadow(
-                color: Colors.white,
-                offset: Offset(-1, -1),
+                color: appearanceColor(
+                    context, AppearanceRole.shadow, Colors.white),
+                offset: const Offset(-1, -1),
                 blurRadius: 0.5,
               ),
               BoxShadow(
-                color: Color(0x66000000),
-                offset: Offset(1, 1),
+                color: appearanceColor(
+                    context, AppearanceRole.shadow, const Color(0x66000000)),
+                offset: const Offset(1, 1),
                 blurRadius: 1,
               ),
             ],
@@ -15946,10 +16166,17 @@ class _Spb3dArrowButton extends StatelessWidget {
           child: Icon(
             icon,
             size: 30,
-            color: const Color(0xff303030),
-            shadows: const [
-              Shadow(color: Colors.white70, offset: Offset(0, -1)),
-              Shadow(color: Color(0x66000000), offset: Offset(0, 1)),
+            color: appearanceColor(
+                context, AppearanceRole.text, const Color(0xff303030)),
+            shadows: [
+              Shadow(
+                  color: appearanceColor(
+                      context, AppearanceRole.shadow, Colors.white70),
+                  offset: const Offset(0, -1)),
+              Shadow(
+                  color: appearanceColor(
+                      context, AppearanceRole.shadow, const Color(0x66000000)),
+                  offset: const Offset(0, 1)),
             ],
           ),
         ),
@@ -16000,7 +16227,8 @@ class PasswordStrengthBar extends StatelessWidget {
           child: LinearProgressIndicator(
             minHeight: 8,
             value: score == 0 ? 0 : score / 5,
-            backgroundColor: const Color(0xffc8c8c8),
+            backgroundColor: appearanceColor(
+                context, AppearanceRole.raisedSurface, const Color(0xffc8c8c8)),
             valueColor: AlwaysStoppedAnimation<Color>(colors[score]),
           ),
         ),
@@ -16296,10 +16524,12 @@ class _FieldValueRowState extends State<FieldValueRow> {
           margin: const EdgeInsets.only(bottom: 8),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.44),
+            color: appearanceColor(context, AppearanceRole.raisedSurface,
+                Colors.white.withValues(alpha: 0.44)),
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
-              color: widget.foreground.withValues(alpha: 0.10),
+              color: appearanceColor(context, AppearanceRole.outline,
+                  widget.foreground.withValues(alpha: 0.10)),
             ),
           ),
           child: Row(
@@ -16314,7 +16544,10 @@ class _FieldValueRowState extends State<FieldValueRow> {
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
-                        color: widget.foreground.withValues(alpha: 0.62),
+                        color: appearanceColor(
+                            context,
+                            AppearanceRole.secondaryText,
+                            widget.foreground.withValues(alpha: 0.62)),
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
                       ),
@@ -16327,7 +16560,8 @@ class _FieldValueRowState extends State<FieldValueRow> {
                         child: Text(
                           widget.value,
                           style: TextStyle(
-                            color: widget.foreground,
+                            color: appearanceColor(context, AppearanceRole.text,
+                                widget.foreground),
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -16372,7 +16606,8 @@ class SpbPanel extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Container(
-            color: const Color(0xffb9cee4),
+            color: appearanceColor(
+                context, AppearanceRole.header, const Color(0xffb9cee4)),
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Text(
               title,
@@ -16918,26 +17153,34 @@ class SpbGrayPickerButton extends StatelessWidget {
           color: Colors.transparent,
           child: InkWell(
             onTap: onTap,
-            borderRadius: BorderRadius.circular(5),
+            borderRadius: appearanceRadius(context, BorderRadius.circular(5)),
             child: Ink(
               height: height,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Color(0xfff4f4f4), Color(0xff969696)],
+                  colors: appearanceGradient(
+                      context,
+                      AppearanceRole.raisedSurface,
+                      [const Color(0xfff4f4f4), const Color(0xff969696)]),
                 ),
-                border: Border.all(color: const Color(0xff676767)),
-                borderRadius: BorderRadius.circular(5),
-                boxShadow: const [
+                border: Border.all(
+                    color: appearanceColor(context, AppearanceRole.outline,
+                        const Color(0xff676767))),
+                borderRadius:
+                    appearanceRadius(context, BorderRadius.circular(5)),
+                boxShadow: [
                   BoxShadow(
-                    color: Colors.white,
-                    offset: Offset(-1, -1),
+                    color: appearanceColor(
+                        context, AppearanceRole.shadow, Colors.white),
+                    offset: const Offset(-1, -1),
                     blurRadius: 0.5,
                   ),
                   BoxShadow(
-                    color: Color(0x66000000),
-                    offset: Offset(1, 1),
+                    color: appearanceColor(context, AppearanceRole.shadow,
+                        const Color(0x66000000)),
+                    offset: const Offset(1, 1),
                     blurRadius: 1,
                   ),
                 ],
@@ -16948,7 +17191,8 @@ class SpbGrayPickerButton extends StatelessWidget {
                   Icon(
                     icon,
                     size: compact ? 28 : 18,
-                    color: const Color(0xff303030),
+                    color: appearanceColor(
+                        context, AppearanceRole.text, const Color(0xff303030)),
                   ),
                   Padding(
                     padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 4),
@@ -16958,9 +17202,12 @@ class SpbGrayPickerButton extends StatelessWidget {
                             child: Text(
                               label,
                               maxLines: 1,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontSize: 10,
-                                color: Color(0xff303030),
+                                color: appearanceColor(
+                                    context,
+                                    AppearanceRole.text,
+                                    const Color(0xff303030)),
                               ),
                             ),
                           )
@@ -16968,9 +17215,10 @@ class SpbGrayPickerButton extends StatelessWidget {
                             label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontSize: 11,
-                              color: Color(0xff303030),
+                              color: appearanceColor(context,
+                                  AppearanceRole.text, const Color(0xff303030)),
                             ),
                           ),
                   ),
@@ -17049,12 +17297,15 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: appWindowBackgroundColor,
+          color: appearanceColor(
+              context, AppearanceRole.canvas, appWindowBackgroundColor),
           elevation: 24,
           clipBehavior: Clip.antiAlias,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.zero,
-            side: BorderSide(color: Color(0xff7f8d98)),
+          shape: RoundedRectangleBorder(
+            borderRadius: appearanceRadius(context, BorderRadius.zero),
+            side: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, const Color(0xff7f8d98))),
           ),
           child: SizedBox(
             key: const Key('categoryEditorSurface'),
@@ -17067,12 +17318,15 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                 Container(
                   height: 48,
                   padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+                      colors: appearanceGradient(context, AppearanceRole.header,
+                          [const Color(0xffa9c9e3), const Color(0xffe9f1f8)]),
                     ),
                     border: Border(
-                      bottom: BorderSide(color: Color(0xff7f8d98)),
+                      bottom: BorderSide(
+                          color: appearanceColor(context,
+                              AppearanceRole.outline, const Color(0xff7f8d98))),
                     ),
                   ),
                   alignment: Alignment.centerLeft,
@@ -17084,7 +17338,8 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                 ),
                 Expanded(
                   child: ColoredBox(
-                    color: colorById(colorId).bg,
+                    color:
+                        appearanceObjectSurface(context, colorById(colorId).bg),
                     child: Scrollbar(
                       controller: editorScrollController,
                       thumbVisibility: true,
@@ -17152,9 +17407,13 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                             ),
                             if (invalidName) ...[
                               const SizedBox(height: 12),
-                              const Text(
+                              Text(
                                 'Введите название папки без символа «/».',
-                                style: TextStyle(color: Color(0xffa90000)),
+                                style: TextStyle(
+                                    color: appearanceColor(
+                                        context,
+                                        AppearanceRole.error,
+                                        const Color(0xffa90000))),
                               ),
                             ],
                           ],
@@ -17169,9 +17428,15 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                     horizontal: 10,
                     vertical: 7,
                   ),
-                  decoration: const BoxDecoration(
-                    color: Color(0xffdce8f1),
-                    border: Border(top: BorderSide(color: Color(0xff7f8d98))),
+                  decoration: BoxDecoration(
+                    color: appearanceColor(context, AppearanceRole.header,
+                        const Color(0xffdce8f1)),
+                    border: Border(
+                        top: BorderSide(
+                            color: appearanceColor(
+                                context,
+                                AppearanceRole.outline,
+                                const Color(0xff7f8d98)))),
                   ),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
@@ -17228,13 +17493,17 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
         height: MediaQuery.sizeOf(context).width < 700 ? 88 : 100,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xff82929d), width: 2),
+          color: appearanceColor(context, AppearanceRole.surface, Colors.white),
+          border: Border.all(
+              color: appearanceColor(
+                  context, AppearanceRole.outline, const Color(0xff82929d)),
+              width: 2),
           borderRadius: BorderRadius.circular(5),
-          boxShadow: const [
+          boxShadow: [
             BoxShadow(
-              color: Color(0x26000000),
-              offset: Offset(1, 2),
+              color: appearanceColor(
+                  context, AppearanceRole.shadow, const Color(0x26000000)),
+              offset: const Offset(1, 2),
               blurRadius: 5,
             ),
           ],
@@ -17788,9 +18057,12 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
           key: ValueKey('cardPreviewInlineAttachment-${attachment.fileName}'),
           padding: const EdgeInsets.only(top: 10),
           child: Material(
-            color: background.withValues(alpha: 0.9),
+            color: appearanceObjectSurface(
+                context, background.withValues(alpha: 0.9)),
             shape: RoundedRectangleBorder(
-              side: const BorderSide(color: Color(0xff82929d)),
+              side: BorderSide(
+                  color: appearanceColor(context, AppearanceRole.outline,
+                      const Color(0xff82929d))),
               borderRadius: BorderRadius.circular(4),
             ),
             child: isText
@@ -17857,12 +18129,15 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
     return Align(
       alignment: Alignment.center,
       child: Material(
-        color: appWindowBackgroundColor,
+        color: appearanceColor(
+            context, AppearanceRole.canvas, appWindowBackgroundColor),
         elevation: 24,
         clipBehavior: Clip.antiAlias,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-          side: BorderSide(color: Color(0xff7f8d98)),
+        shape: RoundedRectangleBorder(
+          borderRadius: appearanceRadius(context, BorderRadius.zero),
+          side: BorderSide(
+              color: appearanceColor(
+                  context, AppearanceRole.outline, const Color(0xff7f8d98))),
         ),
         child: SizedBox(
           key: const Key('cardPreviewSurface'),
@@ -17885,12 +18160,19 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                     height: 48,
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: const BoxDecoration(
+                    decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+                        colors: appearanceGradient(
+                            context,
+                            AppearanceRole.header,
+                            [const Color(0xffa9c9e3), const Color(0xffe9f1f8)]),
                       ),
                       border: Border(
-                        bottom: BorderSide(color: Color(0xff7f8d98)),
+                        bottom: BorderSide(
+                            color: appearanceColor(
+                                context,
+                                AppearanceRole.outline,
+                                const Color(0xff7f8d98))),
                       ),
                     ),
                     child: Row(
@@ -17917,7 +18199,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                   Expanded(
                     child: DecoratedBox(
                       decoration: cardSurfaceDecoration(
-                        color: color.bg,
+                        color: appearanceObjectSurface(context, color.bg),
                         backgroundImage: backgroundImage,
                       ),
                       child: SingleChildScrollView(
@@ -17942,16 +18224,23 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                   height: 88,
                                   alignment: Alignment.center,
                                   decoration: BoxDecoration(
-                                    color: Colors.white,
+                                    color: appearanceColor(context,
+                                        AppearanceRole.surface, Colors.white),
                                     border: Border.all(
-                                      color: const Color(0xff82929d),
+                                      color: appearanceColor(
+                                          context,
+                                          AppearanceRole.outline,
+                                          const Color(0xff82929d)),
                                       width: 2,
                                     ),
                                     borderRadius: BorderRadius.circular(5),
-                                    boxShadow: const [
+                                    boxShadow: [
                                       BoxShadow(
-                                        color: Color(0x26000000),
-                                        offset: Offset(1, 2),
+                                        color: appearanceColor(
+                                            context,
+                                            AppearanceRole.shadow,
+                                            const Color(0x26000000)),
+                                        offset: const Offset(1, 2),
                                         blurRadius: 5,
                                       ),
                                     ],
@@ -17988,7 +18277,8 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                     labelText: field.label,
                                     border: const OutlineInputBorder(),
                                     filled: true,
-                                    fillColor: color.bg,
+                                    fillColor: appearanceObjectSurface(
+                                        context, color.bg),
                                     isDense: true,
                                     contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 12,
@@ -18037,10 +18327,13 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                                 'cardPreviewCopy-${field.id}'),
                                             padding: EdgeInsets.zero,
                                             tooltip: 'Копировать',
-                                            icon: const Icon(
+                                            icon: Icon(
                                               Icons.copy_outlined,
                                               size: 17,
-                                              color: Color(0xff777777),
+                                              color: appearanceColor(
+                                                  context,
+                                                  AppearanceRole.secondaryText,
+                                                  const Color(0xff777777)),
                                             ),
                                             onPressed: () => copyCardFieldValue(
                                               currentItem.values[field.id] ??
@@ -18074,9 +18367,15 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                   ),
                   Container(
                     padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
-                    decoration: const BoxDecoration(
-                      color: Color(0xffdce8f1),
-                      border: Border(top: BorderSide(color: Color(0xff7f8d98))),
+                    decoration: BoxDecoration(
+                      color: appearanceColor(context, AppearanceRole.header,
+                          const Color(0xffdce8f1)),
+                      border: Border(
+                          top: BorderSide(
+                              color: appearanceColor(
+                                  context,
+                                  AppearanceRole.outline,
+                                  const Color(0xff7f8d98)))),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
@@ -18198,12 +18497,16 @@ class SpbGradientActionButton extends StatelessWidget {
                     gradient: LinearGradient(
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
-                      colors: colors,
+                      colors: appearanceActionGradient(context, colors, icon),
                     ),
-                    border: Border.all(color: const Color(0xff56636c)),
-                    borderRadius: BorderRadius.circular(3),
+                    border: Border.all(
+                        color: appearanceColor(context, AppearanceRole.outline,
+                            const Color(0xff56636c))),
+                    borderRadius:
+                        appearanceRadius(context, BorderRadius.circular(3)),
                   ),
-                  child: Icon(icon, color: Colors.white, size: 22),
+                  child: Icon(icon,
+                      color: appearanceActionText(context, icon), size: 22),
                 ),
               ),
             ),
@@ -18548,12 +18851,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: appWindowBackgroundColor,
+          color: appearanceColor(
+              context, AppearanceRole.canvas, appWindowBackgroundColor),
           elevation: 24,
           clipBehavior: Clip.antiAlias,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.zero,
-            side: BorderSide(color: Color(0xff7f8d98)),
+          shape: RoundedRectangleBorder(
+            borderRadius: appearanceRadius(context, BorderRadius.zero),
+            side: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, const Color(0xff7f8d98))),
           ),
           child: SizedBox(
             key: const Key('cardEditorSurface'),
@@ -18566,12 +18872,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                 Container(
                   height: 48,
                   padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: const BoxDecoration(
+                  decoration: BoxDecoration(
                     gradient: LinearGradient(
-                      colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+                      colors: appearanceGradient(context, AppearanceRole.header,
+                          [const Color(0xffa9c9e3), const Color(0xffe9f1f8)]),
                     ),
                     border: Border(
-                      bottom: BorderSide(color: Color(0xff7f8d98)),
+                      bottom: BorderSide(
+                          color: appearanceColor(context,
+                              AppearanceRole.outline, const Color(0xff7f8d98))),
                     ),
                   ),
                   child: Row(
@@ -18604,7 +18913,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                 Expanded(
                   child: DecoratedBox(
                     decoration: cardSurfaceDecoration(
-                      color: editorBackgroundColor,
+                      color: appearanceObjectSurface(
+                          context, editorBackgroundColor),
                       backgroundImage: editorBackgroundImage,
                     ),
                     child: Listener(
@@ -18633,9 +18943,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                     horizontal: 10,
                     vertical: 7,
                   ),
-                  decoration: const BoxDecoration(
-                    color: Color(0xffdce8f1),
-                    border: Border(top: BorderSide(color: Color(0xff7f8d98))),
+                  decoration: BoxDecoration(
+                    color: appearanceColor(context, AppearanceRole.header,
+                        const Color(0xffdce8f1)),
+                    border: Border(
+                        top: BorderSide(
+                            color: appearanceColor(
+                                context,
+                                AppearanceRole.outline,
+                                const Color(0xff7f8d98)))),
                   ),
                   child: Row(
                     children: [
@@ -18908,13 +19224,17 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         height: dimension,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xff82929d), width: 2),
+          color: appearanceColor(context, AppearanceRole.surface, Colors.white),
+          border: Border.all(
+              color: appearanceColor(
+                  context, AppearanceRole.outline, const Color(0xff82929d)),
+              width: 2),
           borderRadius: BorderRadius.circular(5),
-          boxShadow: const [
+          boxShadow: [
             BoxShadow(
-              color: Color(0x26000000),
-              offset: Offset(1, 2),
+              color: appearanceColor(
+                  context, AppearanceRole.shadow, const Color(0x26000000)),
+              offset: const Offset(1, 2),
               blurRadius: 5,
             ),
           ],
@@ -19051,8 +19371,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         alignment: Alignment.center,
         padding: const EdgeInsets.all(2),
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xff82929d)),
+          color: appearanceColor(context, AppearanceRole.surface, Colors.white),
+          border: Border.all(
+              color: appearanceColor(
+                  context, AppearanceRole.outline, const Color(0xff82929d))),
           borderRadius: BorderRadius.circular(4),
         ),
         child: SizedBox(
@@ -19145,7 +19467,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         hintText: hintTextForField(field),
         border: const OutlineInputBorder(),
         filled: true,
-        fillColor: editorBackgroundColor,
+        fillColor: appearanceObjectSurface(context, editorBackgroundColor),
         isDense: true,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         suffixIcon: fieldSuffixIcon(field, controller, visible),
@@ -19219,16 +19541,25 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
             onTap: onTap,
             child: Ink(
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Color(0xfff4f4f4), Color(0xff969696)],
+                  colors: appearanceGradient(
+                      context,
+                      AppearanceRole.raisedSurface,
+                      [const Color(0xfff4f4f4), const Color(0xff969696)]),
                 ),
-                border: Border.all(color: const Color(0xff676767)),
-                borderRadius: BorderRadius.circular(3),
+                border: Border.all(
+                    color: appearanceColor(context, AppearanceRole.outline,
+                        const Color(0xff676767))),
+                borderRadius:
+                    appearanceRadius(context, BorderRadius.circular(3)),
               ),
               child: Center(
-                child: Icon(icon, size: 19, color: const Color(0xff303030)),
+                child: Icon(icon,
+                    size: 19,
+                    color: appearanceColor(
+                        context, AppearanceRole.text, const Color(0xff303030))),
               ),
             ),
           ),
@@ -19360,9 +19691,12 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
           key: ValueKey('cardEditorInlineAttachment-${attachment.fileName}'),
           padding: const EdgeInsets.only(top: 10),
           child: Material(
-            color: editorBackgroundColor.withValues(alpha: 0.9),
+            color: appearanceObjectSurface(
+                context, editorBackgroundColor.withValues(alpha: 0.9)),
             shape: RoundedRectangleBorder(
-              side: const BorderSide(color: Color(0xff82929d)),
+              side: BorderSide(
+                  color: appearanceColor(context, AppearanceRole.outline,
+                      const Color(0xff82929d))),
               borderRadius: BorderRadius.circular(4),
             ),
             child: isText
@@ -20176,12 +20510,15 @@ class TemplatePreviewDialog extends StatelessWidget {
     return Align(
       alignment: Alignment.center,
       child: Material(
-        color: appWindowBackgroundColor,
+        color: appearanceColor(
+            context, AppearanceRole.canvas, appWindowBackgroundColor),
         elevation: 24,
         clipBehavior: Clip.antiAlias,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-          side: BorderSide(color: Color(0xff7f8d98)),
+        shape: RoundedRectangleBorder(
+          borderRadius: appearanceRadius(context, BorderRadius.zero),
+          side: BorderSide(
+              color: appearanceColor(
+                  context, AppearanceRole.outline, const Color(0xff7f8d98))),
         ),
         child: SizedBox(
           key: const Key('templatePreviewSurface'),
@@ -20192,11 +20529,17 @@ class TemplatePreviewDialog extends StatelessWidget {
               Container(
                 height: 48,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: const BoxDecoration(
+                decoration: BoxDecoration(
                   gradient: LinearGradient(
-                    colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+                    colors: appearanceGradient(context, AppearanceRole.header,
+                        [const Color(0xffa9c9e3), const Color(0xffe9f1f8)]),
                   ),
-                  border: Border(bottom: BorderSide(color: Color(0xff7f8d98))),
+                  border: Border(
+                      bottom: BorderSide(
+                          color: appearanceColor(
+                              context,
+                              AppearanceRole.outline,
+                              const Color(0xff7f8d98)))),
                 ),
                 child: Row(
                   children: [
@@ -20214,7 +20557,7 @@ class TemplatePreviewDialog extends StatelessWidget {
               ),
               Expanded(
                 child: ColoredBox(
-                  color: backgroundColor,
+                  color: appearanceObjectSurface(context, backgroundColor),
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
                     child: Column(
@@ -20227,16 +20570,23 @@ class TemplatePreviewDialog extends StatelessWidget {
                             height: 112,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: Colors.white,
+                              color: appearanceColor(context,
+                                  AppearanceRole.surface, Colors.white),
                               border: Border.all(
-                                color: const Color(0xff82929d),
+                                color: appearanceColor(
+                                    context,
+                                    AppearanceRole.outline,
+                                    const Color(0xff82929d)),
                                 width: 2,
                               ),
                               borderRadius: BorderRadius.circular(5),
-                              boxShadow: const [
+                              boxShadow: [
                                 BoxShadow(
-                                  color: Color(0x26000000),
-                                  offset: Offset(1, 2),
+                                  color: appearanceColor(
+                                      context,
+                                      AppearanceRole.shadow,
+                                      const Color(0x26000000)),
+                                  offset: const Offset(1, 2),
                                   blurRadius: 5,
                                 ),
                               ],
@@ -20278,7 +20628,8 @@ class TemplatePreviewDialog extends StatelessWidget {
                                 prefixIcon: Icon(_fieldTypeIcon(field.type)),
                                 border: const OutlineInputBorder(),
                                 filled: true,
-                                fillColor: backgroundColor,
+                                fillColor: appearanceObjectSurface(
+                                    context, backgroundColor),
                                 isDense: true,
                                 contentPadding: const EdgeInsets.symmetric(
                                   horizontal: 12,
@@ -20307,9 +20658,13 @@ class TemplatePreviewDialog extends StatelessWidget {
 
   Widget previewActions(BuildContext context) => Container(
         padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
-        decoration: const BoxDecoration(
-          color: Color(0xffdce8f1),
-          border: Border(top: BorderSide(color: Color(0xff7f8d98))),
+        decoration: BoxDecoration(
+          color: appearanceColor(
+              context, AppearanceRole.header, const Color(0xffdce8f1)),
+          border: Border(
+              top: BorderSide(
+                  color: appearanceColor(context, AppearanceRole.outline,
+                      const Color(0xff7f8d98)))),
         ),
         child: Row(
           children: [
@@ -20540,12 +20895,15 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: appWindowBackgroundColor,
+          color: appearanceColor(
+              context, AppearanceRole.canvas, appWindowBackgroundColor),
           elevation: 24,
           clipBehavior: Clip.antiAlias,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.zero,
-            side: BorderSide(color: Color(0xff7f8d98)),
+          shape: RoundedRectangleBorder(
+            borderRadius: appearanceRadius(context, BorderRadius.zero),
+            side: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, const Color(0xff7f8d98))),
           ),
           child: SizedBox(
             key: const Key('templateEditorSurface'),
@@ -20557,7 +20915,8 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                 templateTitleBar(),
                 Expanded(
                   child: ColoredBox(
-                    color: editorBackgroundColor,
+                    color:
+                        appearanceObjectSurface(context, editorBackgroundColor),
                     child: Scrollbar(
                       controller: editorScrollController,
                       thumbVisibility: true,
@@ -20606,11 +20965,15 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     return Container(
       height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
+          colors: appearanceGradient(context, AppearanceRole.header,
+              [const Color(0xffa9c9e3), const Color(0xffe9f1f8)]),
         ),
-        border: Border(bottom: BorderSide(color: Color(0xff7f8d98))),
+        border: Border(
+            bottom: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, const Color(0xff7f8d98)))),
       ),
       alignment: Alignment.centerLeft,
       child: Text(
@@ -20638,7 +21001,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
             labelText: 'Название шаблона',
             border: const OutlineInputBorder(),
             filled: true,
-            fillColor: editorBackgroundColor,
+            fillColor: appearanceObjectSurface(context, editorBackgroundColor),
             isDense: true,
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -20713,22 +21076,29 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
             child: Ink(
               height: 48,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Color(0xfff4f4f4), Color(0xff969696)],
+                  colors: appearanceGradient(
+                      context,
+                      AppearanceRole.raisedSurface,
+                      [const Color(0xfff4f4f4), const Color(0xff969696)]),
                 ),
-                border: Border.all(color: const Color(0xff676767)),
+                border: Border.all(
+                    color: appearanceColor(context, AppearanceRole.outline,
+                        const Color(0xff676767))),
                 borderRadius: BorderRadius.circular(5),
-                boxShadow: const [
+                boxShadow: [
                   BoxShadow(
-                    color: Colors.white,
-                    offset: Offset(-1, -1),
+                    color: appearanceColor(
+                        context, AppearanceRole.shadow, Colors.white),
+                    offset: const Offset(-1, -1),
                     blurRadius: 0.5,
                   ),
                   BoxShadow(
-                    color: Color(0x66000000),
-                    offset: Offset(1, 1),
+                    color: appearanceColor(context, AppearanceRole.shadow,
+                        const Color(0x66000000)),
+                    offset: const Offset(1, 1),
                     blurRadius: 1,
                   ),
                 ],
@@ -20736,16 +21106,20 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon, size: 18, color: const Color(0xff303030)),
+                  Icon(icon,
+                      size: 18,
+                      color: appearanceColor(context, AppearanceRole.text,
+                          const Color(0xff303030))),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: Text(
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 11,
-                        color: Color(0xff303030),
+                        color: appearanceColor(context, AppearanceRole.text,
+                            const Color(0xff303030)),
                       ),
                     ),
                   ),
@@ -20867,16 +21241,20 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                     decoration: BoxDecoration(
                       color: color.bg,
                       border: Border.all(
-                        color: colorId == color.id
-                            ? const Color(0xff253d4c)
-                            : const Color(0xff8b969d),
+                        color: appearanceColor(
+                            context,
+                            AppearanceRole.outline,
+                            colorId == color.id
+                                ? const Color(0xff253d4c)
+                                : const Color(0xff8b969d)),
                         width: colorId == color.id ? 2.5 : 1,
                       ),
                       borderRadius: BorderRadius.circular(4),
-                      boxShadow: const [
+                      boxShadow: [
                         BoxShadow(
-                          color: Color(0x1f000000),
-                          offset: Offset(1, 1),
+                          color: appearanceColor(context, AppearanceRole.shadow,
+                              const Color(0x1f000000)),
+                          offset: const Offset(1, 1),
                           blurRadius: 2,
                         ),
                       ],
@@ -20897,9 +21275,13 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     return Container(
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: const BoxDecoration(
-        color: Color(0xffdce8f1),
-        border: Border(top: BorderSide(color: Color(0xff7f8d98))),
+      decoration: BoxDecoration(
+        color: appearanceColor(
+            context, AppearanceRole.header, const Color(0xffdce8f1)),
+        border: Border(
+            top: BorderSide(
+                color: appearanceColor(
+                    context, AppearanceRole.outline, const Color(0xff7f8d98)))),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
@@ -20966,12 +21348,16 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                 gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: colors,
+                  colors: appearanceActionGradient(context, colors, icon),
                 ),
-                border: Border.all(color: const Color(0xff56636c)),
-                borderRadius: BorderRadius.circular(3),
+                border: Border.all(
+                    color: appearanceColor(context, AppearanceRole.outline,
+                        const Color(0xff56636c))),
+                borderRadius:
+                    appearanceRadius(context, BorderRadius.circular(3)),
               ),
-              child: Icon(icon, color: Colors.white, size: 22),
+              child: Icon(icon,
+                  color: appearanceActionText(context, icon), size: 22),
             ),
           ),
         ),
@@ -20984,7 +21370,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       child: Card(
         key: ValueKey('templateField-${field.id}'),
         elevation: 0,
-        color: editorBackgroundColor,
+        color: appearanceObjectSurface(context, editorBackgroundColor),
         surfaceTintColor: Colors.transparent,
         child: Padding(
           padding: const EdgeInsets.all(8),
@@ -21004,7 +21390,8 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                           labelText: 'Название поля',
                           border: const OutlineInputBorder(),
                           filled: true,
-                          fillColor: editorBackgroundColor,
+                          fillColor: appearanceObjectSurface(
+                              context, editorBackgroundColor),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -21032,7 +21419,8 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                           labelText: 'Тип',
                           border: const OutlineInputBorder(),
                           filled: true,
-                          fillColor: editorBackgroundColor,
+                          fillColor: appearanceObjectSurface(
+                              context, editorBackgroundColor),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -21161,27 +21549,38 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
               width: 31,
               height: height,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
+                gradient: LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
-                  colors: [Color(0xfff4f4f4), Color(0xff8d8d8d)],
+                  colors: appearanceGradient(
+                      context,
+                      AppearanceRole.raisedSurface,
+                      [const Color(0xfff4f4f4), const Color(0xff8d8d8d)]),
                 ),
-                border: Border.all(color: const Color(0xff676767)),
-                borderRadius: BorderRadius.circular(3),
-                boxShadow: const [
+                border: Border.all(
+                    color: appearanceColor(context, AppearanceRole.outline,
+                        const Color(0xff676767))),
+                borderRadius:
+                    appearanceRadius(context, BorderRadius.circular(3)),
+                boxShadow: [
                   BoxShadow(
-                    color: Colors.white,
-                    offset: Offset(-1, -1),
+                    color: appearanceColor(
+                        context, AppearanceRole.shadow, Colors.white),
+                    offset: const Offset(-1, -1),
                     blurRadius: 0.5,
                   ),
                   BoxShadow(
-                    color: Color(0x66000000),
-                    offset: Offset(1, 1),
+                    color: appearanceColor(context, AppearanceRole.shadow,
+                        const Color(0x66000000)),
+                    offset: const Offset(1, 1),
                     blurRadius: 1,
                   ),
                 ],
               ),
-              child: Icon(icon, size: 19, color: const Color(0xff303030)),
+              child: Icon(icon,
+                  size: 19,
+                  color: appearanceColor(
+                      context, AppearanceRole.text, const Color(0xff303030))),
             ),
           ),
         ),
@@ -21339,13 +21738,17 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
         height: dimension,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xff82929d), width: 2),
+          color: appearanceColor(context, AppearanceRole.surface, Colors.white),
+          border: Border.all(
+              color: appearanceColor(
+                  context, AppearanceRole.outline, const Color(0xff82929d)),
+              width: 2),
           borderRadius: BorderRadius.circular(5),
-          boxShadow: const [
+          boxShadow: [
             BoxShadow(
-              color: Color(0x26000000),
-              offset: Offset(1, 2),
+              color: appearanceColor(
+                  context, AppearanceRole.shadow, const Color(0x26000000)),
+              offset: const Offset(1, 2),
               blurRadius: 5,
             ),
           ],
@@ -21496,7 +21899,10 @@ Widget managedCatalogIconFrame(
                       fit: BoxFit.contain, filterQuality: FilterQuality.medium)
                   : templateIconWidget(preview,
                       size: WorkspaceGeometry.iconFrameContent,
-                      color: const Color(0xff6f7f89),
+                      color: appearanceColor(
+                          context,
+                          AppearanceRole.secondaryText,
+                          const Color(0xff6f7f89)),
                       scaleOriginalToFit: true))));
 }
 
@@ -21638,7 +22044,8 @@ class _ManagedIconSelectionDialogState
               min(rect?.height ?? size.height - top - media.padding.bottom,
                   size.height - top - media.viewInsets.bottom)),
           child: Material(
-              color: appWindowBackgroundColor,
+              color: appearanceColor(
+                  context, AppearanceRole.canvas, appWindowBackgroundColor),
               elevation: 24,
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -21742,7 +22149,8 @@ class ColorPicker extends StatelessWidget {
                   index < templateColorPalette.length;
                   index++) ...[
                 if (index > 0) const SizedBox(width: 5),
-                Expanded(child: colorButton(templateColorPalette[index])),
+                Expanded(
+                    child: colorButton(context, templateColorPalette[index])),
               ],
             ],
           )
@@ -21752,14 +22160,14 @@ class ColorPicker extends StatelessWidget {
             runSpacing: 5,
             children: [
               for (final color in templateColorPalette)
-                SizedBox(width: 30, child: colorButton(color)),
+                SizedBox(width: 30, child: colorButton(context, color)),
             ],
           ),
       ],
     );
   }
 
-  Widget colorButton(PaletteColor color) {
+  Widget colorButton(BuildContext context, PaletteColor color) {
     return Tooltip(
       message: color.label,
       child: InkWell(
@@ -21785,7 +22193,11 @@ class ColorPicker extends StatelessWidget {
               ),
             ],
           ),
-          child: color.id == value ? const Icon(Icons.check, size: 17) : null,
+          child: color.id == value
+              ? Icon(Icons.check,
+                  size: 17,
+                  color: AppearanceTheme.of(context).isRetro ? null : color.fg)
+              : null,
         ),
       ),
     );
