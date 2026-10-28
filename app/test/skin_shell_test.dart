@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -343,6 +344,100 @@ void main() {
         expect(find.byKey(const Key('unsavedChip')), findsNothing);
         await tester.pumpWidget(const SizedBox.shrink());
       }
+    });
+  }
+
+  List<VerticalDivider> dividers(WidgetTester tester) =>
+      tester.widgetList<VerticalDivider>(find.byType(VerticalDivider)).toList();
+
+  _skinTest(
+      'wide splitters: primary under the pointer in Light and Dark, '
+      'unchanged in Retro', (tester) async {
+    for (final skin in AppSkin.values) {
+      await _pumpShell(tester, skin, _Layout.wide);
+      final splitter = find.byKey(const Key('spbNavigatorSplitter'));
+      expect(tester.getSize(splitter).width, 9, reason: skin.name);
+      final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await mouse.addPointer(location: tester.getCenter(splitter));
+      await tester.pumpAndSettle();
+      final tokens = WalletSkinTokens.forSkin(skin);
+      final first = dividers(tester).first;
+      if (skin == AppSkin.retro) {
+        expect(first.color, isNull);
+        expect(first.thickness, 1);
+      } else {
+        expect(first.color, tokens.primary, reason: skin.name);
+        expect(first.thickness, 2);
+        expect(dividers(tester).last.color, tokens.splitter);
+      }
+      await mouse.moveTo(const Offset(640, 400));
+      await tester.pumpAndSettle();
+      if (skin != AppSkin.retro) {
+        expect(dividers(tester).first.color, tokens.splitter);
+      }
+      await mouse.removePointer();
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  _skinTest(
+      'Android tablet splitters get a handle and a 24 dp grab zone in '
+      'Light and Dark only', (tester) async {
+    for (final skin in AppSkin.values) {
+      await _pumpShell(tester, skin, _Layout.tablet);
+      for (final key in ['spbNavigatorSplitter', 'spbActionsPanelSplitter']) {
+        final splitter = find.byKey(Key(key));
+        final handle = find.descendant(
+          of: splitter,
+          matching: find.byWidgetPredicate(
+            (widget) =>
+                widget is Container &&
+                widget.constraints?.maxWidth == 7 &&
+                widget.constraints?.maxHeight == 36,
+          ),
+        );
+        if (skin == AppSkin.retro) {
+          expect(tester.getSize(splitter).width, 9, reason: key);
+          expect(handle, findsNothing);
+        } else {
+          expect(tester.getSize(splitter).width, 24,
+              reason: '${skin.name} $key');
+          expect(handle, findsOneWidget);
+        }
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  for (final skin in [AppSkin.light, AppSkin.dark]) {
+    _skinTest('${skin.name} narrow: menu sheets start with the object header',
+        (tester) async {
+      await _pumpShell(tester, skin, _Layout.narrow);
+      await tester
+          .longPress(find.byKey(const ValueKey('spbCentralCard-s-root')));
+      await tester.pumpAndSettle();
+      final sheet = find.byType(BottomSheet);
+      expect(
+        find.descendant(of: sheet, matching: find.text('Root card')),
+        findsOneWidget,
+      );
+      Navigator.of(tester.element(find.byType(VaultShell)), rootNavigator: true)
+          .maybePop();
+      await tester.pumpAndSettle();
+      await tester.longPress(
+        find.byKey(const ValueKey('spbCentralFolder-Finance')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.descendant(
+            of: find.byType(BottomSheet), matching: find.text('Папка')),
+        findsOneWidget,
+      );
+      expect(
+          find.byKey(const Key('deleteFolderContextAction')), findsOneWidget);
+      Navigator.of(tester.element(find.byType(VaultShell)), rootNavigator: true)
+          .maybePop();
+      await tester.pumpAndSettle();
     });
   }
 

@@ -4815,6 +4815,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   /// Light/Dark narrow shell only: the "База" tab is shown. Never stored.
   bool modernVaultTabOpen = false;
+
+  /// Light/Dark wide shell only: splitter under the mouse pointer.
+  String? modernHoveredSplitter;
   String? message;
   String? spbWalletPath;
   String? spbWalletUri;
@@ -7984,7 +7987,34 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget buildSpbDesktopShell() {
     final t = skinTokens;
-    final splitterColor = t.isRetro ? null : t.splitter;
+    // Light/Dark: the line turns primary under the pointer; on an Android
+    // tablet a visible handle and a 24 dp grab zone replace the thin line.
+    final touchSplitters =
+        !t.isRetro && defaultTargetPlatform == TargetPlatform.android;
+    Color? splitterColor(String name) => t.isRetro
+        ? null
+        : modernHoveredSplitter == name
+            ? t.primary
+            : t.splitter;
+    double splitterThickness(String name) =>
+        !t.isRetro && modernHoveredSplitter == name ? 2 : 1;
+    Widget? splitterHandle() => touchSplitters
+        ? Center(
+            child: Container(
+              width: 7,
+              height: 36,
+              decoration: BoxDecoration(
+                color: t.thumb,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          )
+        : null;
+    void hoverSplitter(String? name) {
+      if (t.isRetro || modernHoveredSplitter == name) return;
+      setState(() => modernHoveredSplitter = name);
+    }
+
     return Scaffold(
       backgroundColor: t.isRetro ? appWindowBackgroundColor : t.bg,
       body: SafeArea(
@@ -7994,7 +8024,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             const minimumNavigatorWidth = 160.0;
             const minimumCenterWidth = 160.0;
             const minimumRightPanelWidth = 180.0;
-            const splitterHitWidth = 9.0;
+            final splitterHitWidth = touchSplitters ? 24.0 : 9.0;
             const defaultRightPanelWidth = WorkspaceGeometry.actionsWidth;
             final maximumRightPanelWidth = max(
               minimumRightPanelWidth,
@@ -8037,8 +8067,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                           ),
                           VerticalDivider(
                             width: WorkspaceGeometry.divider,
-                            thickness: 1,
-                            color: splitterColor,
+                            thickness: splitterThickness('navigator'),
+                            color: splitterColor('navigator'),
                           ),
                           Expanded(
                             child: Focus(
@@ -8064,8 +8094,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                           ),
                           VerticalDivider(
                             width: WorkspaceGeometry.divider,
-                            thickness: 1,
-                            color: splitterColor,
+                            thickness: splitterThickness('actions'),
+                            color: splitterColor('actions'),
                           ),
                           SizedBox(
                             width: rightPanelWidth,
@@ -8083,9 +8113,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         width: splitterHitWidth,
                         child: MouseRegion(
                           cursor: SystemMouseCursors.resizeColumn,
+                          onEnter: (_) => hoverSplitter('navigator'),
+                          onExit: (_) => hoverSplitter(null),
                           child: GestureDetector(
                             key: const Key('spbNavigatorSplitter'),
                             behavior: HitTestBehavior.opaque,
+                            child: splitterHandle(),
                             onHorizontalDragUpdate: (details) {
                               setState(() {
                                 spbNavigatorWidth =
@@ -8110,9 +8143,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         width: splitterHitWidth,
                         child: MouseRegion(
                           cursor: SystemMouseCursors.resizeColumn,
+                          onEnter: (_) => hoverSplitter('actions'),
+                          onExit: (_) => hoverSplitter(null),
                           child: GestureDetector(
                             key: const Key('spbActionsPanelSplitter'),
                             behavior: HitTestBehavior.opaque,
+                            child: splitterHandle(),
                             onHorizontalDragUpdate: (details) {
                               setState(() {
                                 spbActionsPanelWidth =
@@ -10411,6 +10447,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final selected = await showSkinMenu<String>(
       context: context,
+      sheetHeader: (_) => buildModernTemplateMenuHeader(template),
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
@@ -11391,6 +11428,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     try {
       selected = await showSkinMenu<String>(
         context: context,
+        sheetHeader: (_) => buildModernFolderMenuHeader(folder),
         position: RelativeRect.fromRect(
           overlay.globalToLocal(globalPosition) & const Size(1, 1),
           Offset.zero & overlay.size,
@@ -11537,6 +11575,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     try {
       selected = await showSkinMenu<String>(
         context: context,
+        sheetHeader: (_) => buildModernCardMenuHeader(item),
         position: RelativeRect.fromRect(
           overlay.globalToLocal(globalPosition) & const Size(1, 1),
           Offset.zero & overlay.size,

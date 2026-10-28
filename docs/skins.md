@@ -78,14 +78,17 @@ the core are unchanged; only presentation differs between skins.
 - Large dialogs already fill a narrow screen; their frame loses its corners
   in Light/Dark.
 
-## Not implemented / open items
+## Follow-up (0.7.12+)
 
-- Splitter hover highlight (primary 2 px) and the 7×36 tablet handle with a
-  24 dp grab zone: splitter geometry and behaviour are unchanged; only the
-  line colour follows the skin.
-- Header block (tile, title, subtitle) inside the narrow bottom-sheet menus:
-  the generic menu helper only knows the menu entries.
-- Primary-tinted FAB shadow; default Material elevation is used.
+- Wide splitters turn primary (2 px) under the mouse pointer; on an Android
+  tablet they show a 7×36 handle with a 24 dp grab zone. Retro keeps 9 px
+  and no highlight. Widths, limits and keys are unchanged.
+- Narrow bottom-sheet menus of cards, folders and templates start with the
+  object header (tile, name, template/path); entries are unchanged.
+- The Light FAB has the primary-tinted shadow of section 6.3; Dark has none.
+
+## Open items
+
 - Window title bars (DWM, GTK) are unchanged by owner decision.
 - Device checks: Windows release build only; Linux, Android phone/tablet,
   TalkBack and SAF flows still need manual verification.

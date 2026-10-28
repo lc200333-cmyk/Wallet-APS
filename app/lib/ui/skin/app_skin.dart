@@ -833,7 +833,11 @@ ThemeData buildModernTheme(Brightness brightness) {
     floatingActionButtonTheme: FloatingActionButtonThemeData(
       backgroundColor: t.primary,
       foregroundColor: t.onPrimary,
-      elevation: t.isDark ? 0 : 4,
+      // The tinted shadow of section 6.3 is drawn by the shell around the FAB.
+      elevation: 0,
+      focusElevation: 0,
+      hoverElevation: 0,
+      highlightElevation: 0,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
     ),
     drawerTheme: DrawerThemeData(backgroundColor: t.surface),

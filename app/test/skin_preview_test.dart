@@ -315,5 +315,30 @@ void main() {
       await tester.pumpAndSettle();
       await _shoot(tester, '${s}_narrow_card_editor');
     });
+
+    if (skin != AppSkin.retro) {
+      _preview('$s narrow card menu', (tester) async {
+        await _pump(
+          tester,
+          skin,
+          size: const Size(412, 915),
+          platform: TargetPlatform.android,
+        );
+        await tester
+            .longPress(find.byKey(const ValueKey('spbCentralCard-p-7')));
+        await tester.pumpAndSettle();
+        await _shoot(tester, '${s}_narrow_card_menu');
+      });
+    }
+
+    _preview('$s android tablet', (tester) async {
+      await _pump(
+        tester,
+        skin,
+        size: const Size(1280, 800),
+        platform: TargetPlatform.android,
+      );
+      await _shoot(tester, '${s}_tablet_root');
+    });
   }
 }

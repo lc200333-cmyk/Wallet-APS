@@ -17,6 +17,7 @@ Future<T?> showSkinMenu<T>({
   required BuildContext context,
   required RelativeRect position,
   required List<PopupMenuEntry<T>> items,
+  WidgetBuilder? sheetHeader,
 }) {
   final t = WalletSkinTokens.of(context);
   if (t.isRetro) {
@@ -47,6 +48,10 @@ Future<T?> showSkinMenu<T>({
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (sheetHeader != null) ...[
+                  sheetHeader(sheetContext),
+                  const PopupMenuDivider(),
+                ],
                 for (final entry in styled)
                   entry is PopupMenuItem<T>
                       ? ConstrainedBox(
@@ -109,6 +114,96 @@ List<PopupMenuEntry<T>> _skinMenuEntries<T>(
 }
 
 extension _ModernMobileShell on _VaultShellState {
+  /// Header of a narrow bottom-sheet menu: object tile, name and subtitle.
+  Widget buildModernMenuHeader({
+    required Widget icon,
+    required SkinTilePair pair,
+    required String title,
+    required String subtitle,
+  }) {
+    final t = skinTokens;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Row(
+        children: [
+          skinIconTile(icon: icon, pair: pair, size: 40),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: t.onSurface,
+                  ),
+                ),
+                Text(
+                  subtitle,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 13, color: t.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget buildModernCardMenuHeader(SecretItem item) {
+    final template = templateFor(item.templateId);
+    final pair = skinTileForItem(item);
+    return buildModernMenuHeader(
+      icon: spbSizedDataIcon(
+        itemIconId(item, template),
+        40,
+        fallbackColor: pair.icon,
+      ),
+      pair: pair,
+      title: item.title,
+      subtitle: [
+        template.displayName,
+        if (item.category.trim().isNotEmpty) item.category,
+      ].join(' · '),
+    );
+  }
+
+  Widget buildModernFolderMenuHeader(CategoryTreeNode folder) {
+    final pair = skinTileForFolder(folder.colorId);
+    final parent = categoryParts(folder.path)..removeLast();
+    return buildModernMenuHeader(
+      icon: spbSizedDataIcon(
+        folder.iconId ?? defaultIconForCategoryPath(folder.path),
+        40,
+        fallbackColor: pair.icon,
+      ),
+      pair: pair,
+      title: folder.name,
+      subtitle: parent.isEmpty ? 'Папка' : 'Папка · ${parent.join(' / ')}',
+    );
+  }
+
+  Widget buildModernTemplateMenuHeader(CardTemplate template) {
+    final pair = skinTileForTemplate(template);
+    return buildModernMenuHeader(
+      icon: spbSizedDataIcon(
+        template.iconId,
+        40,
+        fallbackColor: pair.icon,
+      ),
+      pair: pair,
+      title: template.displayName,
+      subtitle: 'Шаблон',
+    );
+  }
+
   int get modernTabIndex => modernVaultTabOpen
       ? 3
       : iconLibraryOpen
@@ -195,7 +290,23 @@ extension _ModernMobileShell on _VaultShellState {
       child: Scaffold(
         backgroundColor: t.bg,
         body: SafeArea(bottom: false, child: body),
-        floatingActionButton: fab,
+        floatingActionButton: fab == null
+            ? null
+            : DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: t.isDark
+                      ? const []
+                      : [
+                          BoxShadow(
+                            color: t.primary.withValues(alpha: 0.30),
+                            offset: const Offset(0, 4),
+                            blurRadius: 12,
+                          ),
+                        ],
+                ),
+                child: fab,
+              ),
         bottomNavigationBar: DecoratedBox(
           decoration: BoxDecoration(
             border: Border(
