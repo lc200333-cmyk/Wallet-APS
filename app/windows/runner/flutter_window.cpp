@@ -261,7 +261,7 @@ void FlutterWindow::SetWindowMode(bool login, bool expanded,
 
   const double scale = GetDpiForWindow(hwnd) / 96.0;
   int width = static_cast<int>((login ? 562 : 1280) * scale);
-  const int login_height = expanded ? 650 : 590;
+  const int login_height = expanded ? 702 : 642;
   // V1 outer-window target in DIP. Keep the real system frame; Flutter gets
   // the remaining client area. Round only after applying the monitor DPI.
   int height = static_cast<int>(

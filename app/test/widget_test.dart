@@ -4794,7 +4794,7 @@ void main() {
 
     expect(
       tester.getSize(find.byKey(const Key('passwordWindow'))),
-      const Size(562, 590),
+      const Size(562, 642),
     );
     expect(tester.takeException(), isNull);
   });

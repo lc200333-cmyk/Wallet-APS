@@ -1,5 +1,14 @@
 # Design experiment history
 
+## 2026-10-28: Retro, Light and Dark skins (new specification)
+
+Started from the restored interface (`3a0dfca`) per the owner's new
+specification `Wallet-APS_themes_task.pdf`; the reverted experiment was not
+restored. Retro is the original interface; Light and Dark are selected in the
+password window and stored outside vaults. Details, decisions, verification
+and open items: [skins.md](skins.md). Pushed to master at the owner's
+request; the existing release workflow selects the next patch version.
+
 ## 2026-10-28: return to the original interface
 
 The owner requested a fresh starting point for new designs and authorized a

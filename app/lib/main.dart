@@ -27,6 +27,7 @@ import 'features/templates/template_folders.dart';
 import 'services/wallet_rekey_service.dart';
 import 'services/password_generator.dart';
 import 'services/platform/secure_clipboard_service.dart';
+import 'ui/skin/app_skin.dart';
 import 'widgets/card_surface.dart';
 import 'widgets/context_menu_label.dart';
 import 'widgets/object_selection_menu_label.dart';
@@ -34,7 +35,12 @@ import 'widgets/workspace_section_bar.dart';
 import 'widgets/android_screen_scale.dart';
 import 'widgets/workspace_geometry.dart';
 
-void main(List<String> arguments) {
+part 'ui/modern/modern_password.dart';
+part 'ui/modern/modern_wide.dart';
+part 'ui/modern/modern_mobile.dart';
+part 'ui/modern/modern_dialogs.dart';
+
+Future<void> main(List<String> arguments) async {
   final initialVaultPath = arguments.cast<String?>().firstWhere(
         (argument) =>
             argument != null &&
@@ -42,7 +48,27 @@ void main(List<String> arguments) {
             File(argument).existsSync(),
         orElse: () => null,
       );
+  WidgetsFlutterBinding.ensureInitialized();
+  AppSkinStore.directoryProvider = resolveAppStateDirectory;
+  appSkin.value = await AppSkinStore.load();
   runApp(WalletApsApp(initialVaultPath: initialVaultPath));
+}
+
+/// Program settings directory (recent vaults, interface skin).
+Future<Directory> resolveAppStateDirectory() async {
+  if (Platform.isAndroid) {
+    final directory = Directory('${Directory.systemTemp.parent.path}/files');
+    if (!directory.existsSync()) {
+      directory.createSync(recursive: true);
+    }
+    return directory;
+  }
+  final directory =
+      designSupportDirectory(await getApplicationSupportDirectory());
+  if (!directory.existsSync()) {
+    directory.createSync(recursive: true);
+  }
+  return directory;
 }
 
 final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -455,15 +481,25 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Text(
+          Text(
             'Design v. $currentAppVersion',
-            style: TextStyle(color: Color(0xffeeeeee), fontSize: 14),
+            style: TextStyle(
+              color: WalletSkinTokens.of(context).isRetro
+                  ? const Color(0xffeeeeee)
+                  : WalletSkinTokens.of(context).onSurfaceVariant,
+              fontSize: 14,
+            ),
           ),
           Tooltip(
             message: 'Обновления Design: GitHub в браузере (нужен вход)',
             child: IconButton(
               key: const Key('designReleasesButton'),
-              icon: const Icon(Icons.open_in_browser, color: Color(0xffeeeeee)),
+              icon: Icon(
+                Icons.open_in_browser,
+                color: WalletSkinTokens.of(context).isRetro
+                    ? const Color(0xffeeeeee)
+                    : WalletSkinTokens.of(context).primary,
+              ),
               visualDensity: VisualDensity.compact,
               onPressed: () async {
                 try {
@@ -1362,20 +1398,47 @@ class WalletApsApp extends StatelessWidget {
         (enlargedText.labelLarge ?? const TextStyle()).copyWith(
       fontSize: (enlargedText.labelLarge?.fontSize ?? 16) + 1,
     );
-    return MaterialApp(
-      scaffoldMessengerKey: rootScaffoldMessengerKey,
-      title: designAppName,
-      debugShowCheckedModeBanner: false,
-      builder: (context, child) => AppUserActivityRegion(
-        child: AndroidScreenScale(
-          child: child ?? const SizedBox.shrink(),
-        ),
-      ),
-      theme: baseTheme.copyWith(
-        textTheme: enlargedText,
-        popupMenuTheme: PopupMenuThemeData(textStyle: popupMenuTextStyle),
-      ),
-      home: VaultShell(initialVaultPath: initialVaultPath),
+    final retroTheme = baseTheme.copyWith(
+      textTheme: enlargedText,
+      popupMenuTheme: PopupMenuThemeData(textStyle: popupMenuTextStyle),
+      extensions: const [WalletSkinTokens.retro],
+    );
+    return ValueListenableBuilder<AppSkin>(
+      valueListenable: appSkin,
+      builder: (context, skin, _) {
+        final modern = skin != AppSkin.retro;
+        return MaterialApp(
+          scaffoldMessengerKey: rootScaffoldMessengerKey,
+          title: designAppName,
+          debugShowCheckedModeBanner: false,
+          themeAnimationDuration: Duration.zero,
+          builder: (context, child) {
+            final content = AppUserActivityRegion(
+              child: AndroidScreenScale(
+                child: child ?? const SizedBox.shrink(),
+              ),
+            );
+            if (!modern) return content;
+            return AnnotatedRegion<SystemUiOverlayStyle>(
+              value: (skin == AppSkin.dark
+                      ? SystemUiOverlayStyle.light
+                      : SystemUiOverlayStyle.dark)
+                  .copyWith(
+                statusBarColor: Colors.transparent,
+                systemNavigationBarColor: Colors.transparent,
+                systemNavigationBarDividerColor: Colors.transparent,
+              ),
+              child: content,
+            );
+          },
+          theme: switch (skin) {
+            AppSkin.retro => retroTheme,
+            AppSkin.light => buildModernTheme(Brightness.light),
+            AppSkin.dark => buildModernTheme(Brightness.dark),
+          },
+          home: VaultShell(initialVaultPath: initialVaultPath),
+        );
+      },
     );
   }
 }
@@ -3084,7 +3147,7 @@ class _ExternalImageDropTargetState extends State<ExternalImageDropTarget> {
     }
     if (!mounted || clipboardBitmap == null || clipboardBitmap.isEmpty) return;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final selected = await showMenu<String>(
+    final selected = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & Size.zero,
@@ -3258,7 +3321,7 @@ Future<bool> showUserIconUploadConfirmation(
     context: context,
     builder: (dialogContext) => AlertDialog(
       key: const Key('iconUploadConfirmationDialog'),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+      shape: skinAlertShape(context, 4),
       title: const Text('Загрузить иконку'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3268,8 +3331,8 @@ Future<bool> showUserIconUploadConfirmation(
             height: 136,
             padding: const EdgeInsets.all(4),
             decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: const Color(0xff82929d)),
+              color: skinFrameFill(context),
+              border: Border.all(color: skinFrameEdge(context)),
               borderRadius: BorderRadius.circular(5),
             ),
             child: Image.memory(bytes, fit: BoxFit.contain),
@@ -3725,7 +3788,7 @@ Future<AttachmentContextAction?> showAttachmentContextMenu(
   bool allowShare = false,
 }) {
   final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-  return showMenu<AttachmentContextAction>(
+  return showSkinMenu<AttachmentContextAction>(
     context: context,
     position: RelativeRect.fromRect(
       overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -4749,6 +4812,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   String? configuredWindowMode;
   String? configuredMainWindowTitle;
   VirtualKeyboardMode virtualKeyboardMode = VirtualKeyboardMode.numeric;
+
+  /// Light/Dark narrow shell only: the "База" tab is shown. Never stored.
+  bool modernVaultTabOpen = false;
   String? message;
   String? spbWalletPath;
   String? spbWalletUri;
@@ -4872,21 +4938,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return current;
   }
 
-  Future<Directory> appStateDirectory() async {
-    if (Platform.isAndroid) {
-      final directory = Directory('${Directory.systemTemp.parent.path}/files');
-      if (!directory.existsSync()) {
-        directory.createSync(recursive: true);
-      }
-      return directory;
-    }
-    final directory =
-        designSupportDirectory(await getApplicationSupportDirectory());
-    if (!directory.existsSync()) {
-      directory.createSync(recursive: true);
-    }
-    return directory;
-  }
+  Future<Directory> appStateDirectory() => resolveAppStateDirectory();
 
   Future<Directory> appVaultDirectory() async {
     final base = Platform.isAndroid
@@ -5851,9 +5903,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: appWindowBackgroundColor,
+          backgroundColor: skinDialogBackground(context),
           surfaceTintColor: Colors.transparent,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+          shape: skinAlertShape(context, 4),
           titlePadding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
           title: GestureDetector(
             key: const Key('newVaultDialogDragHandle'),
@@ -5871,10 +5923,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ),
           content: Theme(
             data: Theme.of(context).copyWith(
-              inputDecorationTheme: const InputDecorationTheme(
-                filled: true,
-                fillColor: Colors.white,
-              ),
+              inputDecorationTheme: WalletSkinTokens.of(context).isRetro
+                  ? const InputDecorationTheme(
+                      filled: true,
+                      fillColor: Colors.white,
+                    )
+                  : Theme.of(context).inputDecorationTheme,
             ),
             child: SizedBox(
               width: 420,
@@ -6336,10 +6390,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               horizontal: narrow ? 4 : 40,
               vertical: narrow ? 8 : 24,
             ),
-            backgroundColor: appWindowBackgroundColor,
+            backgroundColor: skinDialogBackground(context),
             surfaceTintColor: Colors.transparent,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+            shape: skinAlertShape(context, 4),
             titlePadding: const EdgeInsets.fromLTRB(24, 16, 24, 4),
             title: GestureDetector(
               key: const Key('changePasswordDialogDragHandle'),
@@ -6401,13 +6454,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     child: TextField(
                       key: const Key('changePasswordHint'),
                       controller: hintController,
-                      decoration: const InputDecoration(
+                      decoration: InputDecoration(
                         labelText: 'Подсказка',
                         filled: true,
-                        fillColor: Colors.white,
-                        border: OutlineInputBorder(),
+                        fillColor: WalletSkinTokens.of(context).isRetro
+                            ? Colors.white
+                            : WalletSkinTokens.of(context).surface,
+                        border: const OutlineInputBorder(),
                         isDense: true,
-                        contentPadding: EdgeInsets.symmetric(
+                        contentPadding: const EdgeInsets.symmetric(
                           horizontal: 12,
                           vertical: 8,
                         ),
@@ -7213,6 +7268,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return 'folder';
   }
 
+  void modernSetState(VoidCallback fn) => setState(fn);
+
   @override
   Widget build(BuildContext context) {
     synchronizeWindowMode();
@@ -7245,7 +7302,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         final mobile = constraints.maxWidth < 700 ||
             constraints.maxHeight < 500 ||
             portraitTablet;
-        return mobile ? buildSpbMobileShell() : buildSpbDesktopShell();
+        if (!mobile) return buildSpbDesktopShell();
+        return skinTokens.isRetro
+            ? buildSpbMobileShell()
+            : buildModernMobileShell();
       },
     );
     return Listener(
@@ -7385,6 +7445,38 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool bold = true,
     bool alignTrailingToTitleBaseline = false,
   }) {
+    final t = skinTokens;
+    if (!t.isRetro) {
+      return Container(
+        height: height,
+        padding: padding,
+        decoration: BoxDecoration(
+          color: t.work,
+          border: Border(bottom: BorderSide(color: t.outline)),
+        ),
+        child: Row(
+          children: [
+            if (leading != null) ...[
+              leading,
+              const SizedBox(width: 8),
+            ],
+            Expanded(
+              child: Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: fontSize,
+                  fontWeight: bold ? FontWeight.w600 : FontWeight.normal,
+                  color: t.onSurface,
+                ),
+              ),
+            ),
+            if (trailing != null) trailing,
+          ],
+        ),
+      );
+    }
     return Container(
       height: height,
       padding: padding,
@@ -7445,6 +7537,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     double? desktopNavigatorWidth,
     double? desktopActionsPanelWidth,
   }) {
+    if (!skinTokens.isRetro && !mobile) return buildModernToolbar();
     final android = defaultTargetPlatform == TargetPlatform.android;
     final enlarged = android || defaultTargetPlatform == TargetPlatform.windows;
     final searchScale = enlarged ? 1.1 : 1.0;
@@ -7545,7 +7638,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final button = activeRenderBoxForKey(spbSessionUndoButtonKey);
     if (button == null || overlay == null) return;
     final offset = button.localToGlobal(Offset.zero, ancestor: overlay);
-    final selected = await showMenu<int>(
+    final selected = await showSkinMenu<int>(
       context: context,
       position: RelativeRect.fromLTRB(
         offset.dx,
@@ -7590,6 +7683,35 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ? 1.1
         : 1.0;
     final dimension = WorkspaceGeometry.searchHeight * scale;
+    final t = skinTokens;
+    if (!t.isRetro) {
+      return SizedBox(
+        key: key,
+        width: dimension,
+        height: dimension,
+        child: Tooltip(
+          message: tooltip,
+          child: Material(
+            color: selected ? t.primaryContainer : t.s2,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+              side: selected
+                  ? BorderSide(color: t.primary, width: 2)
+                  : BorderSide.none,
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(10),
+              onTap: onTap,
+              child: Icon(
+                icon,
+                color: selected ? t.onPrimaryContainer : t.onSurfaceVariant,
+                size: WorkspaceGeometry.smallIcon * scale,
+              ),
+            ),
+          ),
+        ),
+      );
+    }
     return SizedBox(
       key: key,
       width: dimension,
@@ -7861,8 +7983,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Widget buildSpbDesktopShell() {
+    final t = skinTokens;
+    final splitterColor = t.isRetro ? null : t.splitter;
     return Scaffold(
-      backgroundColor: appWindowBackgroundColor,
+      backgroundColor: t.isRetro ? appWindowBackgroundColor : t.bg,
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -7911,9 +8035,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             child:
                                 spbWorkspaceScrollbarTheme(buildSpbNavigator()),
                           ),
-                          const VerticalDivider(
+                          VerticalDivider(
                             width: WorkspaceGeometry.divider,
                             thickness: 1,
+                            color: splitterColor,
                           ),
                           Expanded(
                             child: Focus(
@@ -7937,9 +8062,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   )),
                             ),
                           ),
-                          const VerticalDivider(
+                          VerticalDivider(
                             width: WorkspaceGeometry.divider,
                             thickness: 1,
+                            color: splitterColor,
                           ),
                           SizedBox(
                             width: rightPanelWidth,
@@ -8249,8 +8375,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Widget buildSpbNavigator() {
     final modified = selectedVaultModifiedText;
     final cardsModeOpen = !mobileTemplatesOpen && !iconLibraryOpen;
+    final t = skinTokens;
     return Material(
-      color: Colors.white,
+      color: t.isRetro ? Colors.white : t.nav,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -8258,32 +8385,34 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             categoryPath: '',
             child: spbRootCreationMenuTarget(
               key: const Key('spbVaultTitle'),
-              child: spbSectionHeader(
-                selectedVaultTitle,
-                fontSize: WorkspaceGeometry.navigatorHeadingFontSize,
-                padding: const EdgeInsets.only(left: 6.5, right: 6),
-                leading: Image.asset(
-                  'assets/branding/wallet_android.png',
-                  key: const Key('spbDesktopAppIcon'),
-                  width: WorkspaceGeometry.smallIcon,
-                  height: WorkspaceGeometry.smallIcon,
-                  cacheWidth: 96,
-                  fit: BoxFit.contain,
-                ),
-                bold: true,
-                alignTrailingToTitleBaseline: false,
-                trailing: modified == null
-                    ? null
-                    : Text(
-                        modified,
-                        key: const Key('spbDesktopVaultModified'),
-                        maxLines: 1,
-                        style: const TextStyle(
-                          fontSize: WorkspaceGeometry.fontSize,
-                          fontWeight: FontWeight.normal,
-                        ),
+              child: !t.isRetro
+                  ? buildModernNavigatorHeader()
+                  : spbSectionHeader(
+                      selectedVaultTitle,
+                      fontSize: WorkspaceGeometry.navigatorHeadingFontSize,
+                      padding: const EdgeInsets.only(left: 6.5, right: 6),
+                      leading: Image.asset(
+                        'assets/branding/wallet_android.png',
+                        key: const Key('spbDesktopAppIcon'),
+                        width: WorkspaceGeometry.smallIcon,
+                        height: WorkspaceGeometry.smallIcon,
+                        cacheWidth: 96,
+                        fit: BoxFit.contain,
                       ),
-              ),
+                      bold: true,
+                      alignTrailingToTitleBaseline: false,
+                      trailing: modified == null
+                          ? null
+                          : Text(
+                              modified,
+                              key: const Key('spbDesktopVaultModified'),
+                              maxLines: 1,
+                              style: const TextStyle(
+                                fontSize: WorkspaceGeometry.fontSize,
+                                fontWeight: FontWeight.normal,
+                              ),
+                            ),
+                    ),
             ),
           ),
           buildSpbMyCardsModeButton(selected: cardsModeOpen),
@@ -8314,11 +8443,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         ),
             ),
           ),
+          if (!t.isRetro && (cardsModeOpen || mobileTemplatesOpen))
+            Divider(height: 1, color: t.outline),
           if (cardsModeOpen) ...[
             buildSpbTemplatesModeButton(selected: false),
             buildSpbIconsModeButton(selected: false),
           ] else if (mobileTemplatesOpen)
             buildSpbIconsModeButton(selected: false),
+          if (!t.isRetro) const SizedBox(height: 6),
         ],
       ),
     );
@@ -8381,22 +8513,37 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool opensRootCreationMenu = false,
     bool opensTemplateCreationMenu = false,
   }) {
-    final button = WorkspaceSectionBar(
-      label: label,
-      selected: selected,
-      showBottomBorder: true,
-      alwaysHighlighted: true,
-      leading: iconWidget ??
-          (iconFile == null
-              ? Icon(
-                  icon ?? Icons.folder_outlined,
-                  size: WorkspaceGeometry.sectionIcon,
-                  color: const Color(0xff33434f),
-                )
-              : spbResourceIcon(iconFile, WorkspaceGeometry.sectionIcon)),
-    );
+    final t = skinTokens;
+    final leadingIcon = iconWidget ??
+        (iconFile == null
+            ? Icon(
+                icon ?? Icons.folder_outlined,
+                size: WorkspaceGeometry.sectionIcon,
+                color: t.isRetro ? const Color(0xff33434f) : t.onSurfaceVariant,
+              )
+            : spbResourceIcon(iconFile, WorkspaceGeometry.sectionIcon));
+    final button = !t.isRetro
+        ? buildModernModeRow(
+            label: label,
+            leading: leadingIcon,
+            selected: selected,
+          )
+        : WorkspaceSectionBar(
+            label: label,
+            selected: selected,
+            showBottomBorder: true,
+            alwaysHighlighted: true,
+            leading: iconWidget ??
+                (iconFile == null
+                    ? Icon(
+                        icon ?? Icons.folder_outlined,
+                        size: WorkspaceGeometry.sectionIcon,
+                        color: const Color(0xff33434f),
+                      )
+                    : spbResourceIcon(iconFile, WorkspaceGeometry.sectionIcon)),
+          );
     final surface = Material(
-      color: const Color(0xffdbeaf5),
+      color: t.isRetro ? const Color(0xffdbeaf5) : Colors.transparent,
       child: opensRootCreationMenu
           ? spbRootCreationMenuTarget(child: button)
           : InkWell(onTap: onTap, child: button),
@@ -8464,6 +8611,21 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget spbExpansionMark(bool expanded, {double? dimension}) {
     final size = dimension ?? WorkspaceGeometry.expansionSize;
+    final t = skinTokens;
+    if (!t.isRetro) {
+      return SizedBox.square(
+        dimension: size,
+        child: OverflowBox(
+          maxWidth: 16,
+          maxHeight: 16,
+          child: Icon(
+            expanded ? Icons.expand_more : Icons.chevron_right,
+            size: 16,
+            color: t.onSurfaceVariant,
+          ),
+        ),
+      );
+    }
     return Container(
       width: size,
       height: size,
@@ -8511,7 +8673,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           spbSizedDataIcon(
             itemIconId(item, template),
             dimension,
-            fallbackColor: itemPictogramColor(item, template),
+            fallbackColor: skinTokens.isRetro
+                ? itemPictogramColor(item, template)
+                : skinTileForItem(item).icon,
           ),
           if (item.attachments.any((attachment) => !attachment.deleted))
             Positioned(
@@ -8835,7 +8999,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         folder.iconId ??
                             defaultIconForCategoryPath(folder.path),
                         treeIconSize,
-                        fallbackColor: categoryPictogramColor(folder.colorId),
+                        fallbackColor: skinTokens.isRetro
+                            ? categoryPictogramColor(folder.colorId)
+                            : skinTileForFolder(folder.colorId).icon,
                       ),
                     ],
                   ),
@@ -8851,7 +9017,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       child: CustomPaint(
                         key: ValueKey('spbTreeFolderHighlight-${folder.path}'),
                         painter: selectedCategoryPath == folder.path
-                            ? SpbFolderHighlightPainter(folderRowHeight)
+                            ? SpbFolderHighlightPainter(
+                                folderRowHeight,
+                                modernColor: skinTokens.isRetro
+                                    ? null
+                                    : skinTokens.selection,
+                              )
                             : null,
                         child: Text(
                           folder.name,
@@ -8859,7 +9030,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                           softWrap: false,
                           overflow: TextOverflow.visible,
                           strutStyle: folderStrut,
-                          style: folderStyle,
+                          style: !skinTokens.isRetro &&
+                                  selectedCategoryPath == folder.path
+                              ? folderStyle.copyWith(
+                                  color: skinTokens.onSelection,
+                                  fontWeight: FontWeight.w600,
+                                )
+                              : folderStyle,
                         ),
                       ),
                     ),
@@ -8894,7 +9071,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             child: ListTile(
               selected: selectedItemIds.contains(item.id) ||
                   selectedItemId == item.id,
-              selectedTileColor: const Color(0xffcfe9fb),
+              selectedTileColor: skinTokens.isRetro
+                  ? const Color(0xffcfe9fb)
+                  : skinTokens.selection,
+              selectedColor: skinTokens.isRetro ? null : skinTokens.onSelection,
+              shape: skinTokens.isRetro
+                  ? null
+                  : RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
               dense: true,
               visualDensity: VisualDensity.standard,
               minTileHeight: folderRowHeight,
@@ -9288,7 +9473,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return spbSizedDataIcon(
       managedIconPreviewId(iconId),
       size,
-      fallbackColor: const Color(0xff6f7f89),
+      fallbackColor: skinTokens.isRetro
+          ? const Color(0xff6f7f89)
+          : skinTokens.onSurfaceVariant,
     );
   }
 
@@ -9330,11 +9517,22 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             onAcceptWithDetails: (details) =>
                 unawaited(moveManagedIconTo(details.data.iconId, kind)),
             builder: (context, candidates, rejected) => Material(
-              color: candidates.isNotEmpty
-                  ? const Color(0xffcce9cf)
-                  : selectedIconCatalog == kind
-                      ? const Color(0xffdbeaf5)
-                      : Colors.transparent,
+              color: skinTokens.isRetro
+                  ? (candidates.isNotEmpty
+                      ? const Color(0xffcce9cf)
+                      : selectedIconCatalog == kind
+                          ? const Color(0xffdbeaf5)
+                          : Colors.transparent)
+                  : candidates.isNotEmpty
+                      ? skinTokens.primary.withValues(alpha: 0.10)
+                      : selectedIconCatalog == kind
+                          ? skinTokens.selection
+                          : Colors.transparent,
+              shape: skinTokens.isRetro
+                  ? null
+                  : RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
               child: GestureDetector(
                   onSecondaryTapDown: kind.isCustom
                       ? (details) =>
@@ -9462,7 +9660,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Future<void> showIconFolderMenu(
       IconCatalogKind folder, Offset position) async {
-    final action = await showMenu<String>(
+    final action = await showSkinMenu<String>(
         context: context,
         position: RelativeRect.fromSize(
             Rect.fromLTWH(position.dx, position.dy, 0, 0),
@@ -9620,7 +9818,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: skinAlertShape(context, 0),
         title: const Text('Удалить иконку'),
         content: Text(
           'Иконка «${managedIconLabel(iconId)}» будет удалена из каталога.',
@@ -9693,7 +9891,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final current = managedIconCatalogFor(iconId);
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     spbContextMenuOpen = true;
-    final selected = await showMenu<String>(
+    final selected = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -9970,7 +10168,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 minVerticalPadding: 0,
                 contentPadding: const EdgeInsets.only(left: 6, right: 8),
                 selected: selectedTemplateFolder == folder,
-                selectedTileColor: const Color(0xffcfe9fb),
+                selectedTileColor: skinTokens.isRetro
+                    ? const Color(0xffcfe9fb)
+                    : skinTokens.selection,
+                selectedColor:
+                    skinTokens.isRetro ? null : skinTokens.onSelection,
                 leading: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
@@ -10030,7 +10232,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     visualDensity: VisualDensity.standard,
                     selected: selectedTemplateIds.contains(template.id) ||
                         selectedTemplateId == template.id,
-                    selectedTileColor: const Color(0xffcfe9fb),
+                    selectedTileColor: skinTokens.isRetro
+                        ? const Color(0xffcfe9fb)
+                        : skinTokens.selection,
+                    selectedColor:
+                        skinTokens.isRetro ? null : skinTokens.onSelection,
                     leading: spbSizedDataIcon(
                       template.iconId,
                       iconSize,
@@ -10203,7 +10409,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final actionTemplates = selectedSpbTemplatesForAction(template);
     final multiple = actionTemplates.length > 1;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final selected = await showMenu<String>(
+    final selected = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -10302,7 +10508,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: skinAlertShape(context, 0),
         title: const Text('Удалить шаблоны'),
         content: Text(
           'Выбранные шаблоны (${selectedTemplates.length}) будут перемещены '
@@ -10458,9 +10664,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             icon: spbSizedDataIcon(
                               template.iconId,
                               spbEntryGridIconSize,
-                              fallbackColor:
-                                  templateDisplayPictogramColor(template),
+                              fallbackColor: skinTokens.isRetro
+                                  ? templateDisplayPictogramColor(template)
+                                  : skinTileForTemplate(template).icon,
                             ),
+                            tilePair: skinTokens.isRetro
+                                ? null
+                                : skinTileForTemplate(template),
                             onTap: () =>
                                 selectSpbTemplateFromPrimaryClick(template),
                             onDoubleTap: () => openTemplatePreview(template),
@@ -10495,7 +10705,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       {String? folder}) async {
     if (spbObjectMenuPointerActive) return;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final selected = await showMenu<String>(
+    final selected = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -10671,9 +10881,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: appWindowBackgroundColor,
+          backgroundColor: skinDialogBackground(context),
           surfaceTintColor: Colors.transparent,
-          shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+          shape: skinAlertShape(context, 0),
           title: const Text('Удалить шаблон'),
           content: linkedItems.isEmpty
               ? Text(
@@ -10880,74 +11090,92 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         : ([...node.cards]..sort(
             (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
           ));
+    final t = skinTokens;
+    final modern = !t.isRetro;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        showingSearchResults
-            ? spbSectionHeader(
-                'Результаты поиска',
-                fontSize: narrowAndroid
-                    ? WorkspaceGeometry.headingFontSize +
-                        WorkspaceGeometry.narrowCenterFontIncrease
-                    : wideAndroid
-                        ? WorkspaceGeometry.headingFontSize +
-                            WorkspaceGeometry.wideAndroidCenterFontIncrease
-                        : WorkspaceGeometry.headingFontSize,
-                trailing:
-                    const Icon(Icons.search, size: WorkspaceGeometry.smallIcon),
-              )
-            : selectedCategoryPath.isEmpty
-                ? spbSectionHeader(
-                    'Мои записи',
-                    fontSize: narrowAndroid
-                        ? WorkspaceGeometry.headingFontSize +
-                            WorkspaceGeometry.narrowCenterFontIncrease
-                        : wideAndroid
-                            ? WorkspaceGeometry.headingFontSize +
-                                WorkspaceGeometry.wideAndroidCenterFontIncrease
-                            : WorkspaceGeometry.headingFontSize,
-                    trailing: spbCurrentFolderHeaderIcon(),
-                  )
-                : Container(
-                    height: WorkspaceGeometry.headerHeight,
-                    padding: const EdgeInsets.only(left: 12, right: 6),
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xffb9dcf5), Color(0xfff2f9fe)],
+        if (modern)
+          buildModernWorkspaceHeader(
+            objectCount: folders.length + cards.length,
+            title: showingSearchResults ? 'Результаты поиска' : null,
+          )
+        else
+          showingSearchResults
+              ? spbSectionHeader(
+                  'Результаты поиска',
+                  fontSize: narrowAndroid
+                      ? WorkspaceGeometry.headingFontSize +
+                          WorkspaceGeometry.narrowCenterFontIncrease
+                      : wideAndroid
+                          ? WorkspaceGeometry.headingFontSize +
+                              WorkspaceGeometry.wideAndroidCenterFontIncrease
+                          : WorkspaceGeometry.headingFontSize,
+                  trailing: const Icon(Icons.search,
+                      size: WorkspaceGeometry.smallIcon),
+                )
+              : selectedCategoryPath.isEmpty
+                  ? spbSectionHeader(
+                      'Мои записи',
+                      fontSize: narrowAndroid
+                          ? WorkspaceGeometry.headingFontSize +
+                              WorkspaceGeometry.narrowCenterFontIncrease
+                          : wideAndroid
+                              ? WorkspaceGeometry.headingFontSize +
+                                  WorkspaceGeometry
+                                      .wideAndroidCenterFontIncrease
+                              : WorkspaceGeometry.headingFontSize,
+                      trailing: spbCurrentFolderHeaderIcon(),
+                    )
+                  : Container(
+                      height: WorkspaceGeometry.headerHeight,
+                      padding: const EdgeInsets.only(left: 12, right: 6),
+                      decoration: const BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [Color(0xffb9dcf5), Color(0xfff2f9fe)],
+                        ),
+                        border: Border(bottom: BorderSide(color: _spbBorder)),
                       ),
-                      border: Border(bottom: BorderSide(color: _spbBorder)),
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            categoryParts(selectedCategoryPath).last,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              color: const Color(0xff18364d),
-                              fontSize: narrowAndroid
-                                  ? WorkspaceGeometry.headingFontSize +
-                                      WorkspaceGeometry.narrowCenterFontIncrease
-                                  : wideAndroid
-                                      ? WorkspaceGeometry.headingFontSize +
-                                          WorkspaceGeometry
-                                              .wideAndroidCenterFontIncrease
-                                      : WorkspaceGeometry.headingFontSize,
-                              fontWeight: FontWeight.bold,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              categoryParts(selectedCategoryPath).last,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: const Color(0xff18364d),
+                                fontSize: narrowAndroid
+                                    ? WorkspaceGeometry.headingFontSize +
+                                        WorkspaceGeometry
+                                            .narrowCenterFontIncrease
+                                    : wideAndroid
+                                        ? WorkspaceGeometry.headingFontSize +
+                                            WorkspaceGeometry
+                                                .wideAndroidCenterFontIncrease
+                                        : WorkspaceGeometry.headingFontSize,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
-                        ),
-                        spbCurrentFolderHeaderIcon(),
-                      ],
+                          spbCurrentFolderHeaderIcon(),
+                        ],
+                      ),
                     ),
-                  ),
         Expanded(
           child: ColoredBox(
             color: selectedCategoryPath.isEmpty ||
                     categoryColorsByPath[selectedCategoryPath] == null
-                ? Colors.transparent
-                : colorById(categoryColorsByPath[selectedCategoryPath]!).bg,
+                ? (modern ? t.work : Colors.transparent)
+                : modern
+                    ? Color.lerp(
+                        t.work,
+                        skinTileForFolder(
+                          categoryColorsByPath[selectedCategoryPath],
+                        ).tile,
+                        0.5,
+                      )!
+                    : colorById(categoryColorsByPath[selectedCategoryPath]!).bg,
             child: buildSpbCardMarqueeWorkspace(
               cards: cards,
               child: GestureDetector(
@@ -10980,9 +11208,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                               folder.iconId ??
                                   defaultIconForCategoryPath(folder.path),
                               gridIconSize,
-                              fallbackColor:
-                                  categoryPictogramColor(folder.colorId),
+                              fallbackColor: modern
+                                  ? skinTileForFolder(folder.colorId).icon
+                                  : categoryPictogramColor(folder.colorId),
                             ),
+                            tilePair: modern
+                                ? skinTileForFolder(folder.colorId)
+                                : null,
                             onTap: () => openSpbFolder(folder.path),
                             onContextMenu: (position) =>
                                 showSpbFolderMenu(folder, position),
@@ -11019,6 +11251,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                           labelHeight: gridLabelHeight,
                           selected: selectedItemIds.contains(item.id) ||
                               selectedItemId == item.id,
+                          tilePair: modern ? skinTileForItem(item) : null,
                           icon: spbCardIconWithAttachmentMark(
                             item: item,
                             template: template,
@@ -11108,7 +11341,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     if (spbObjectMenuPointerActive) return;
     final targetCategoryPath = destinationCategoryPath ?? selectedCategoryPath;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final selected = await showMenu<String>(
+    final selected = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -11156,7 +11389,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     String? selected;
     try {
-      selected = await showMenu<String>(
+      selected = await showSkinMenu<String>(
         context: context,
         position: RelativeRect.fromRect(
           overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -11263,7 +11496,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       min(globalPosition.dx + 180, overlay.size.width - 1),
       min(globalPosition.dy + 48, overlay.size.height - 1),
     );
-    return showMenu<String>(
+    return showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(submenuPosition) & const Size(1, 1),
@@ -11302,7 +11535,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     String? selected;
     try {
-      selected = await showMenu<String>(
+      selected = await showSkinMenu<String>(
         context: context,
         position: RelativeRect.fromRect(
           overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -11441,10 +11674,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               media.width < 700;
           return Dialog(
             insetPadding: compact ? EdgeInsets.zero : const EdgeInsets.all(24),
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.zero,
-              side: BorderSide(color: Color(0xff7f8d98)),
-            ),
+            shape: skinDialogShape(context),
+            clipBehavior: WalletSkinTokens.of(context).isRetro
+                ? Clip.none
+                : Clip.antiAlias,
             child: SizedBox(
               key: const Key('moveTargetSurface'),
               width: compact ? media.width : min(media.width - 48, 440),
@@ -11456,14 +11689,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       height: 48,
                       padding: const EdgeInsets.symmetric(horizontal: 12),
                       alignment: Alignment.centerLeft,
-                      decoration: const BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-                        ),
-                        border: Border(
-                          bottom: BorderSide(color: Color(0xff7f8d98)),
-                        ),
-                      ),
+                      decoration: skinDialogHeaderDecoration(context),
                       child: const Text(
                         'Выберите папку',
                         style: TextStyle(fontSize: 19),
@@ -11482,7 +11708,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             child: ListTile(
                               key: ValueKey('moveTarget-$path'),
                               selected: selected,
-                              selectedTileColor: const Color(0xffcfe9fb),
+                              selectedTileColor: skinSelectionColor(context),
+                              selectedColor: skinOnSelectionColor(context),
                               leading: path.isEmpty
                                   ? const Icon(Icons.account_balance_wallet)
                                   : categoryFolderIcon(
@@ -11508,12 +11735,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         horizontal: 10,
                         vertical: 8,
                       ),
-                      decoration: const BoxDecoration(
-                        color: Color(0xffdce8f1),
-                        border: Border(
-                          top: BorderSide(color: Color(0xff7f8d98)),
-                        ),
-                      ),
+                      decoration: skinDialogFooterDecoration(context),
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.start,
                         children: [
@@ -11697,18 +11919,39 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           unawaited(moveSpbFolderTo(data, categoryPath));
         }
       },
-      builder: (context, candidates, rejected) => AnimatedContainer(
-        duration: const Duration(milliseconds: 120),
-        decoration: candidates.isEmpty
-            ? null
-            : const BoxDecoration(color: Color(0xffd7f4df)),
-        foregroundDecoration: candidates.isEmpty
-            ? null
-            : BoxDecoration(
-                border: Border.all(color: const Color(0xff16833c), width: 2),
-              ),
-        child: child,
-      ),
+      builder: (context, candidates, rejected) {
+        final t = WalletSkinTokens.of(context);
+        if (!t.isRetro) {
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 120),
+            decoration: candidates.isEmpty
+                ? null
+                : BoxDecoration(
+                    color: t.primary.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+            foregroundDecoration: candidates.isEmpty
+                ? null
+                : BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: t.primary, width: 1.5),
+                  ),
+            child: child,
+          );
+        }
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 120),
+          decoration: candidates.isEmpty
+              ? null
+              : const BoxDecoration(color: Color(0xffd7f4df)),
+          foregroundDecoration: candidates.isEmpty
+              ? null
+              : BoxDecoration(
+                  border: Border.all(color: const Color(0xff16833c), width: 2),
+                ),
+          child: child,
+        );
+      },
     );
   }
 
@@ -11848,7 +12091,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool narrowAndroidLabel = false,
     bool wideAndroidLabel = false,
     bool desktopCardLabel = false,
+    SkinTilePair? tilePair,
   }) {
+    final t = skinTokens;
+    final modern = !t.isRetro;
     final stabilizeAndroidLabel =
         defaultTargetPlatform == TargetPlatform.android;
     const selectedDecoration = BoxDecoration(
@@ -11900,10 +12146,22 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 alignment: Alignment.topCenter,
                 child: SizedBox.square(
                   dimension: iconSize,
-                  child: Container(
-                    decoration: selected ? selectedDecoration : null,
-                    child: FittedBox(fit: BoxFit.contain, child: icon),
-                  ),
+                  child: modern
+                      ? Container(
+                          decoration: BoxDecoration(
+                            color: (tilePair ?? t.palette['neutral']!).tile,
+                            borderRadius: BorderRadius.circular(12),
+                            border: selected
+                                ? Border.all(color: t.primary, width: 2)
+                                : null,
+                          ),
+                          padding: EdgeInsets.all(iconSize * 0.125),
+                          child: FittedBox(fit: BoxFit.contain, child: icon),
+                        )
+                      : Container(
+                          decoration: selected ? selectedDecoration : null,
+                          child: FittedBox(fit: BoxFit.contain, child: icon),
+                        ),
                 ),
               ),
             ),
@@ -11916,7 +12174,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 child: Align(
                   alignment: Alignment.topCenter,
                   child: Container(
-                    decoration: selected ? selectedDecoration : null,
+                    decoration: !selected
+                        ? null
+                        : modern
+                            ? BoxDecoration(
+                                color: t.selection,
+                                borderRadius: BorderRadius.circular(6),
+                              )
+                            : selectedDecoration,
+                    padding: modern && selected
+                        ? const EdgeInsets.symmetric(horizontal: 4)
+                        : null,
                     child: Text(
                       label,
                       key: labelKey,
@@ -11943,10 +12211,19 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   : WorkspaceGeometry
                                       .wideAndroidCenterItemNameStyle)
                               : (boldLabel
-                                  ? WorkspaceGeometry.folderStyle
-                                  : desktopCardLabel
-                                      ? WorkspaceGeometry.desktopCardNameStyle
-                                      : WorkspaceGeometry.itemNameStyle),
+                                      ? WorkspaceGeometry.folderStyle
+                                      : desktopCardLabel
+                                          ? WorkspaceGeometry
+                                              .desktopCardNameStyle
+                                          : WorkspaceGeometry.itemNameStyle)
+                                  .copyWith(
+                                  color: modern
+                                      ? (selected ? t.onSelection : t.onSurface)
+                                      : null,
+                                  fontWeight: modern && selected
+                                      ? FontWeight.w600
+                                      : null,
+                                ),
                     ),
                   ),
                 ),
@@ -11972,7 +12249,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final result = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        shape: skinAlertShape(context, 4),
         title: const Text('Экспорт в базу'),
         content: TextFormField(
           autofocus: true,
@@ -12856,6 +13133,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   List<(Widget, String, VoidCallback)> spbTasksForCurrentMode() {
+    final t = skinTokens;
+    final taskIconColor =
+        t.isRetro ? const Color(0xff33434f) : t.onSurfaceVariant;
+    final deleteIconColor = t.isRetro ? const Color(0xffc62828) : t.error;
     if (iconLibraryOpen) {
       return [
         (
@@ -12875,21 +13156,21 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           moveSelectedManagedIcon,
         ),
         (
-          const Icon(
+          Icon(
             Icons.delete_outline,
-            key: Key('managedIconDeleteTaskIcon'),
+            key: const Key('managedIconDeleteTaskIcon'),
             size: 36,
-            color: Color(0xffc62828),
+            color: deleteIconColor,
           ),
           'Удалить',
           deleteSelectedManagedIcon,
         ),
         (
-          const Icon(
+          Icon(
             Icons.logout,
-            key: Key('managedIconExitTaskIcon'),
+            key: const Key('managedIconExitTaskIcon'),
             size: 36,
-            color: Color(0xff33434f),
+            color: taskIconColor,
           ),
           'Выйти',
           exitToPasswordPrompt,
@@ -12915,11 +13196,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           exportSelectedSpbTemplate,
         ),
         (
-          const Icon(
+          Icon(
             Icons.delete_outline,
-            key: Key('templateDeleteTaskIcon'),
+            key: const Key('templateDeleteTaskIcon'),
             size: 36,
-            color: Color(0xffc62828),
+            color: deleteIconColor,
           ),
           'Удалить',
           deleteSelectedSpbTemplate,
@@ -12930,19 +13211,28 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           saveVaultThroughExplorer,
         ),
         (
-          const Icon(Icons.logout, size: 36, color: Color(0xff33434f)),
+          Icon(Icons.logout, size: 36, color: taskIconColor),
           'Выйти',
           exitToPasswordPrompt,
         ),
       ];
     }
+    return spbCardModeTasks();
+  }
+
+  /// Tasks of the cards mode, also shown on the narrow "База" tab.
+  List<(Widget, String, VoidCallback)> spbCardModeTasks() {
+    final t = skinTokens;
+    final taskIconColor =
+        t.isRetro ? const Color(0xff33434f) : t.onSurfaceVariant;
+    final warningIconColor = t.isRetro ? const Color(0xffa65b00) : t.warning;
     return [
       if (walletLoadReport.hasIssues)
         (
-          const Icon(
+          Icon(
             Icons.warning_amber_rounded,
             size: 36,
-            color: Color(0xffa65b00),
+            color: warningIconColor,
           ),
           walletLoadReport.issues.length == cardLoadFailures.length
               ? 'Не удалось отобразить ${cardLoadFailures.length} карточек'
@@ -12967,7 +13257,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         pickSpbWalletFile,
       ),
       (
-        const Icon(Icons.password_outlined, size: 36, color: Color(0xff33434f)),
+        Icon(Icons.password_outlined, size: 36, color: taskIconColor),
         'Изменить пароль',
         openChangePasswordDialog,
       ),
@@ -13006,7 +13296,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         saveVaultThroughExplorer,
       ),
       (
-        const Icon(Icons.logout, size: 36, color: Color(0xff33434f)),
+        Icon(Icons.logout, size: 36, color: taskIconColor),
         'Выйти',
         exitToPasswordPrompt,
       ),
@@ -13081,6 +13371,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       };
 
   Widget buildSpbActionsPanel({bool desktop = false}) {
+    if (desktop && !skinTokens.isRetro) return buildModernActionsPanel();
     final frequent = frequentItems();
     final query = spbSubmittedSearchQuery;
     final matchingFolders = spbMatchingFolderPaths(query);
@@ -13294,7 +13585,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Future<void> showSpbTemplateRightMenu(Offset globalPosition) async {
     if (spbObjectMenuPointerActive) return;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final selected = await showMenu<String>(
+    final selected = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -13907,11 +14198,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) {
           updateDialog = setDialogState;
+          if (!WalletSkinTokens.of(context).isRetro) {
+            return buildModernInactivityDialog(context, dialogContext);
+          }
           return Dialog(
-            shape: const RoundedRectangleBorder(
-              borderRadius: BorderRadius.zero,
-              side: BorderSide(color: Color(0xff7f8d98)),
-            ),
+            shape: skinDialogShape(context),
+            clipBehavior: WalletSkinTokens.of(context).isRetro
+                ? Clip.none
+                : Clip.antiAlias,
             child: SizedBox(
               width: 440,
               child: Column(
@@ -13921,14 +14215,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     height: 48,
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-                      ),
-                      border: Border(
-                        bottom: BorderSide(color: Color(0xff7f8d98)),
-                      ),
-                    ),
+                    decoration: skinDialogHeaderDecoration(context),
                     child: const Text(
                       'Предупреждение',
                       style: TextStyle(fontSize: 18),
@@ -13936,7 +14223,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   ),
                   Container(
                     width: double.infinity,
-                    color: appWindowBackgroundColor,
+                    color: skinDialogBackground(context),
                     padding: const EdgeInsets.symmetric(
                       horizontal: 22,
                       vertical: 24,
@@ -13954,10 +14241,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       horizontal: 10,
                       vertical: 7,
                     ),
-                    decoration: const BoxDecoration(
-                      color: Color(0xffdce8f1),
-                      border: Border(top: BorderSide(color: Color(0xff7f8d98))),
-                    ),
+                    decoration: skinDialogFooterDecoration(context),
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.end,
                       children: [
@@ -14049,7 +14333,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     double height = 62,
     double minimumHeight = 48,
     Key? key,
+    SkinKeyRole role = SkinKeyRole.character,
   }) {
+    final t = skinTokens;
+    if (!t.isRetro) {
+      return modernPasswordKey(
+        t,
+        label: label,
+        onPressed: onPressed,
+        child: child,
+        tooltip: tooltip,
+        selected: selected,
+        fontSize: fontSize,
+        fontWeight: fontWeight,
+        height: max(height, minimumHeight),
+        key: key,
+        role: role,
+      );
+    }
     final button = SizedBox(
       height: max(height, minimumHeight),
       child: Material(
@@ -14181,6 +14482,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           keypadRow([
             passwordKey(
               key: const Key('keypadSymbolsPage'),
+              role: SkinKeyRole.service,
               label: '1/2',
               height: 42,
               minimumHeight: 42,
@@ -14197,6 +14499,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               minimumHeight: 42,
               fontSize: 22,
               top: redTop,
+              role: SkinKeyRole.service,
               bottom: redBottom,
               onPressed: backspacePassword,
             ),
@@ -14264,6 +14567,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               minimumHeight: 42,
               fontSize: 17,
               top: redTop,
+              role: SkinKeyRole.service,
               bottom: redBottom,
               onPressed: clearPassword,
             ),
@@ -14277,6 +14581,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               minimumHeight: 42,
               fontSize: 22,
               top: redTop,
+              role: SkinKeyRole.service,
               bottom: redBottom,
               onPressed: backspacePassword,
             ),
@@ -14321,6 +14626,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             tooltip: 'Очистить',
             fontSize: 29,
             top: redTop,
+            role: SkinKeyRole.service,
             bottom: redBottom,
             onPressed: clearPassword,
           ),
@@ -14335,6 +14641,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             tooltip: 'Удалить символ',
             fontSize: 31,
             top: redTop,
+            role: SkinKeyRole.service,
             bottom: redBottom,
             onPressed: backspacePassword,
           ),
@@ -14344,6 +14651,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Widget buildLocked() {
+    final t = skinTokens;
+    final retro = t.isRetro;
     const redTop = Color(0xffd32b31);
     const redBottom = Color(0xff7f0609);
     const modeTop = Color(0xffb96b25);
@@ -14351,15 +14660,19 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     const greenBottom = Color(0xff1b5e20);
     const modeBottom = Color(0xff6d3107);
 
+    final keyboard = buildPasswordKeyboard(
+      redTop: redTop,
+      redBottom: redBottom,
+    );
     return Scaffold(
-      backgroundColor: appWindowBackgroundColor,
+      backgroundColor: retro ? appWindowBackgroundColor : t.bg,
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
             child: SizedBox(
               key: const Key('passwordWindow'),
               width: min(MediaQuery.sizeOf(context).width, 562),
-              height: message == null && !loginHintVisible ? 590 : 650,
+              height: message == null && !loginHintVisible ? 642 : 702,
               child: LayoutBuilder(
                 builder: (context, constraints) => SingleChildScrollView(
                   padding: EdgeInsets.zero,
@@ -14370,8 +14683,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     child: Container(
                       width: constraints.maxWidth,
                       decoration: BoxDecoration(
-                        color: appWindowBackgroundColor,
-                        border: Border.all(color: const Color(0xffc6c6c6)),
+                        color: retro ? appWindowBackgroundColor : t.bg,
+                        border: Border.all(
+                          color: retro ? const Color(0xffc6c6c6) : t.outline,
+                        ),
                       ),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
@@ -14383,23 +14698,30 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             },
                             child: Container(
                               height: 44,
-                              color: const Color(0xff777777),
+                              color:
+                                  retro ? const Color(0xff777777) : t.titleBar,
                               alignment: Alignment.centerLeft,
                               padding: const EdgeInsets.symmetric(
                                 horizontal: 12,
                               ),
-                              child: const Row(
+                              child: Row(
                                 children: [
                                   Expanded(
                                     child: Text(
                                       'Пароль',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 18,
-                                      ),
+                                      style: retro
+                                          ? const TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 18,
+                                            )
+                                          : TextStyle(
+                                              color: t.onSurface,
+                                              fontSize: 18,
+                                              fontWeight: FontWeight.w600,
+                                            ),
                                     ),
                                   ),
-                                  PasswordVersionLabel(
+                                  const PasswordVersionLabel(
                                     key: Key('passwordVersion'),
                                   ),
                                 ],
@@ -14419,8 +14741,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                       children: [
                                         TextSpan(
                                           text: selectedVaultTitle,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
+                                          style: TextStyle(
+                                            fontWeight: retro
+                                                ? FontWeight.bold
+                                                : FontWeight.w600,
                                           ),
                                         ),
                                         if (selectedVaultModifiedText
@@ -14430,9 +14754,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     ),
                                     key: const Key('passwordPrompt'),
                                     maxLines: 1,
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       fontSize: 16,
-                                      color: Color(0xff16212a),
+                                      color: retro
+                                          ? const Color(0xff16212a)
+                                          : t.onSurface,
                                       fontWeight: FontWeight.normal,
                                     ),
                                   ),
@@ -14446,8 +14772,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     children: [
                                       Expanded(
                                         child: TextSelectionTheme(
-                                          data: const TextSelectionThemeData(
-                                            cursorColor: Colors.black,
+                                          data: TextSelectionThemeData(
+                                            cursorColor: retro
+                                                ? Colors.black
+                                                : t.primary,
                                             selectionColor: Colors.transparent,
                                             selectionHandleColor:
                                                 Colors.transparent,
@@ -14468,10 +14796,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                             decoration: InputDecoration(
                                               isDense: true,
                                               filled: true,
-                                              fillColor: Colors.white,
-                                              border: const OutlineInputBorder(
-                                                borderRadius: BorderRadius.zero,
-                                              ),
+                                              fillColor: retro
+                                                  ? Colors.white
+                                                  : t.surface,
+                                              border: retro
+                                                  ? const OutlineInputBorder(
+                                                      borderRadius:
+                                                          BorderRadius.zero,
+                                                    )
+                                                  : modernFieldBorder(
+                                                      t.outline, 1),
+                                              enabledBorder: retro
+                                                  ? null
+                                                  : modernFieldBorder(
+                                                      t.outline, 1),
+                                              focusedBorder: retro
+                                                  ? null
+                                                  : modernFieldBorder(
+                                                      t.primary, 2),
                                               suffixIcon: IconButton(
                                                 key: const Key(
                                                   'loginPasswordVisibility',
@@ -14512,12 +14854,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                             height: 48,
                                             top: const Color(0xffffdc58),
                                             bottom: const Color(0xffc58a00),
+                                            role: SkinKeyRole.hint,
                                             onPressed:
                                                 passwordFocusNode.requestFocus,
-                                            child: const Icon(
+                                            child: Icon(
                                               Icons.question_mark,
-                                              color: Colors.white,
-                                              size: 28,
+                                              color: retro
+                                                  ? Colors.white
+                                                  : t.warning,
+                                              size: retro ? 28 : 26,
                                             ),
                                           ),
                                         ),
@@ -14530,24 +14875,45 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   Container(
                                     key: const Key('loginPasswordHint'),
                                     padding: const EdgeInsets.all(10),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xfffff4bc),
-                                      border: Border.all(
-                                        color: const Color(0xffb18b00),
-                                      ),
+                                    decoration: retro
+                                        ? BoxDecoration(
+                                            color: const Color(0xfffff4bc),
+                                            border: Border.all(
+                                              color: const Color(0xffb18b00),
+                                            ),
+                                          )
+                                        : BoxDecoration(
+                                            color: t.warningContainer,
+                                            borderRadius:
+                                                BorderRadius.circular(10),
+                                          ),
+                                    child: Text(
+                                      loginPasswordHint,
+                                      style: retro
+                                          ? null
+                                          : TextStyle(
+                                              color: t.onWarningContainer,
+                                            ),
                                     ),
-                                    child: Text(loginPasswordHint),
                                   ),
                                 ],
-                                const SizedBox(height: 20),
-                                buildPasswordKeyboard(
-                                  redTop: redTop,
-                                  redBottom: redBottom,
-                                ),
+                                SizedBox(height: retro ? 20 : 12),
+                                if (retro)
+                                  keyboard
+                                else
+                                  Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: t.keyboardBase,
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: keyboard,
+                                  ),
                                 const SizedBox(height: 6),
                                 keypadRow([
                                   passwordKey(
                                     key: const Key('keypadModeUppercase'),
+                                    role: SkinKeyRole.mode,
                                     label: 'ABC',
                                     tooltip: 'Заглавные',
                                     selected: virtualKeyboardMode ==
@@ -14561,6 +14927,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   ),
                                   passwordKey(
                                     key: const Key('keypadModeLowercase'),
+                                    role: SkinKeyRole.mode,
                                     label: 'abc',
                                     tooltip: 'Строчные',
                                     selected: virtualKeyboardMode ==
@@ -14574,6 +14941,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   ),
                                   passwordKey(
                                     key: const Key('keypadModeNumeric'),
+                                    role: SkinKeyRole.mode,
                                     label: '123',
                                     tooltip: 'Цифры',
                                     selected: virtualKeyboardMode ==
@@ -14587,6 +14955,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   ),
                                   passwordKey(
                                     key: const Key('keypadModeSymbols'),
+                                    role: SkinKeyRole.mode,
                                     label: '#!?',
                                     tooltip: 'Символы',
                                     selected: virtualKeyboardMode ==
@@ -14599,9 +14968,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     ),
                                   ),
                                 ]),
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(vertical: 18),
-                                  child: Divider(height: 1),
+                                Padding(
+                                  padding: EdgeInsets.symmetric(
+                                      vertical: retro ? 18 : 12),
+                                  child: Divider(
+                                    height: 1,
+                                    color: retro ? null : t.outline,
+                                  ),
                                 ),
                                 Row(
                                   children: [
@@ -14613,9 +14986,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                           key: const Key('fileMenu'),
                                           label: 'Открыть файл',
                                           tooltip: 'Открыть другую базу…',
-                                          child: const Icon(
+                                          role: SkinKeyRole.outlined,
+                                          child: Icon(
                                             Icons.folder_outlined,
-                                            color: Colors.white,
+                                            color: retro ? Colors.white : null,
                                             size: 25,
                                           ),
                                           height: 48,
@@ -14630,6 +15004,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     Expanded(
                                       child: passwordKey(
                                         key: const Key('createVault'),
+                                        role: SkinKeyRole.outlined,
                                         label: '+',
                                         tooltip: 'Создать новую базу',
                                         height: 40,
@@ -14644,6 +15019,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     Expanded(
                                       child: passwordKey(
                                         key: const Key('loginOk'),
+                                        role: SkinKeyRole.primary,
                                         label: 'OK',
                                         height: 40,
                                         fontSize: 18,
@@ -14657,9 +15033,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                       child: passwordKey(
                                         key: const Key('loginCancel'),
                                         label: '',
-                                        child: const Icon(
+                                        role: SkinKeyRole.danger,
+                                        child: Icon(
                                           Icons.power_settings_new,
-                                          color: Colors.white,
+                                          color: retro ? Colors.white : null,
                                           size: 25,
                                         ),
                                         height: 40,
@@ -14685,6 +15062,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                     ),
                                   ),
                                 ],
+                                buildSkinSelector(),
                               ],
                             ),
                           ),
@@ -14941,7 +15319,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+        shape: skinAlertShape(context, 4),
         title: const Text('Удалить папку'),
         content: Text(
           'Папка "${folder.name}", ее подпапки и все карточки внутри будут удалены.',
@@ -15161,7 +15539,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: skinAlertShape(context, 0),
         title: const Text('Удалить карточки'),
         content: Text(
           'Выбранные карточки (${selectedCards.length}) будут удалены из базы.',
@@ -15226,7 +15604,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        shape: const RoundedRectangleBorder(borderRadius: BorderRadius.zero),
+        shape: skinAlertShape(context, 0),
         title: Text(isNote ? 'Удалить заметку' : 'Удалить карточку'),
         content: Text('Карточка "${item.title}" будет удалена из базы.'),
         actionsPadding: const EdgeInsets.fromLTRB(24, 8, 24, 20),
@@ -15875,9 +16253,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 }
 
 class SpbFolderHighlightPainter extends CustomPainter {
-  const SpbFolderHighlightPainter(this.highlightHeight);
+  const SpbFolderHighlightPainter(this.highlightHeight, {this.modernColor});
 
   final double highlightHeight;
+
+  /// Selection colour of the Light and Dark skins; Retro keeps its gradient.
+  final Color? modernColor;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -15887,6 +16268,14 @@ class SpbFolderHighlightPainter extends CustomPainter {
       size.width,
       highlightHeight,
     );
+    final modern = modernColor;
+    if (modern != null) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(rect.inflate(4), const Radius.circular(8)),
+        Paint()..color = modern,
+      );
+      return;
+    }
     final paint = Paint()
       ..shader = const LinearGradient(
         colors: [Color(0xffb9dcf5), Color(0xffedf7fe)],
@@ -15896,7 +16285,8 @@ class SpbFolderHighlightPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant SpbFolderHighlightPainter oldDelegate) =>
-      oldDelegate.highlightHeight != highlightHeight;
+      oldDelegate.highlightHeight != highlightHeight ||
+      oldDelegate.modernColor != modernColor;
 }
 
 class _Spb3dArrowButton extends StatelessWidget {
@@ -15924,29 +16314,14 @@ class _Spb3dArrowButton extends StatelessWidget {
           height: 34,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(3),
-            border: Border.all(color: const Color(0xff676767)),
-            gradient: const LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xfff4f4f4), Color(0xff8d8d8d)],
-            ),
-            boxShadow: const [
-              BoxShadow(
-                color: Colors.white,
-                offset: Offset(-1, -1),
-                blurRadius: 0.5,
-              ),
-              BoxShadow(
-                color: Color(0x66000000),
-                offset: Offset(1, 1),
-                blurRadius: 1,
-              ),
-            ],
+            border: Border.all(color: skinGrayBorder(context)),
+            gradient: skinGrayGradient(context, const Color(0xff8d8d8d)),
+            boxShadow: skinGrayShadow(context),
           ),
           child: Icon(
             icon,
             size: 30,
-            color: const Color(0xff303030),
+            color: skinGrayForeground(context),
             shadows: const [
               Shadow(color: Colors.white70, offset: Offset(0, -1)),
               Shadow(color: Color(0x66000000), offset: Offset(0, 1)),
@@ -15966,14 +16341,17 @@ class PasswordStrengthBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final score = passwordStrengthScore(password);
-    const colors = <Color>[
-      Color(0xffb71c1c),
-      Color(0xffd32f2f),
-      Color(0xfff57c00),
-      Color(0xfffbc02d),
-      Color(0xff7cb342),
-      Color(0xff2e7d32),
-    ];
+    final t = WalletSkinTokens.of(context);
+    final colors = t.isRetro
+        ? const <Color>[
+            Color(0xffb71c1c),
+            Color(0xffd32f2f),
+            Color(0xfff57c00),
+            Color(0xfffbc02d),
+            Color(0xff7cb342),
+            Color(0xff2e7d32),
+          ]
+        : t.strength;
     const labels = <String>[
       'не задан',
       'очень слабый',
@@ -16000,8 +16378,11 @@ class PasswordStrengthBar extends StatelessWidget {
           child: LinearProgressIndicator(
             minHeight: 8,
             value: score == 0 ? 0 : score / 5,
-            backgroundColor: const Color(0xffc8c8c8),
+            backgroundColor:
+                t.isRetro ? const Color(0xffc8c8c8) : t.strengthEmpty,
             valueColor: AlwaysStoppedAnimation<Color>(colors[score]),
+            borderRadius:
+                t.isRetro ? BorderRadius.zero : BorderRadius.circular(2),
           ),
         ),
       ],
@@ -16268,7 +16649,7 @@ class _FieldValueRowState extends State<FieldValueRow> {
 
   Future<void> showCopyMenu(LongPressStartDetails details) async {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final picked = await showMenu<String>(
+    final picked = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(details.globalPosition) & const Size(1, 1),
@@ -16922,25 +17303,10 @@ class SpbGrayPickerButton extends StatelessWidget {
             child: Ink(
               height: height,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xfff4f4f4), Color(0xff969696)],
-                ),
-                border: Border.all(color: const Color(0xff676767)),
+                gradient: skinGrayGradient(context, const Color(0xff969696)),
+                border: Border.all(color: skinGrayBorder(context)),
                 borderRadius: BorderRadius.circular(5),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.white,
-                    offset: Offset(-1, -1),
-                    blurRadius: 0.5,
-                  ),
-                  BoxShadow(
-                    color: Color(0x66000000),
-                    offset: Offset(1, 1),
-                    blurRadius: 1,
-                  ),
-                ],
+                boxShadow: skinGrayShadow(context),
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -16948,7 +17314,7 @@ class SpbGrayPickerButton extends StatelessWidget {
                   Icon(
                     icon,
                     size: compact ? 28 : 18,
-                    color: const Color(0xff303030),
+                    color: skinGrayForeground(context),
                   ),
                   Padding(
                     padding: EdgeInsets.symmetric(horizontal: compact ? 2 : 4),
@@ -16958,20 +17324,18 @@ class SpbGrayPickerButton extends StatelessWidget {
                             child: Text(
                               label,
                               maxLines: 1,
-                              style: const TextStyle(
-                                fontSize: 10,
-                                color: Color(0xff303030),
-                              ),
+                              style: TextStyle(
+                                  fontSize: 10,
+                                  color: skinGrayForeground(context)),
                             ),
                           )
                         : Text(
                             label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Color(0xff303030),
-                            ),
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: skinGrayForeground(context)),
                           ),
                   ),
                 ],
@@ -17049,13 +17413,10 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: appWindowBackgroundColor,
+          color: skinDialogBackground(context),
           elevation: 24,
           clipBehavior: Clip.antiAlias,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.zero,
-            side: BorderSide(color: Color(0xff7f8d98)),
-          ),
+          shape: skinDialogShape(context),
           child: SizedBox(
             key: const Key('categoryEditorSurface'),
             width: fullScreen ? media.width : min(media.width - 24, 720),
@@ -17067,14 +17428,7 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                 Container(
                   height: 48,
                   padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-                    ),
-                    border: Border(
-                      bottom: BorderSide(color: Color(0xff7f8d98)),
-                    ),
-                  ),
+                  decoration: skinDialogHeaderDecoration(context),
                   alignment: Alignment.centerLeft,
                   child: Text(
                     widget.editing ? 'Редактировать папку' : 'Новая папка',
@@ -17084,7 +17438,12 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                 ),
                 Expanded(
                   child: ColoredBox(
-                    color: colorById(colorId).bg,
+                    color: WalletSkinTokens.of(context).isRetro
+                        ? colorById(colorId).bg
+                        : skinTileForPalette(
+                            WalletSkinTokens.of(context),
+                            colorById(colorId),
+                          ).tile,
                     child: Scrollbar(
                       controller: editorScrollController,
                       thumbVisibility: true,
@@ -17169,10 +17528,7 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
                     horizontal: 10,
                     vertical: 7,
                   ),
-                  decoration: const BoxDecoration(
-                    color: Color(0xffdce8f1),
-                    border: Border(top: BorderSide(color: Color(0xff7f8d98))),
-                  ),
+                  decoration: skinDialogFooterDecoration(context),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
@@ -17228,16 +17584,10 @@ class _CategoryEditorDialogState extends State<CategoryEditorDialog> {
         height: MediaQuery.sizeOf(context).width < 700 ? 88 : 100,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xff82929d), width: 2),
-          borderRadius: BorderRadius.circular(5),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x26000000),
-              offset: Offset(1, 2),
-              blurRadius: 5,
-            ),
-          ],
+          color: skinFrameFill(context),
+          border: skinFrameBorder(context),
+          borderRadius: BorderRadius.circular(skinFrameRadius(context, 5)),
+          boxShadow: skinFrameShadow(context),
         ),
         child: templateIconWidget(
           iconId.isEmpty ? 'folder' : iconId,
@@ -17459,7 +17809,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
 
   Future<void> showCopyAllMenu(Offset globalPosition) async {
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final selected = await showMenu<String>(
+    final selected = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
@@ -17857,13 +18207,10 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
     return Align(
       alignment: Alignment.center,
       child: Material(
-        color: appWindowBackgroundColor,
+        color: skinDialogBackground(context),
         elevation: 24,
         clipBehavior: Clip.antiAlias,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-          side: BorderSide(color: Color(0xff7f8d98)),
-        ),
+        shape: skinDialogShape(context),
         child: SizedBox(
           key: const Key('cardPreviewSurface'),
           width: fullScreen ? media.width : min(media.width - 24, 720),
@@ -17885,14 +18232,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                     height: 48,
                     alignment: Alignment.centerLeft,
                     padding: const EdgeInsets.symmetric(horizontal: 10),
-                    decoration: const BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-                      ),
-                      border: Border(
-                        bottom: BorderSide(color: Color(0xff7f8d98)),
-                      ),
-                    ),
+                    decoration: skinDialogHeaderDecoration(context),
                     child: Row(
                       children: [
                         Expanded(
@@ -17917,8 +18257,9 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                   Expanded(
                     child: DecoratedBox(
                       decoration: cardSurfaceDecoration(
-                        color: color.bg,
+                        color: skinCardSurface(context, color),
                         backgroundImage: backgroundImage,
+                        darkVeil: WalletSkinTokens.of(context).isDark,
                       ),
                       child: SingleChildScrollView(
                         padding: EdgeInsets.fromLTRB(
@@ -17942,26 +18283,22 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                   height: 88,
                                   alignment: Alignment.center,
                                   decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    border: Border.all(
-                                      color: const Color(0xff82929d),
-                                      width: 2,
-                                    ),
-                                    borderRadius: BorderRadius.circular(5),
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Color(0x26000000),
-                                        offset: Offset(1, 2),
-                                        blurRadius: 5,
-                                      ),
-                                    ],
+                                    color: skinFrameFill(context),
+                                    border: skinFrameBorder(context),
+                                    borderRadius: BorderRadius.circular(
+                                        skinFrameRadius(context, 5)),
+                                    boxShadow: skinFrameShadow(context),
                                   ),
                                   child: templateIconWidget(
                                     itemIconId(currentItem, widget.template),
                                     size:
                                         88 * WorkspaceGeometry.framedIconScale,
-                                    color:
-                                        pictogramColorForBackground(color.bg),
+                                    color: WalletSkinTokens.of(context).isRetro
+                                        ? pictogramColorForBackground(color.bg)
+                                        : skinTileForPalette(
+                                            WalletSkinTokens.of(context),
+                                            color,
+                                          ).icon,
                                     scaleOriginalToFit: true,
                                   ),
                                 ),
@@ -17988,7 +18325,8 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                     labelText: field.label,
                                     border: const OutlineInputBorder(),
                                     filled: true,
-                                    fillColor: color.bg,
+                                    fillColor:
+                                        skinCardFieldFill(context, color),
                                     isDense: true,
                                     contentPadding: const EdgeInsets.symmetric(
                                       horizontal: 12,
@@ -18037,10 +18375,15 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                                 'cardPreviewCopy-${field.id}'),
                                             padding: EdgeInsets.zero,
                                             tooltip: 'Копировать',
-                                            icon: const Icon(
+                                            icon: Icon(
                                               Icons.copy_outlined,
                                               size: 17,
-                                              color: Color(0xff777777),
+                                              color: WalletSkinTokens.of(
+                                                          context)
+                                                      .isRetro
+                                                  ? const Color(0xff777777)
+                                                  : WalletSkinTokens.of(context)
+                                                      .onSurfaceVariant,
                                             ),
                                             onPressed: () => copyCardFieldValue(
                                               currentItem.values[field.id] ??
@@ -18066,7 +18409,10 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                 attachment.fileName,
                               ),
                             ))
-                              inlineAttachmentPreview(attachment, color.bg),
+                              inlineAttachmentPreview(
+                                attachment,
+                                skinCardFieldFill(context, color),
+                              ),
                           ],
                         ),
                       ),
@@ -18074,10 +18420,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                   ),
                   Container(
                     padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
-                    decoration: const BoxDecoration(
-                      color: Color(0xffdce8f1),
-                      border: Border(top: BorderSide(color: Color(0xff7f8d98))),
-                    ),
+                    decoration: skinDialogFooterDecoration(context),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
@@ -18176,6 +18519,16 @@ class SpbGradientActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (!WalletSkinTokens.of(context).isRetro) {
+      return skinModernActionButton(
+        context: context,
+        icon: icon,
+        tooltip: tooltip,
+        colors: colors,
+        onTap: onTap,
+        tooltipPreferBelow: tooltipPreferBelow,
+      );
+    }
     return SizedBox.square(
       dimension: 48,
       child: Center(
@@ -18310,9 +18663,31 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   int? backgroundLongPressPointer;
   Offset? backgroundLongPressOrigin;
 
-  Color get editorBackgroundColor => spbColor == null
+  Color get retroEditorBackgroundColor => spbColor == null
       ? colorById(colorId).bg
       : Color(0xff000000 | (spbColor! & 0x00ffffff));
+
+  SkinTilePair get skinEditorTile {
+    final t = WalletSkinTokens.of(context);
+    return spbColor == null
+        ? skinTileForPalette(t, colorById(colorId))
+        : t.customTile(retroEditorBackgroundColor);
+  }
+
+  /// Surface colour of the editor; Retro keeps the stored card colour.
+  Color get editorBackgroundColor => WalletSkinTokens.of(context).isRetro
+      ? retroEditorBackgroundColor
+      : skinEditorTile.tile;
+
+  /// Field fill on the editor surface.
+  Color get editorFieldFill => WalletSkinTokens.of(context).isRetro
+      ? retroEditorBackgroundColor
+      : WalletSkinTokens.of(context).surface.withValues(alpha: 0.92);
+
+  /// Colour of single-colour pictograms on the editor surface.
+  Color get editorPictogramColor => WalletSkinTokens.of(context).isRetro
+      ? pictogramColorForBackground(retroEditorBackgroundColor)
+      : skinEditorTile.icon;
 
   ImageProvider? get editorBackgroundImage {
     final encoded = backgroundImageBase64;
@@ -18548,13 +18923,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: appWindowBackgroundColor,
+          color: skinDialogBackground(context),
           elevation: 24,
           clipBehavior: Clip.antiAlias,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.zero,
-            side: BorderSide(color: Color(0xff7f8d98)),
-          ),
+          shape: skinDialogShape(context),
           child: SizedBox(
             key: const Key('cardEditorSurface'),
             width: fullScreen ? media.width : min(media.width - 24, 720),
@@ -18566,14 +18938,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                 Container(
                   height: 48,
                   padding: const EdgeInsets.symmetric(horizontal: 10),
-                  decoration: const BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-                    ),
-                    border: Border(
-                      bottom: BorderSide(color: Color(0xff7f8d98)),
-                    ),
-                  ),
+                  decoration: skinDialogHeaderDecoration(context),
                   child: Row(
                     children: [
                       Expanded(
@@ -18633,10 +18998,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                     horizontal: 10,
                     vertical: 7,
                   ),
-                  decoration: const BoxDecoration(
-                    color: Color(0xffdce8f1),
-                    border: Border(top: BorderSide(color: Color(0xff7f8d98))),
-                  ),
+                  decoration: skinDialogFooterDecoration(context),
                   child: Row(
                     children: [
                       if (widget.supportsAttachments) ...[
@@ -18908,21 +19270,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         height: dimension,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xff82929d), width: 2),
-          borderRadius: BorderRadius.circular(5),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x26000000),
-              offset: Offset(1, 2),
-              blurRadius: 5,
-            ),
-          ],
+          color: skinFrameFill(context),
+          border: skinFrameBorder(context),
+          borderRadius: BorderRadius.circular(skinFrameRadius(context, 5)),
+          boxShadow: skinFrameShadow(context),
         ),
         child: templateIconWidget(
           iconId,
           size: iconSize,
-          color: pictogramColorForBackground(editorBackgroundColor),
+          color: editorPictogramColor,
           scaleOriginalToFit: scaleOriginalToFit,
         ),
       ),
@@ -19051,8 +19407,8 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         alignment: Alignment.center,
         padding: const EdgeInsets.all(2),
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xff82929d)),
+          color: skinFrameFill(context),
+          border: Border.all(color: skinFrameEdge(context)),
           borderRadius: BorderRadius.circular(4),
         ),
         child: SizedBox(
@@ -19063,7 +19419,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
             child: templateIconWidget(
               iconId,
               size: 33,
-              color: pictogramColorForBackground(editorBackgroundColor),
+              color: editorPictogramColor,
               scaleOriginalToFit: true,
             ),
           ),
@@ -19145,7 +19501,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         hintText: hintTextForField(field),
         border: const OutlineInputBorder(),
         filled: true,
-        fillColor: editorBackgroundColor,
+        fillColor: editorFieldFill,
         isDense: true,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         suffixIcon: fieldSuffixIcon(field, controller, visible),
@@ -19219,16 +19575,12 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
             onTap: onTap,
             child: Ink(
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xfff4f4f4), Color(0xff969696)],
-                ),
-                border: Border.all(color: const Color(0xff676767)),
+                gradient: skinGrayGradient(context, const Color(0xff969696)),
+                border: Border.all(color: skinGrayBorder(context)),
                 borderRadius: BorderRadius.circular(3),
               ),
               child: Center(
-                child: Icon(icon, size: 19, color: const Color(0xff303030)),
+                child: Icon(icon, size: 19, color: skinGrayForeground(context)),
               ),
             ),
           ),
@@ -19360,7 +19712,9 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
           key: ValueKey('cardEditorInlineAttachment-${attachment.fileName}'),
           padding: const EdgeInsets.only(top: 10),
           child: Material(
-            color: editorBackgroundColor.withValues(alpha: 0.9),
+            color: WalletSkinTokens.of(context).isRetro
+                ? editorBackgroundColor.withValues(alpha: 0.9)
+                : WalletSkinTokens.of(context).surface,
             shape: RoundedRectangleBorder(
               side: const BorderSide(color: Color(0xff82929d)),
               borderRadius: BorderRadius.circular(4),
@@ -20083,7 +20437,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     }
     if (!mounted || clipboardImage == null || clipboardImage.isEmpty) return;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final selected = await showMenu<String>(
+    final selected = await showSkinMenu<String>(
       context: context,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & Size.zero,
@@ -20176,13 +20530,10 @@ class TemplatePreviewDialog extends StatelessWidget {
     return Align(
       alignment: Alignment.center,
       child: Material(
-        color: appWindowBackgroundColor,
+        color: skinDialogBackground(context),
         elevation: 24,
         clipBehavior: Clip.antiAlias,
-        shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.zero,
-          side: BorderSide(color: Color(0xff7f8d98)),
-        ),
+        shape: skinDialogShape(context),
         child: SizedBox(
           key: const Key('templatePreviewSurface'),
           width: fullScreen ? media.width : min(media.width - 24, 720),
@@ -20192,12 +20543,7 @@ class TemplatePreviewDialog extends StatelessWidget {
               Container(
                 height: 48,
                 padding: const EdgeInsets.symmetric(horizontal: 10),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-                  ),
-                  border: Border(bottom: BorderSide(color: Color(0xff7f8d98))),
-                ),
+                decoration: skinDialogHeaderDecoration(context),
                 child: Row(
                   children: [
                     Expanded(
@@ -20227,19 +20573,11 @@ class TemplatePreviewDialog extends StatelessWidget {
                             height: 112,
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              border: Border.all(
-                                color: const Color(0xff82929d),
-                                width: 2,
-                              ),
-                              borderRadius: BorderRadius.circular(5),
-                              boxShadow: const [
-                                BoxShadow(
-                                  color: Color(0x26000000),
-                                  offset: Offset(1, 2),
-                                  blurRadius: 5,
-                                ),
-                              ],
+                              color: skinFrameFill(context),
+                              border: skinFrameBorder(context),
+                              borderRadius: BorderRadius.circular(
+                                  skinFrameRadius(context, 5)),
+                              boxShadow: skinFrameShadow(context),
                             ),
                             child: customIconBytes == null
                                 ? templateIconWidget(
@@ -20307,10 +20645,7 @@ class TemplatePreviewDialog extends StatelessWidget {
 
   Widget previewActions(BuildContext context) => Container(
         padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
-        decoration: const BoxDecoration(
-          color: Color(0xffdce8f1),
-          border: Border(top: BorderSide(color: Color(0xff7f8d98))),
-        ),
+        decoration: skinDialogFooterDecoration(context),
         child: Row(
           children: [
             const Spacer(),
@@ -20471,9 +20806,31 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   late String observedName;
   final Map<String, String> observedFieldLabels = {};
 
-  Color get editorBackgroundColor => spbColor == null
+  Color get retroEditorBackgroundColor => spbColor == null
       ? colorById(colorId).bg
       : Color(0xff000000 | (spbColor! & 0x00ffffff));
+
+  SkinTilePair get skinEditorTile {
+    final t = WalletSkinTokens.of(context);
+    return spbColor == null
+        ? skinTileForPalette(t, colorById(colorId))
+        : t.customTile(retroEditorBackgroundColor);
+  }
+
+  /// Surface colour of the editor; Retro keeps the stored card colour.
+  Color get editorBackgroundColor => WalletSkinTokens.of(context).isRetro
+      ? retroEditorBackgroundColor
+      : skinEditorTile.tile;
+
+  /// Field fill on the editor surface.
+  Color get editorFieldFill => WalletSkinTokens.of(context).isRetro
+      ? retroEditorBackgroundColor
+      : WalletSkinTokens.of(context).surface.withValues(alpha: 0.92);
+
+  /// Colour of single-colour pictograms on the editor surface.
+  Color get editorPictogramColor => WalletSkinTokens.of(context).isRetro
+      ? pictogramColorForBackground(retroEditorBackgroundColor)
+      : skinEditorTile.icon;
 
   @override
   void initState() {
@@ -20540,13 +20897,10 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       child: Align(
         alignment: Alignment.center,
         child: Material(
-          color: appWindowBackgroundColor,
+          color: skinDialogBackground(context),
           elevation: 24,
           clipBehavior: Clip.antiAlias,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.zero,
-            side: BorderSide(color: Color(0xff7f8d98)),
-          ),
+          shape: skinDialogShape(context),
           child: SizedBox(
             key: const Key('templateEditorSurface'),
             width: fullScreen ? media.width : min(media.width - 24, 720),
@@ -20606,12 +20960,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     return Container(
       height: 48,
       padding: const EdgeInsets.symmetric(horizontal: 10),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xffa9c9e3), Color(0xffe9f1f8)],
-        ),
-        border: Border(bottom: BorderSide(color: Color(0xff7f8d98))),
-      ),
+      decoration: skinDialogHeaderDecoration(context),
       alignment: Alignment.centerLeft,
       child: Text(
         widget.initial?.displayName ?? 'Новый шаблон',
@@ -20638,7 +20987,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
             labelText: 'Название шаблона',
             border: const OutlineInputBorder(),
             filled: true,
-            fillColor: editorBackgroundColor,
+            fillColor: editorFieldFill,
             isDense: true,
             contentPadding:
                 const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -20713,40 +21062,23 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
             child: Ink(
               height: 48,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xfff4f4f4), Color(0xff969696)],
-                ),
-                border: Border.all(color: const Color(0xff676767)),
+                gradient: skinGrayGradient(context, const Color(0xff969696)),
+                border: Border.all(color: skinGrayBorder(context)),
                 borderRadius: BorderRadius.circular(5),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.white,
-                    offset: Offset(-1, -1),
-                    blurRadius: 0.5,
-                  ),
-                  BoxShadow(
-                    color: Color(0x66000000),
-                    offset: Offset(1, 1),
-                    blurRadius: 1,
-                  ),
-                ],
+                boxShadow: skinGrayShadow(context),
               ),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(icon, size: 18, color: const Color(0xff303030)),
+                  Icon(icon, size: 18, color: skinGrayForeground(context)),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 4),
                     child: Text(
                       label,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Color(0xff303030),
-                      ),
+                      style: TextStyle(
+                          fontSize: 11, color: skinGrayForeground(context)),
                     ),
                   ),
                 ],
@@ -20865,11 +21197,9 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                     width: 30,
                     height: 27,
                     decoration: BoxDecoration(
-                      color: color.bg,
+                      color: swatchColor(context, color),
                       border: Border.all(
-                        color: colorId == color.id
-                            ? const Color(0xff253d4c)
-                            : const Color(0xff8b969d),
+                        color: swatchBorder(context, colorId == color.id),
                         width: colorId == color.id ? 2.5 : 1,
                       ),
                       borderRadius: BorderRadius.circular(4),
@@ -20897,10 +21227,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     return Container(
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-      decoration: const BoxDecoration(
-        color: Color(0xffdce8f1),
-        border: Border(top: BorderSide(color: Color(0xff7f8d98))),
-      ),
+      decoration: skinDialogFooterDecoration(context),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
@@ -20950,6 +21277,17 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     required List<Color> colors,
     required VoidCallback? onTap,
   }) {
+    if (!WalletSkinTokens.of(context).isRetro) {
+      return skinModernActionButton(
+        context: context,
+        key: key,
+        icon: icon,
+        tooltip: tooltip,
+        colors: colors,
+        onTap: onTap,
+        tooltipPreferBelow: true,
+      );
+    }
     return Tooltip(
       message: tooltip,
       child: Opacity(
@@ -21004,7 +21342,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                           labelText: 'Название поля',
                           border: const OutlineInputBorder(),
                           filled: true,
-                          fillColor: editorBackgroundColor,
+                          fillColor: editorFieldFill,
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -21032,7 +21370,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                           labelText: 'Тип',
                           border: const OutlineInputBorder(),
                           filled: true,
-                          fillColor: editorBackgroundColor,
+                          fillColor: editorFieldFill,
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 12,
@@ -21161,27 +21499,12 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
               width: 31,
               height: height,
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Color(0xfff4f4f4), Color(0xff8d8d8d)],
-                ),
-                border: Border.all(color: const Color(0xff676767)),
+                gradient: skinGrayGradient(context, const Color(0xff8d8d8d)),
+                border: Border.all(color: skinGrayBorder(context)),
                 borderRadius: BorderRadius.circular(3),
-                boxShadow: const [
-                  BoxShadow(
-                    color: Colors.white,
-                    offset: Offset(-1, -1),
-                    blurRadius: 0.5,
-                  ),
-                  BoxShadow(
-                    color: Color(0x66000000),
-                    offset: Offset(1, 1),
-                    blurRadius: 1,
-                  ),
-                ],
+                boxShadow: skinGrayShadow(context),
               ),
-              child: Icon(icon, size: 19, color: const Color(0xff303030)),
+              child: Icon(icon, size: 19, color: skinGrayForeground(context)),
             ),
           ),
         ),
@@ -21339,22 +21662,16 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
         height: dimension,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: Colors.white,
-          border: Border.all(color: const Color(0xff82929d), width: 2),
-          borderRadius: BorderRadius.circular(5),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x26000000),
-              offset: Offset(1, 2),
-              blurRadius: 5,
-            ),
-          ],
+          color: skinFrameFill(context),
+          border: skinFrameBorder(context),
+          borderRadius: BorderRadius.circular(skinFrameRadius(context, 5)),
+          boxShadow: skinFrameShadow(context),
         ),
         child: customIconBytes == null
             ? templateIconWidget(
                 iconId,
                 size: iconSize,
-                color: pictogramColorForBackground(editorBackgroundColor),
+                color: editorPictogramColor,
                 scaleOriginalToFit: scaleOriginalToFit,
               )
             : Image.memory(
@@ -21514,7 +21831,7 @@ class IconEditorTarget extends StatelessWidget {
     try {
       await loadManagedIconLibrary();
       if (!context.mounted) return;
-      final action = await showMenu<String>(
+      final action = await showSkinMenu<String>(
           context: context,
           position: RelativeRect.fromSize(
               Rect.fromLTWH(position.dx, position.dy, 0, 0),
@@ -21638,7 +21955,7 @@ class _ManagedIconSelectionDialogState
               min(rect?.height ?? size.height - top - media.padding.bottom,
                   size.height - top - media.viewInsets.bottom)),
           child: Material(
-              color: appWindowBackgroundColor,
+              color: skinDialogBackground(context),
               elevation: 24,
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -21742,7 +22059,8 @@ class ColorPicker extends StatelessWidget {
                   index < templateColorPalette.length;
                   index++) ...[
                 if (index > 0) const SizedBox(width: 5),
-                Expanded(child: colorButton(templateColorPalette[index])),
+                Expanded(
+                    child: colorButton(context, templateColorPalette[index])),
               ],
             ],
           )
@@ -21752,14 +22070,14 @@ class ColorPicker extends StatelessWidget {
             runSpacing: 5,
             children: [
               for (final color in templateColorPalette)
-                SizedBox(width: 30, child: colorButton(color)),
+                SizedBox(width: 30, child: colorButton(context, color)),
             ],
           ),
       ],
     );
   }
 
-  Widget colorButton(PaletteColor color) {
+  Widget colorButton(BuildContext context, PaletteColor color) {
     return Tooltip(
       message: color.label,
       child: InkWell(
@@ -21769,11 +22087,9 @@ class ColorPicker extends StatelessWidget {
           key: ValueKey('$keyPrefix-${color.id}'),
           height: 27,
           decoration: BoxDecoration(
-            color: color.bg,
+            color: swatchColor(context, color),
             border: Border.all(
-              color: color.id == value
-                  ? const Color(0xff253d4c)
-                  : const Color(0xff8b969d),
+              color: swatchBorder(context, color.id == value),
               width: color.id == value ? 2.5 : 1,
             ),
             borderRadius: BorderRadius.circular(4),
