@@ -52,29 +52,39 @@ Future<Object?> _waitForStoredSkin(
 
 void main() {
   group('skin storage', () {
-    test('missing file yields Retro', () async {
+    test('missing file yields the default Dark skin', () async {
       _useTemporarySettings();
-      expect(await AppSkinStore.load(), AppSkin.retro);
-    });
-
-    test('stored dark skin is read back', () async {
-      final directory = _useTemporarySettings();
-      _settingsFile(directory).writeAsStringSync('{"skin":"dark"}');
       expect(await AppSkinStore.load(), AppSkin.dark);
     });
 
-    test('garbage and unknown values yield Retro', () async {
+    test('stored Retro skin is read back', () async {
+      final directory = _useTemporarySettings();
+      _settingsFile(directory)
+          .writeAsStringSync('{"skin":"retro","version":2}');
+      expect(await AppSkinStore.load(), AppSkin.retro);
+    });
+
+    test('a choice stored by an older version opens Dark once', () async {
+      final directory = _useTemporarySettings();
+      _settingsFile(directory).writeAsStringSync('{"skin":"retro"}');
+      expect(await AppSkinStore.load(), AppSkin.dark);
+      await AppSkinStore.save(AppSkin.retro);
+      expect(await AppSkinStore.load(), AppSkin.retro);
+    });
+
+    test('garbage and unknown values yield Dark', () async {
       final directory = _useTemporarySettings();
       final file = _settingsFile(directory);
       for (final content in [
         'not json',
         '[]',
-        '{"skin":"neon"}',
-        '{"skin":3}',
+        '{"skin":"neon","version":2}',
+        '{"skin":3,"version":2}',
+        '{"skin":"light","version":1}',
         '',
       ]) {
         file.writeAsStringSync(content);
-        expect(await AppSkinStore.load(), AppSkin.retro, reason: content);
+        expect(await AppSkinStore.load(), AppSkin.dark, reason: content);
       }
     });
 
@@ -84,12 +94,12 @@ void main() {
       await AppSkinStore.save(AppSkin.light);
       expect(
         jsonDecode(_settingsFile(directory).readAsStringSync()),
-        {'skin': 'light'},
+        {'skin': 'light', 'version': 2},
       );
       await AppSkinStore.save(AppSkin.dark);
       expect(
         jsonDecode(_settingsFile(directory).readAsStringSync()),
-        {'skin': 'dark'},
+        {'skin': 'dark', 'version': 2},
       );
       expect(
         directory.listSync().map((entry) => entry.uri.pathSegments.last),

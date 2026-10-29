@@ -21,15 +21,27 @@ the core are unchanged; only presentation differs between skins.
   row `skinSelector`). Owner decision: fixed colours in every skin — dark
   yellow, light grey, dark grey; the active skin has a frame and a check mark
   and is announced as selected.
-- The password window is 562 × 642 (702 with a message or hint) in every
-  skin; the Windows runner sizes were changed accordingly.
+- The password window is designed at 562 × 642 (702 with a message or
+  hint) in every skin. Owner decision (0.7.14+): Windows, Linux and macOS
+  draw that design at 75 % (`passwordWindowScale`, a `FittedBox`), so keys,
+  labels and icons shrink together; the Windows runner window is
+  421.5 × 481.5 (526.5). Phones and tablets keep full size for touch.
 - The choice is stored in `wallet_aps_ui_settings.json` (`{"skin": ...}`) in
   the existing application state directory (Design profile), never in a vault.
-  A missing, unreadable or unknown value yields Retro. Writes are serialised,
+  A missing, unreadable or unknown value yields Dark (owner decision, 0.7.14+;
+  it was Retro before). Writes are serialised,
   replace the file atomically and retry briefly when Windows holds the file;
   a failure is logged and the skin still applies until restart.
-- First start after the update: Retro. The previous experiment's
-  `wallet_aps_appearance.json` is not read.
+- First start without a stored choice: Dark; a stored choice is kept. The
+  file carries `"version": 2`; a choice stored by an older version (no
+  version, from the Retro-default era) is ignored once, so the first start
+  of 0.7.14 opens Dark (owner decision). The
+  previous experiment's `wallet_aps_appearance.json` is not read.
+- "Сменить тему" (before "Выйти" in every mode of "Действие", all skins and
+  layouts) opens a dialog (`skinDialog`) with the same three buttons
+  (`skinDialogRetro`, `skinDialogLight`, `skinDialogDark`). The skin applies
+  after the dialog has closed, because buttons cannot animate between the
+  Retro and modern text styles.
 
 ## Architecture
 
@@ -86,6 +98,79 @@ the core are unchanged; only presentation differs between skins.
 - Narrow bottom-sheet menus of cards, folders and templates start with the
   object header (tile, name, template/path); entries are unchanged.
 - The Light FAB has the primary-tinted shadow of section 6.3; Dark has none.
+
+## Owner requests (0.7.14+)
+
+- Wide Light/Dark centre: the narrow create button (`modernCreateFab`,
+  `modernCreateTemplateFab`, `modernUploadIconFab`) in the bottom right
+  corner, above the icon workspace's own button row. Retro (wide centre and
+  narrow pane 1) has a blue Retro-style "+" (`retroCreateButton`): cards and
+  templates open their existing creation menus at the button, icons open the
+  upload.
+- Templates: in wide layouts a mouse or pen drags templates (grid or left
+  tree, several when selected) onto a template folder of the left panel. The
+  folder is stored in the category path, and a "Папка: название" name follows
+  the new folder (`templateNameInFolder`). One undo entry per move.
+- Wallet icons are at most 128×128: a new ICO icon larger than that is
+  reduced on save (other formats were already stored as 64×64), and
+  "Проверить и восстановить" (load error report only, no longer a "Действие"
+  task) reduces stored ones. The largest ICO frame is chosen by its decoded
+  size (a 256 px directory entry is stored as 0). Proportions are kept on a
+  transparent square; smaller icons are untouched. Owner decision: stored
+  icons are not reduced automatically when a base is opened (tried and
+  withdrawn in 0.7.14).
+- Touch screens: wide card, folder and icon drags use `PointerDraggable`,
+  which starts for a mouse or pen only, so a finger scrolls grids and trees.
+  Touch users move items through the long-press menu.
+- Light/Dark draw icons without tiles (rows, grids, icon catalogue, icon
+  picker, menu headers, task rows); a selected grid icon has a frame only.
+- "Действие" task icons are 20 % larger in every skin.
+- Card preview, every skin: a web-site field (type `url`, or a label with
+  "сайт"/"website") has a globe left of the copy button that opens the
+  address in the default browser (`https://` is added when missing); an
+  e-mail field (type `email`, or a label with "почт"/"email") has an
+  envelope that opens a new message in the default mail client (`mailto:`).
+  A phone field (type `phone`, or a label with "телеф"/"phone"/"мобильн")
+  has a phone button that opens a dialog (`phoneLinkDialog`): WhatsApp
+  (`https://wa.me/<digits>`), Telegram (`https://t.me/+<digits>`), "Набор
+  номера" (`tel:`), SMS (`sms:`) and "Другая программа…" (`tel:` through the
+  Android chooser; on Windows and Linux the system association decides).
+  Only http(s), mailto, tel and sms addresses are opened (Windows
+  `url.dll`, Linux `xdg-open`, Android `ACTION_VIEW`/`ACTION_SENDTO`/
+  `ACTION_DIAL`); a value that is not an address or number shows no button.
+- Template folders for new bases: "Папки шаблонов для новых баз"
+  (templates mode, "Действие") saves the open base's layout — every
+  template's stored name and category path, and the template folder
+  settings — to `wallet_aps_template_layout.json` in the application state
+  directory (`TemplateLayout`). A new base, copied from
+  `assets/base_wallet/MyWallet.swl`, takes that layout before it is opened,
+  otherwise the shipped `assets/base_wallet/template_layout.json` when
+  present. Templates are matched by ID, otherwise by a name without folder
+  that is unique on both sides; unmatched templates stay put. The folder is
+  written as a "Папка: название" name (as in the standard set), never as a
+  category path, so a new base gets no empty card folders. The shipped
+  layout is the owner's (29.10.2026): all 59 standard templates in 11
+  folders.
+- New-base contents (owner decision, 29.10.2026): `MyWallet.swl` is the
+  owner's demo base "тест", re-keyed to `0000` — 12 folders, 16 cards (SPB
+  demo cards, "О программе Wallet" notes and "С чего начать" with the
+  getting-started PDF attached), 60 templates (the standard set and
+  "Заметка") and its icons. Only invented demo data belongs there: every
+  installation ships it.
+- Narrow Light/Dark "Мои записи": the path row and the search field stay
+  above the scrolling list (folders, cards, "Найденные").
+- Icon folder names in the left panel use 85 % of the folder font.
+- Icon browsers ("Иконки" workspace, the folder icon picker and the card
+  editor's icon pickers) show icons 25 % smaller in every skin
+  (`WorkspaceGeometry.iconBrowserScale`).
+- Retro "Иконки" bottom row: the yellow button (`pasteManagedIconButton`,
+  paste glyph) pastes from the clipboard and sits right of the icon folder
+  button; the blue "+" and the upload button are gone there (upload is the
+  central "+" and the "Действие" task). Light/Dark keep their row.
+- Icon folders renamed: "Логотипы компаний" → "Логотипы", "Дополнительные" →
+  "Разные" (labels only; storage keys unchanged).
+- Retro references were regenerated for these intentional changes; only the
+  right "Действие" panel and the Retro "+" button differ.
 
 ## Open items
 

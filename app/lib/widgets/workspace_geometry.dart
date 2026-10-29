@@ -52,6 +52,12 @@ abstract final class WorkspaceGeometry {
   static const sectionDivider = 6.0;
   static const gridCell = 75.0;
   static const iconFrameContent = 64.0;
+
+  /// Icon browsers (the "Иконки" workspace and the icon picker) show icons
+  /// 25 % smaller than the card grid.
+  static const iconBrowserScale = 0.75;
+  static const iconBrowserCell = gridCell * iconBrowserScale;
+  static const iconBrowserContent = iconFrameContent * iconBrowserScale;
   static const framedIconScale = 0.90;
   static const labelWidth = 72.0;
   static const labelHeight = 30.0;
@@ -319,11 +325,15 @@ abstract final class WorkspaceGeometry {
 /// Keeps both dimensions and strides fixed; surplus width stays at the right.
 /// A MaxCrossAxisExtent delegate would stretch cells or add an extra column.
 class WorkspaceGridDelegate extends SliverGridDelegate {
-  const WorkspaceGridDelegate();
+  const WorkspaceGridDelegate({this.cell = WorkspaceGeometry.gridCell});
+
+  const WorkspaceGridDelegate.iconBrowser()
+      : cell = WorkspaceGeometry.iconBrowserCell;
+
+  final double cell;
 
   @override
   SliverGridLayout getLayout(SliverConstraints constraints) {
-    const cell = WorkspaceGeometry.gridCell;
     return SliverGridRegularTileLayout(
       crossAxisCount: math.max(1, (constraints.crossAxisExtent / cell).floor()),
       mainAxisStride: cell,
@@ -335,7 +345,8 @@ class WorkspaceGridDelegate extends SliverGridDelegate {
   }
 
   @override
-  bool shouldRelayout(covariant WorkspaceGridDelegate oldDelegate) => false;
+  bool shouldRelayout(covariant WorkspaceGridDelegate oldDelegate) =>
+      oldDelegate.cell != cell;
 }
 
 /// Adds horizontal room between desktop card columns without changing their

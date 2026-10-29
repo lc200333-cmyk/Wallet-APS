@@ -8,6 +8,7 @@ import 'package:sqlite3/sqlite3.dart';
 import '../data/legacy_swl/legacy_swl_codec.dart';
 import '../domain/card_layout.dart';
 import '../features/templates/template_folders.dart';
+import '../features/templates/template_layout.dart';
 import '../services/wallet_integrity_service.dart';
 import 'spb_wallet_attachment_codec.dart';
 import 'spb_wallet_crypto.dart';
@@ -84,6 +85,16 @@ class SpbWalletDatabase {
     final report = WalletIntegrityService.repair(_db, crypto, attachmentCodec);
     _embeddedIconCache = null;
     return report;
+  }
+
+  int countOversizedIcons() =>
+      WalletIntegrityService.countOversizedIcons(_db, attachmentCodec);
+
+  int shrinkOversizedIcons() {
+    final resized =
+        WalletIntegrityService.shrinkOversizedIcons(_db, attachmentCodec);
+    if (resized > 0) _embeddedIconCache = null;
+    return resized;
   }
 
   bool hasTemplate(String templateId) => _db.select(
@@ -928,6 +939,105 @@ class SpbWalletDatabase {
         hidden: row['Hidden'] == 1,
       );
     }).toList();
+  }
+
+  /// Folder of every template and the template folder settings of this base.
+  TemplateLayout captureTemplateLayout() => TemplateLayout(
+        templates: [
+          for (final template in loadSnapshot().templates)
+            TemplateLayoutEntry(
+              id: template.id.toUpperCase(),
+              name: template.name,
+              categoryPath: template.categoryPath,
+            ),
+        ],
+        folders: [
+          for (final folder in loadTemplateFolders())
+            TemplateLayoutFolder(
+              name: folder.name,
+              iconId: folder.iconId,
+              colorId: folder.colorId,
+              hidden: folder.hidden,
+            ),
+        ],
+      );
+
+  /// Puts the templates of this base into the folders of [layout] and takes
+  /// its folder settings. A template is found by ID, otherwise by its name
+  /// without the folder when that name is unique on both sides; others stay
+  /// where they are. No card folders are created. Returns the number of
+  /// templates moved.
+  int applyTemplateLayout(TemplateLayout layout) {
+    final templates = loadSnapshot().templates;
+    final byId = {for (final entry in layout.templates) entry.id: entry};
+    Map<String, List<T>> byLabel<T>(Iterable<T> items, String Function(T) of) {
+      final result = <String, List<T>>{};
+      for (final item in items) {
+        result.putIfAbsent(of(item).toLowerCase(), () => []).add(item);
+      }
+      return result;
+    }
+
+    final layoutByLabel = byLabel(layout.templates, (entry) => entry.label);
+    final baseByLabel = byLabel(
+      templates,
+      (template) => templateLabelInFolder(
+        template.name,
+        templateFolderFor(template.name, template.categoryPath),
+      ),
+    );
+    var moved = 0;
+    _transaction(() {
+      for (final template in templates) {
+        var entry = byId[template.id.toUpperCase()];
+        if (entry == null) {
+          final label = templateLabelInFolder(
+            template.name,
+            templateFolderFor(template.name, template.categoryPath),
+          ).toLowerCase();
+          final candidates = layoutByLabel[label];
+          if (candidates?.length == 1 && baseByLabel[label]?.length == 1) {
+            entry = candidates!.single;
+          }
+        }
+        if (entry == null) continue;
+        // The folder goes into a "Папка: название" name, as in the standard
+        // set; a category path would also add an empty card folder.
+        final colon = entry.name.indexOf(':');
+        final prefixed =
+            colon > 0 && entry.name.substring(0, colon).trim().isNotEmpty;
+        final name = prefixed || entry.categoryPath.trim().isEmpty
+            ? entry.name
+            : '${entry.folder}: ${entry.name}';
+        if (name == template.name && template.categoryPath.isEmpty) continue;
+        _db.execute('UPDATE spbwlt_Template SET Name = ? WHERE hex(ID) = ?',
+            [crypto.encryptText(name), template.id]);
+        _saveTemplateCategory(template.id, '');
+        moved++;
+      }
+      if (layout.folders.isNotEmpty) {
+        _db.execute('''CREATE TABLE IF NOT EXISTS actitpass_TemplateFolder (
+ID TEXT NOT NULL PRIMARY KEY,
+Name BLOB NOT NULL,
+IconID TEXT NOT NULL,
+ColorID TEXT NOT NULL,
+Hidden INTEGER NOT NULL DEFAULT 0
+)''');
+        _db.execute('DELETE FROM actitpass_TemplateFolder');
+        for (final folder in layout.folders) {
+          _db.execute(
+              'INSERT INTO actitpass_TemplateFolder (ID, Name, IconID, ColorID, Hidden) VALUES (?, ?, ?, ?, ?)',
+              [
+                makeId(),
+                crypto.encryptText(folder.name),
+                folder.iconId,
+                folder.colorId,
+                folder.hidden ? 1 : 0,
+              ]);
+        }
+      }
+    });
+    return moved;
   }
 
   void editTemplateFolder(String oldName, String newName,

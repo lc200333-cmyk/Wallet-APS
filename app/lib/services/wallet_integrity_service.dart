@@ -18,6 +18,7 @@ class WalletIntegrityReport {
     required this.pngIcons,
     this.repairedTemplates = 0,
     this.repairedFields = 0,
+    this.resizedIcons = 0,
   });
 
   final int orphanCards;
@@ -28,10 +29,22 @@ class WalletIntegrityReport {
   final int repairedTemplates;
   final int repairedFields;
 
+  /// Stored icons larger than 128×128 that the repair reduced to 128×128.
+  final int resizedIcons;
+
   bool get hasProblems =>
       orphanCards + orphanValues + blobIds + nonIntegerColors + pngIcons > 0;
 
   String get userMessage {
+    final base = _baseMessage;
+    if (resizedIcons == 0) return base;
+    return base +
+        ' Иконок уменьшено до 128×128: ' +
+        resizedIcons.toString() +
+        '.';
+  }
+
+  String get _baseMessage {
     if (!hasProblems && repairedTemplates == 0 && repairedFields == 0) {
       return 'Проверка базы завершена: структура совместима.';
     }
@@ -142,6 +155,7 @@ abstract final class WalletIntegrityService {
     final before = inspect(database, attachments: attachments);
     var repairedTemplates = 0;
     var repairedFields = 0;
+    var resizedIcons = 0;
     database.execute('BEGIN IMMEDIATE');
     try {
       // Normalize storage classes first. SQLite does not consider a BLOB and
@@ -268,6 +282,7 @@ abstract final class WalletIntegrityService {
             ],
           );
         }
+        resizedIcons = _shrinkIcons(database, attachments);
       }
       final remaining = inspect(database, attachments: attachments);
       if (remaining.orphanCards != 0 || remaining.orphanValues != 0) {
@@ -292,7 +307,78 @@ abstract final class WalletIntegrityService {
       pngIcons: before.pngIcons,
       repairedTemplates: repairedTemplates,
       repairedFields: repairedFields,
+      resizedIcons: resizedIcons,
     );
+  }
+
+  /// Stored icons wider or taller than 128 px.
+  static int countOversizedIcons(
+    Database database,
+    SpbWalletAttachmentCodec attachments,
+  ) {
+    if (!_hasTable(database, 'spbwlt_Icon')) return 0;
+    var count = 0;
+    for (final row in database
+        .select('SELECT Data FROM spbwlt_Icon WHERE Data IS NOT NULL')) {
+      try {
+        final data = attachments.decode(row['Data']).bytes;
+        // The directory check is cheap; only icons it flags are decoded, and
+        // only icons that really can be reduced count, so a base is not
+        // backed up and rewritten on every opening for nothing.
+        if (LegacySwlCodec.iconExceedsLimit(data) &&
+            LegacySwlCodec.shrinkOversizedIcon(data) != null) {
+          count++;
+        }
+      } catch (_) {
+        // An unreadable icon is reported by the load report, not here.
+      }
+    }
+    return count;
+  }
+
+  /// Reduces stored icons larger than 128×128 to 128×128 in one transaction
+  /// and returns their number; smaller icons stay unchanged.
+  static int shrinkOversizedIcons(
+    Database database,
+    SpbWalletAttachmentCodec attachments,
+  ) {
+    if (!_hasTable(database, 'spbwlt_Icon')) return 0;
+    database.execute('BEGIN IMMEDIATE');
+    try {
+      final resized = _shrinkIcons(database, attachments);
+      database.execute('COMMIT');
+      return resized;
+    } catch (_) {
+      database.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  static int _shrinkIcons(
+    Database database,
+    SpbWalletAttachmentCodec attachments,
+  ) {
+    var resized = 0;
+    for (final row in database.select(
+      'SELECT rowid AS source_rowid, Data FROM spbwlt_Icon '
+      'WHERE Data IS NOT NULL',
+    )) {
+      final Uint8List decoded;
+      try {
+        decoded = attachments.decode(row['Data']).bytes;
+      } catch (_) {
+        continue;
+      }
+      if (!LegacySwlCodec.iconExceedsLimit(decoded)) continue;
+      final shrunk = LegacySwlCodec.shrinkOversizedIcon(decoded);
+      if (shrunk == null) continue;
+      database.execute(
+        'UPDATE spbwlt_Icon SET Data=? WHERE rowid=?',
+        [attachments.encode(shrunk), row['source_rowid']],
+      );
+      resized++;
+    }
+    return resized;
   }
 
   static Uint8List _bytes(Object? value) {

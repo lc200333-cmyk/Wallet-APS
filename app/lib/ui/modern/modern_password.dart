@@ -33,6 +33,12 @@ const _skinButtonKeys = <AppSkin, Key>{
   AppSkin.dark: Key('skinDarkButton'),
 };
 
+const _skinDialogKeys = <AppSkin, Key>{
+  AppSkin.retro: Key('skinDialogRetro'),
+  AppSkin.light: Key('skinDialogLight'),
+  AppSkin.dark: Key('skinDialogDark'),
+};
+
 extension _ModernPasswordWindow on _VaultShellState {
   WalletSkinTokens get skinTokens => WalletSkinTokens.of(context);
 
@@ -137,83 +143,140 @@ extension _ModernPasswordWindow on _VaultShellState {
     );
   }
 
+  /// One skin button in the owner's fixed colours. The active skin has a
+  /// frame and a check mark and is announced as selected.
+  Widget skinChoiceButton(
+    AppSkin skin, {
+    required Key key,
+    required VoidCallback onPressed,
+    double height = 40,
+  }) {
+    final t = skinTokens;
+    final colors = _skinButtonColors[skin]!;
+    final selected = skin == appSkin.value;
+    final caption = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (selected) ...[
+          Icon(Icons.check, size: 16, color: colors.text),
+          const SizedBox(width: 4),
+        ],
+        Flexible(
+          child: Text(
+            _skinButtonLabels[skin]!,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              color: colors.text,
+              fontSize: 16,
+              height: 1,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+            ),
+          ),
+        ),
+      ],
+    );
+    final Widget body;
+    if (t.isRetro) {
+      body = passwordKey(
+        key: key,
+        label: _skinButtonLabels[skin]!,
+        height: height,
+        minimumHeight: height,
+        fontSize: 16,
+        selected: selected,
+        top: colors.top,
+        bottom: colors.bottom,
+        onPressed: onPressed,
+        child: caption,
+      );
+    } else {
+      final radius = BorderRadius.circular(8);
+      body = SizedBox(
+        height: height,
+        child: Material(
+          key: key,
+          color: Color.lerp(colors.top, colors.bottom, 0.5),
+          shape: RoundedRectangleBorder(
+            borderRadius: radius,
+            side: selected
+                ? BorderSide(color: t.primary, width: 2)
+                : BorderSide(color: t.outline),
+          ),
+          child: InkWell(
+            borderRadius: radius,
+            onTap: onPressed,
+            child: Center(child: caption),
+          ),
+        ),
+      );
+    }
+    return Semantics(
+      selected: selected,
+      button: true,
+      label: 'Тема: ${_skinButtonLabels[skin]}',
+      excludeSemantics: true,
+      child: body,
+    );
+  }
+
+  /// "Сменить тему" of the "Действие" menu: the same three buttons as the
+  /// password window. A choice closes the dialog and applies once it is gone:
+  /// Retro and the modern skins use different text styles, which buttons
+  /// cannot animate between.
+  Future<void> openSkinDialog() async {
+    final chosen = await showDialog<AppSkin>(
+      context: context,
+      animationStyle: const AnimationStyle(reverseDuration: Duration.zero),
+      builder: (dialogContext) => AlertDialog(
+        key: const Key('skinDialog'),
+        shape: skinAlertShape(dialogContext, 4),
+        title: const Text('Сменить тему'),
+        content: SizedBox(
+          width: 300,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              for (final skin in AppSkin.values) ...[
+                if (skin != AppSkin.retro) const SizedBox(height: 10),
+                skinChoiceButton(
+                  skin,
+                  key: _skinDialogKeys[skin]!,
+                  height: 48,
+                  onPressed: () => Navigator.of(dialogContext).pop(skin),
+                ),
+              ],
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            key: const Key('skinDialogClose'),
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Закрыть'),
+          ),
+        ],
+      ),
+    );
+    if (chosen == null || chosen == appSkin.value) return;
+    await WidgetsBinding.instance.endOfFrame;
+    if (mounted) selectAppSkin(chosen);
+  }
+
   /// The skin row at the bottom of the password window (section 9).
   Widget buildSkinSelector() {
     final t = skinTokens;
-    final current = appSkin.value;
     void choose(AppSkin skin) {
       if (skin != appSkin.value) selectAppSkin(skin);
       passwordFocusNode.requestFocus();
     }
 
-    Widget skinButton(AppSkin skin) {
-      final colors = _skinButtonColors[skin]!;
-      final selected = skin == current;
-      final caption = Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (selected) ...[
-            Icon(Icons.check, size: 16, color: colors.text),
-            const SizedBox(width: 4),
-          ],
-          Flexible(
-            child: Text(
-              _skinButtonLabels[skin]!,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: colors.text,
-                fontSize: 16,
-                height: 1,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-              ),
-            ),
-          ),
-        ],
-      );
-      final Widget body;
-      if (t.isRetro) {
-        body = passwordKey(
-          key: _skinButtonKeys[skin],
-          label: _skinButtonLabels[skin]!,
-          height: 40,
-          minimumHeight: 40,
-          fontSize: 16,
-          selected: selected,
-          top: colors.top,
-          bottom: colors.bottom,
+    Widget skinButton(AppSkin skin) => skinChoiceButton(
+          skin,
+          key: _skinButtonKeys[skin]!,
           onPressed: () => choose(skin),
-          child: caption,
         );
-      } else {
-        final radius = BorderRadius.circular(8);
-        body = SizedBox(
-          height: 40,
-          child: Material(
-            key: _skinButtonKeys[skin],
-            color: Color.lerp(colors.top, colors.bottom, 0.5),
-            shape: RoundedRectangleBorder(
-              borderRadius: radius,
-              side: selected
-                  ? BorderSide(color: t.primary, width: 2)
-                  : BorderSide(color: t.outline),
-            ),
-            child: InkWell(
-              borderRadius: radius,
-              onTap: () => choose(skin),
-              child: Center(child: caption),
-            ),
-          ),
-        );
-      }
-      return Semantics(
-        selected: selected,
-        button: true,
-        label: 'Тема: ${_skinButtonLabels[skin]}',
-        excludeSemantics: true,
-        child: body,
-      );
-    }
 
     return Padding(
       key: const Key('skinSelector'),

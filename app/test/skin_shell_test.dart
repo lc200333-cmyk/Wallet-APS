@@ -274,6 +274,41 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    if (skin != AppSkin.retro) {
+      _skinTest('${skin.name} narrow: search stays on top while results scroll',
+          (tester) async {
+        final dynamic state = await _pumpShell(tester, skin, _Layout.narrow);
+        final CardTemplate template =
+            (state.templates as List).first as CardTemplate;
+        final cards = [
+          for (var index = 0; index < 40; index++)
+            SecretItem(
+              id: 'many-$index',
+              templateId: template.id,
+              title: 'Bank $index',
+              category: '',
+              colorId: template.colorId,
+              values: const {},
+              modifiedAt: DateTime(2026, 10, 25),
+            ),
+        ];
+        state.setState(() {
+          state.items = cards;
+          state.itemsById = {for (final item in cards) item.id: item};
+        });
+        await tester.pumpAndSettle();
+        final field = find.byKey(const Key('spbSearchInput'));
+        await tester.enterText(field, 'Bank');
+        await tester.pumpAndSettle();
+        final top = tester.getTopLeft(field);
+        await tester.dragFrom(const Offset(206, 500), const Offset(0, -400));
+        await tester.pumpAndSettle();
+        expect(state.spbMobileActionsScrollController.offset, greaterThan(0));
+        expect(tester.getTopLeft(field), top);
+        expect(tester.takeException(), isNull);
+      });
+    }
+
     _skinTest('${skin.name} narrow: Android Back follows section 11.8',
         (tester) async {
       final dynamic state = await _pumpShell(tester, skin, _Layout.narrow);
@@ -452,6 +487,107 @@ void main() {
       expect(find.byType(NavigationBar), findsNothing);
       await tester.pumpWidget(const SizedBox.shrink());
     }
+  });
+
+  for (final skin in AppSkin.values) {
+    _skinTest('${skin.name} wide: "Сменить тему" opens the three skins',
+        (tester) async {
+      final dynamic state = await _pumpShell(tester, skin, _Layout.wide);
+      for (final open in <void Function()>[
+        state.showSpbTemplatesMode,
+        state.showSpbIconsMode,
+        state.showSpbCardsMode,
+      ]) {
+        open();
+        await _pumpFrames(tester);
+        final labels = _taskLabels(state);
+        expect(labels, contains('Сменить тему'));
+        expect(labels.indexOf('Сменить тему'), labels.indexOf('Выйти') - 1);
+      }
+      await tester.tap(find.text('Сменить тему'));
+      await _pumpFrames(tester);
+      expect(find.byKey(const Key('skinDialog')), findsOneWidget);
+      for (final key in ['Retro', 'Light', 'Dark']) {
+        expect(find.byKey(Key('skinDialog$key')), findsOneWidget);
+      }
+      final target = skin == AppSkin.dark ? AppSkin.light : AppSkin.dark;
+      await tester.tap(find.byKey(
+        Key(target == AppSkin.dark ? 'skinDialogDark' : 'skinDialogLight'),
+      ));
+      await _pumpFrames(tester);
+      expect(appSkin.value, target);
+      expect(find.byKey(const Key('skinDialog')), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+  }
+
+  _skinTest('wide Light and Dark centre has the create button of each mode',
+      (tester) async {
+    for (final skin in [AppSkin.light, AppSkin.dark]) {
+      final dynamic state = await _pumpShell(tester, skin, _Layout.wide);
+      expect(find.byKey(const Key('modernCreateFab')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('modernCreateFab')));
+      await tester.pumpAndSettle();
+      expect(
+          find.byKey(const Key('createCardRootContextAction')), findsOneWidget);
+      await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+      await tester.pumpAndSettle();
+      state.showSpbTemplatesMode();
+      await _pumpFrames(tester);
+      expect(find.byKey(const Key('modernCreateTemplateFab')), findsOneWidget);
+      state.showSpbIconsMode();
+      await _pumpFrames(tester);
+      expect(find.byKey(const Key('modernUploadIconFab')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+    await _pumpShell(tester, AppSkin.retro, _Layout.wide);
+    expect(find.byKey(const Key('modernCreateFab')), findsNothing);
+  });
+
+  _skinTest('Retro centre has a blue "+" button with the creation menu',
+      (tester) async {
+    final dynamic state = await _pumpShell(tester, AppSkin.retro, _Layout.wide);
+    final button = find.byKey(const Key('retroCreateButton'));
+    expect(button, findsOneWidget);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(
+        find.byKey(const Key('createCardRootContextAction')), findsOneWidget);
+    expect(
+        find.byKey(const Key('createFolderRootContextAction')), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    state.showSpbTemplatesMode();
+    await _pumpFrames(tester);
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+    expect(
+        find.byKey(const Key('createTemplateContextAction')), findsOneWidget);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox.shrink());
+
+    final dynamic narrow =
+        await _pumpShell(tester, AppSkin.retro, _Layout.narrow);
+    expect(button, findsNothing);
+    narrow.setState(() => narrow.mobilePane = 1);
+    await tester.pumpAndSettle();
+    expect(button, findsOneWidget);
+  });
+
+  _skinTest('Light and Dark draw icons without a tile', (tester) async {
+    for (final skin in [AppSkin.light, AppSkin.dark]) {
+      await _pumpShell(tester, skin, _Layout.wide);
+      final icon = find.byKey(const ValueKey('spbActionIcon-Выйти'));
+      final tile = tester.widget<Container>(icon);
+      expect(tile.decoration, isNull, reason: skin.name);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  test('icon folders use the new names', () {
+    expect(IconCatalogKind.brands.label, 'Логотипы');
+    expect(IconCatalogKind.thirdParty.label, 'Разные');
   });
 
   _skinTest('narrow skins use the system status bar style of their brightness',

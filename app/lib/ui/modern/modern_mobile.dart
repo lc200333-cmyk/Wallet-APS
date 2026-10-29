@@ -114,10 +114,9 @@ List<PopupMenuEntry<T>> _skinMenuEntries<T>(
 }
 
 extension _ModernMobileShell on _VaultShellState {
-  /// Header of a narrow bottom-sheet menu: object tile, name and subtitle.
+  /// Header of a narrow bottom-sheet menu: object icon, name and subtitle.
   Widget buildModernMenuHeader({
     required Widget icon,
-    required SkinTilePair pair,
     required String title,
     required String subtitle,
   }) {
@@ -126,7 +125,7 @@ extension _ModernMobileShell on _VaultShellState {
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
       child: Row(
         children: [
-          skinIconTile(icon: icon, pair: pair, size: 40),
+          skinIconTile(icon: icon, size: 40),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -166,7 +165,6 @@ extension _ModernMobileShell on _VaultShellState {
         40,
         fallbackColor: pair.icon,
       ),
-      pair: pair,
       title: item.title,
       subtitle: [
         template.displayName,
@@ -184,7 +182,6 @@ extension _ModernMobileShell on _VaultShellState {
         40,
         fallbackColor: pair.icon,
       ),
-      pair: pair,
       title: folder.name,
       subtitle: parent.isEmpty ? 'Папка' : 'Папка · ${parent.join(' / ')}',
     );
@@ -198,7 +195,6 @@ extension _ModernMobileShell on _VaultShellState {
         40,
         fallbackColor: pair.icon,
       ),
-      pair: pair,
       title: template.displayName,
       subtitle: 'Шаблон',
     );
@@ -246,25 +242,29 @@ extension _ModernMobileShell on _VaultShellState {
     }
   }
 
-  /// Narrow shell of the Light and Dark skins (section 11).
-  Widget buildModernMobileShell() {
+  /// Create button of the Light and Dark skins for a tab (0 cards,
+  /// 1 templates, 2 icons). The narrow shell and the wide centre use the same
+  /// button, keys and callbacks; the creation menu opens at the button.
+  Widget? buildModernCreateFab(int tab) {
     final t = skinTokens;
-    final tab = modernTabIndex;
-    final Widget body = switch (tab) {
-      1 => buildModernTemplatesTab(),
-      2 => buildModernIconsTab(),
-      3 => buildModernVaultTab(),
-      _ => buildModernCardsTab(),
-    };
+    Offset anchor(BuildContext context) {
+      final box = context.findRenderObject() as RenderBox?;
+      return box == null || !box.hasSize
+          ? MediaQuery.sizeOf(context).bottomRight(Offset.zero)
+          : box.localToGlobal(Offset.zero);
+    }
+
     final Widget? fab = switch (tab) {
-      0 => FloatingActionButton.extended(
-          key: const Key('modernCreateFab'),
-          onPressed: () => showSpbCreationMenu(
-            MediaQuery.sizeOf(context).bottomRight(Offset.zero),
-            destinationCategoryPath: selectedCategoryPath,
+      0 => Builder(
+          builder: (context) => FloatingActionButton.extended(
+            key: const Key('modernCreateFab'),
+            onPressed: () => showSpbCreationMenu(
+              anchor(context),
+              destinationCategoryPath: selectedCategoryPath,
+            ),
+            icon: const Icon(Icons.add),
+            label: const Text('Создать'),
           ),
-          icon: const Icon(Icons.add),
-          label: const Text('Создать'),
         ),
       1 => FloatingActionButton.extended(
           key: const Key('modernCreateTemplateFab'),
@@ -280,6 +280,35 @@ extension _ModernMobileShell on _VaultShellState {
         ),
       _ => null,
     };
+    if (fab == null) return null;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: t.isDark
+            ? const []
+            : [
+                BoxShadow(
+                  color: t.primary.withValues(alpha: 0.30),
+                  offset: const Offset(0, 4),
+                  blurRadius: 12,
+                ),
+              ],
+      ),
+      child: fab,
+    );
+  }
+
+  /// Narrow shell of the Light and Dark skins (section 11).
+  Widget buildModernMobileShell() {
+    final t = skinTokens;
+    final tab = modernTabIndex;
+    final Widget body = switch (tab) {
+      1 => buildModernTemplatesTab(),
+      2 => buildModernIconsTab(),
+      3 => buildModernVaultTab(),
+      _ => buildModernCardsTab(),
+    };
+    final fab = buildModernCreateFab(tab);
     Widget destinationIcon(Widget icon) =>
         SizedBox.square(dimension: 24, child: FittedBox(child: icon));
     return PopScope(
@@ -290,23 +319,7 @@ extension _ModernMobileShell on _VaultShellState {
       child: Scaffold(
         backgroundColor: t.bg,
         body: SafeArea(bottom: false, child: body),
-        floatingActionButton: fab == null
-            ? null
-            : DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(16),
-                  boxShadow: t.isDark
-                      ? const []
-                      : [
-                          BoxShadow(
-                            color: t.primary.withValues(alpha: 0.30),
-                            offset: const Offset(0, 4),
-                            blurRadius: 12,
-                          ),
-                        ],
-                ),
-                child: fab,
-              ),
+        floatingActionButton: fab,
         bottomNavigationBar: DecoratedBox(
           decoration: BoxDecoration(
             border: Border(
@@ -529,13 +542,7 @@ extension _ModernMobileShell on _VaultShellState {
             ),
             actions: buildModernHeaderButtons(dimension: 48),
           );
-    final children = <Widget>[
-      if (!atRoot) buildModernPathRow(parts),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
-        child: buildModernSearchField(height: 48),
-      ),
-    ];
+    final children = <Widget>[];
     if (query.isNotEmpty) {
       final folders = spbMatchingFolderPaths(query);
       final cards = spbMatchingCards(query);
@@ -605,6 +612,12 @@ extension _ModernMobileShell on _VaultShellState {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         header,
+        // The path and the search field stay above the scrolling list.
+        if (!atRoot) buildModernPathRow(parts),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          child: buildModernSearchField(height: 48),
+        ),
         Expanded(
           child: Scrollbar(
             controller: spbMobileActionsScrollController,
@@ -738,9 +751,7 @@ extension _ModernMobileShell on _VaultShellState {
                     32,
                     fallbackColor: pair.icon,
                   ),
-                  pair: pair,
                   size: 32,
-                  radius: 10,
                 ),
                 const Spacer(),
                 Text(
@@ -780,7 +791,6 @@ extension _ModernMobileShell on _VaultShellState {
           40,
           fallbackColor: pair.icon,
         ),
-        pair: pair,
         size: 40,
       ),
       title: folder.name,
@@ -794,17 +804,12 @@ extension _ModernMobileShell on _VaultShellState {
 
   Widget buildModernCardRow(SecretItem item) {
     final template = templateFor(item.templateId);
-    final pair = skinTileForItem(item);
     return buildModernListRow(
       key: ValueKey('spbCentralCard-${item.id}'),
       leading: Container(
         width: 40,
         height: 40,
-        decoration: BoxDecoration(
-          color: pair.tile,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        padding: const EdgeInsets.all(5),
+        padding: const EdgeInsets.all(2),
         child: spbCardIconWithAttachmentMark(
           item: item,
           template: template,
@@ -865,15 +870,12 @@ extension _ModernMobileShell on _VaultShellState {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Row(
             children: [
+              // No tile behind the icon; task icons are 20 % larger.
               Container(
                 key: ValueKey('spbActionIcon-${task.$2}'),
                 width: 40,
                 height: 40,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: t.s2,
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                padding: const EdgeInsets.all(5.6),
                 child: FittedBox(fit: BoxFit.contain, child: task.$1),
               ),
               const SizedBox(width: 12),
@@ -996,11 +998,7 @@ extension _ModernMobileShell on _VaultShellState {
               Container(
                 width: 48,
                 height: 48,
-                padding: const EdgeInsets.all(6),
-                decoration: BoxDecoration(
-                  color: t.s2,
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                padding: const EdgeInsets.all(4),
                 child: Image.asset(
                   'assets/branding/wallet_android.png',
                   cacheWidth: 128,
@@ -1052,10 +1050,6 @@ extension _ModernMobileShell on _VaultShellState {
                   width: 40,
                   height: 40,
                   padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: t.s2,
-                    borderRadius: BorderRadius.circular(12),
-                  ),
                   child: spbSizedDataIcon(
                     history[index].iconId,
                     28,

@@ -41,3 +41,4 @@ flutter:
     - assets/brands/BrendLogo-3D-inner.zip
     # Base wallet used when the user creates a new encrypted .swl database.
     - assets/base_wallet/MyWallet.swl
+    - assets/base_wallet/template_layout.json

@@ -711,6 +711,31 @@ void main() {
     expect(thirdPartyIconPngs[icons.first], isNotEmpty);
   });
 
+  testWidgets('stored user icons do not normalize the whole bundle on load',
+      (tester) async {
+    final directory = Directory.systemTemp.createTempSync('wallet-icons-one-');
+    final previousDirectoryOverride = userThirdPartyIconDirectoryOverride;
+    userThirdPartyIconDirectoryOverride = directory;
+    addTearDown(() {
+      thirdPartyIconAssetsFuture = null;
+      thirdPartyIconAssets = [];
+      thirdPartyIconPngs = {};
+      thirdPartyComparablePngs = {};
+      userThirdPartyIconDirectoryOverride = previousDirectoryOverride;
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
+    File('${directory.path}${Platform.pathSeparator}mine.png')
+        .writeAsBytesSync(normalizeUserIconPng(
+      image.Image(width: 30, height: 30)..setPixelRgb(5, 5, 255, 0, 0),
+    ));
+    thirdPartyIconAssetsFuture = null;
+    final icons = (await tester.runAsync(loadThirdPartyIconAssets))!;
+
+    expect(icons, hasLength(953));
+    expect(
+        thirdPartyComparablePngs.keys, ['${userThirdPartyIconPrefix}mine.png']);
+  });
+
   testWidgets('SPB icon bundle collapses Android density duplicates',
       (tester) async {
     final previousFuture = spb64PngIconAssetsFuture;
@@ -2424,7 +2449,9 @@ void main() {
     expect(find.text('Создать базу'), findsOneWidget);
     expect(find.byKey(const Key('spbCreateWalletAppIcon')), findsOneWidget);
     expect(find.byKey(const Key('spbArchiveTaskIcon')), findsOneWidget);
-    expect(find.byKey(const Key('spbRepairTaskIcon')), findsOneWidget);
+    // Repair is offered only in the load error report.
+    expect(find.byKey(const Key('spbRepairTaskIcon')), findsNothing);
+    expect(find.text('Проверить и восстановить базу'), findsNothing);
     expect(find.text('Создать новую папку'), findsOneWidget);
     expect(find.text('Сделать архивную копию'), findsOneWidget);
     final undo = find.byTooltip('Отменить изменения этой сессии');
@@ -2630,7 +2657,24 @@ void main() {
       );
     }
     expect(find.text('Базовые'), findsWidgets);
-    expect(find.byKey(const Key('uploadManagedIconButton')), findsOneWidget);
+    // Retro: no bottom upload button; the yellow paste button sits next to
+    // the folder button.
+    expect(find.byKey(const Key('uploadManagedIconButton')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('pasteManagedIconButton')),
+        matching: find.byIcon(Icons.content_paste),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const Key('pasteManagedIconButton'))).dx,
+      closeTo(
+        tester.getTopRight(find.byKey(const Key('createIconFolderButton'))).dx +
+            4,
+        0.1,
+      ),
+    );
     expect(find.byKey(const Key('pasteManagedIconButton')), findsOneWidget);
     expect(find.byKey(const Key('managedIconUploadTaskIcon')), findsOneWidget);
     expect(find.byKey(const Key('managedIconMoveTaskIcon')), findsOneWidget);
@@ -2690,13 +2734,13 @@ void main() {
     expect(firstFrameDecoration.border, isNotNull);
     expect(firstFrameDecoration.borderRadius, BorderRadius.circular(8));
     final dynamic state = tester.state(find.byType(VaultShell));
-    expect(state.managedIconPickerContentSize, 64);
+    expect(state.managedIconPickerContentSize, 48);
     expect(state.managedIconPickerImageScale, 1);
     expect(
       tester.getSize(
         find.byKey(ValueKey('managedIconContent-$firstIconId')),
       ),
-      const Size.square(64),
+      const Size.square(48),
     );
     final iconGrid = find.descendant(
       of: find.byKey(const Key('spbIconGridScrollbar')),
@@ -2718,7 +2762,7 @@ void main() {
       expect(gridDelegate, isA<WorkspaceGridDelegate>());
       expect(
         state.managedIconPickerContentSize,
-        64,
+        48,
       );
       expect(
         state.managedIconPickerImageScale,
@@ -4785,8 +4829,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('desktop password window keeps its original size',
-      (tester) async {
+  testWidgets('touch password window keeps its original size', (tester) async {
     await tester.binding.setSurfaceSize(const Size(800, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
     await tester.pumpWidget(const WalletApsApp());
@@ -4797,6 +4840,56 @@ void main() {
       const Size(562, 642),
     );
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('desktop password window is the same design at 75 %',
+      (tester) async {
+    await tester.binding.setSurfaceSize(const Size(800, 900));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    const parts = [
+      Key('passwordWindow'),
+      Key('passwordInput'),
+      Key('loginOk'),
+      Key('createVault'),
+      Key('skinSelector'),
+    ];
+    Future<Map<Key, Rect>> measure(TargetPlatform platform) async {
+      debugDefaultTargetPlatformOverride = platform;
+      await tester.pumpWidget(const WalletApsApp());
+      await tester.pumpAndSettle();
+      final window = tester.getTopLeft(find.byKey(parts.first));
+      final rects = {
+        for (final key in parts)
+          key: tester.getRect(find.byKey(key)).shift(-window),
+      };
+      await tester.pumpWidget(const SizedBox.shrink());
+      return rects;
+    }
+
+    try {
+      final touch = await measure(TargetPlatform.android);
+      final desktop = await measure(TargetPlatform.windows);
+      expect(desktop[parts.first]!.size, const Size(421.5, 481.5));
+      for (final key in parts) {
+        final want = Rect.fromLTRB(
+          touch[key]!.left * 0.75,
+          touch[key]!.top * 0.75,
+          touch[key]!.right * 0.75,
+          touch[key]!.bottom * 0.75,
+        );
+        for (final (got, expected) in [
+          (desktop[key]!.left, want.left),
+          (desktop[key]!.top, want.top),
+          (desktop[key]!.width, want.width),
+          (desktop[key]!.height, want.height),
+        ]) {
+          expect(got, closeTo(expected, 0.01), reason: '$key');
+        }
+      }
+      expect(tester.takeException(), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
   });
 
   testWidgets('inactivity warning locks the vault instead of closing the app',

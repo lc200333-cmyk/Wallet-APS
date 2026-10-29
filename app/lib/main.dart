@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:ui' as ui;
 
@@ -23,6 +24,7 @@ import 'controllers/entity_index.dart';
 import 'features/cards/field_projection.dart';
 import 'features/categories/category_path_index.dart';
 import 'features/templates/template_order.dart';
+import 'features/templates/template_layout.dart';
 import 'features/templates/template_folders.dart';
 import 'services/wallet_rekey_service.dart';
 import 'services/password_generator.dart';
@@ -31,6 +33,7 @@ import 'ui/skin/app_skin.dart';
 import 'widgets/card_surface.dart';
 import 'widgets/context_menu_label.dart';
 import 'widgets/object_selection_menu_label.dart';
+import 'widgets/pointer_draggable.dart';
 import 'widgets/workspace_section_bar.dart';
 import 'widgets/android_screen_scale.dart';
 import 'widgets/workspace_geometry.dart';
@@ -69,6 +72,47 @@ Future<Directory> resolveAppStateDirectory() async {
     directory.createSync(recursive: true);
   }
   return directory;
+}
+
+/// Template folders for new bases: saved on this device from an open base,
+/// otherwise the layout shipped with the program.
+const templateLayoutFileName = 'wallet_aps_template_layout.json';
+const bundledTemplateLayoutAsset = 'assets/base_wallet/template_layout.json';
+
+Future<File> templateLayoutFile() async => File(
+      '${(await resolveAppStateDirectory()).path}'
+      '${Platform.pathSeparator}$templateLayoutFileName',
+    );
+
+Future<void> saveTemplateLayoutForNewVaultsFile(TemplateLayout layout) async {
+  final file = await templateLayoutFile();
+  final temporary = File('${file.path}.part');
+  await temporary.writeAsString(
+    const JsonEncoder.withIndent('  ').convert(layout.toJson()),
+    flush: true,
+  );
+  await temporary.rename(file.path);
+}
+
+Future<TemplateLayout?> loadTemplateLayoutForNewVaults() async {
+  try {
+    final file = await templateLayoutFile();
+    if (await file.exists()) {
+      final layout = TemplateLayout.fromJson(
+        jsonDecode(await file.readAsString()),
+      );
+      if (layout != null) return layout;
+    }
+  } catch (_) {
+    // A damaged file falls back to the shipped layout.
+  }
+  try {
+    return TemplateLayout.fromJson(
+      jsonDecode(await rootBundle.loadString(bundledTemplateLayoutAsset)),
+    );
+  } catch (_) {
+    return null;
+  }
 }
 
 final rootScaffoldMessengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -598,8 +642,8 @@ class IconCatalogKind {
   final String colorId;
   static const spb = IconCatalogKind('spb', 'Базовые');
   static const pictograms = IconCatalogKind('pictograms', 'Значки');
-  static const brands = IconCatalogKind('brands', 'Логотипы компаний');
-  static const thirdParty = IconCatalogKind('thirdParty', 'Дополнительные');
+  static const brands = IconCatalogKind('brands', 'Логотипы');
+  static const thirdParty = IconCatalogKind('thirdParty', 'Разные');
   static List<IconCatalogKind> get values =>
       [spb, pictograms, brands, thirdParty, ...customIconCatalogs];
   bool get isCustom => storageKey.startsWith('custom-');
@@ -963,6 +1007,36 @@ String? matchingThirdPartyIconId(Uint8List normalizedPng) {
   );
 }
 
+/// Normalizes the bundled icons that a new user icon is compared with. The
+/// whole bundle takes tens of seconds, so it runs once, on background
+/// isolates, and only when an icon is added.
+Future<void> prepareThirdPartyComparablePngs() async {
+  final missing = [
+    for (final entry in thirdPartyIconPngs.entries)
+      if (!thirdPartyComparablePngs.containsKey(entry.key)) entry,
+  ];
+  if (missing.isEmpty) return;
+  final workers = max(1, min(4, Platform.numberOfProcessors - 1));
+  final results = await Future.wait([
+    for (var worker = 0; worker < workers; worker++)
+      _comparablePngsInIsolate([
+        for (var index = worker; index < missing.length; index += workers)
+          missing[index],
+      ]),
+  ]);
+  for (final result in results) {
+    thirdPartyComparablePngs.addAll(result);
+  }
+}
+
+Future<Map<String, Uint8List>> _comparablePngsInIsolate(
+  List<MapEntry<String, Uint8List>> icons,
+) =>
+    Isolate.run(() => {
+          for (final icon in icons)
+            icon.key: comparableThirdPartyIconPng(icon.value) ?? icon.value,
+        });
+
 String? matchingThirdPartyIconIdIn(
   Map<String, Uint8List> icons,
   Map<String, Uint8List> comparableIcons,
@@ -1049,6 +1123,7 @@ Future<ThirdPartyIconRegistration> _registerUserThirdPartyIcon(
   }
   final normalized = normalizeUserIconPng(decoded);
   if (ensureCatalogLoaded) await loadThirdPartyIconAssets();
+  await prepareThirdPartyComparablePngs();
 
   final duplicateId = matchingThirdPartyIconId(normalized);
   if (duplicateId != null) {
@@ -1099,8 +1174,8 @@ void showThirdPartyIconRegistrationMessage(
       SnackBar(
         content: Text(
           registration.added
-              ? 'Иконка добавлена в каталог «Дополнительные».'
-              : 'Такая иконка уже есть в каталоге «Дополнительные».',
+              ? 'Иконка добавлена в каталог «Разные».'
+              : 'Такая иконка уже есть в каталоге «Разные».',
         ),
         duration: const Duration(seconds: 2),
       ),
@@ -1125,7 +1200,7 @@ Future<ThirdPartyIconRegistration?> registerUserThirdPartyIconWithFeedback(
         ..showSnackBar(
           SnackBar(
             content: Text(
-              'Не удалось добавить иконку в каталог «Дополнительные»: $error',
+              'Не удалось добавить иконку в каталог «Разные»: $error',
             ),
           ),
         );
@@ -1186,8 +1261,11 @@ Future<List<String>> loadThirdPartyIconAssets() {
               await file.readAsBytes(),
             );
             if (normalized == null) continue;
+            // Stored icons were checked against the bundled ones when they
+            // were added; normalizing the whole bundle here froze the first
+            // opening of "Иконки" for tens of seconds.
             if (matchingThirdPartyIconIdIn(
-                  packedIcons,
+                  thirdPartyComparablePngs,
                   thirdPartyComparablePngs,
                   normalized,
                 ) !=
@@ -1278,6 +1356,233 @@ Widget spbPackedImage(
 
 Future<void> copySensitiveText(String value) async {
   await SecureClipboardService.copy(value);
+}
+
+/// What a card field opens outside the program: a web address in the
+/// browser, an e-mail address as a new message in the mail client, a phone
+/// number in a messenger, the dialer or another program.
+enum CardFieldLink { website, email, phone }
+
+CardFieldLink? cardFieldLinkKind(FieldDefinition field) {
+  if (fieldDefinitionIsSecret(field)) return null;
+  final label = field.label.toLowerCase();
+  if (field.type == 'url' ||
+      label.contains('сайт') ||
+      label.contains('website') ||
+      label == 'url') {
+    return CardFieldLink.website;
+  }
+  if (field.type == 'email' ||
+      label.contains('почт') ||
+      label.contains('e-mail') ||
+      label.contains('email')) {
+    return CardFieldLink.email;
+  }
+  if (field.type == 'phone' ||
+      label.contains('телеф') ||
+      label.contains('phone') ||
+      label.contains('мобильн') ||
+      label == 'тел' ||
+      label.startsWith('тел.')) {
+    return CardFieldLink.phone;
+  }
+  return null;
+}
+
+/// The address to open, or null when [value] is not a usable address. Only
+/// http(s), mailto and tel are produced, so a field cannot start a program.
+Uri? cardFieldLinkUri(CardFieldLink kind, String value) {
+  final text = value.trim();
+  if (text.isEmpty) return null;
+  switch (kind) {
+    case CardFieldLink.website:
+      if (text.contains(RegExp(r'\s'))) return null;
+      final withScheme =
+          RegExp(r'^[a-z][a-z0-9+.-]*://', caseSensitive: false).hasMatch(text)
+              ? text
+              : 'https://$text';
+      final uri = Uri.tryParse(withScheme);
+      if (uri == null ||
+          !(uri.scheme == 'http' || uri.scheme == 'https') ||
+          uri.host.isEmpty) {
+        return null;
+      }
+      return uri;
+    case CardFieldLink.email:
+      if (text.contains(RegExp(r'\s'))) return null;
+      final address =
+          text.toLowerCase().startsWith('mailto:') ? text.substring(7) : text;
+      if (!RegExp(r'^[^@<>"]+@[^@<>"]+\.[^@<>"]+$').hasMatch(address)) {
+        return null;
+      }
+      return Uri(scheme: 'mailto', path: address);
+    case CardFieldLink.phone:
+      final number = phoneNumberForLinks(text);
+      return number == null ? null : Uri(scheme: 'tel', path: number);
+  }
+}
+
+/// "+7 (999) 123-45-67" → "+79991234567". Spaces, dashes, dots and brackets
+/// are dropped; anything else, or fewer than 5 or more than 15 digits, is not
+/// a phone number.
+String? phoneNumberForLinks(String value) {
+  final text = value.trim();
+  if (!RegExp(r'^\+?[\d\s().-]+$').hasMatch(text)) return null;
+  final digits = text.replaceAll(RegExp(r'\D'), '');
+  if (digits.length < 5 || digits.length > 15) return null;
+  return text.startsWith('+') ? '+$digits' : digits;
+}
+
+({CardFieldLink kind, Uri uri})? cardFieldLinkFor(
+  FieldDefinition field,
+  String? value,
+) {
+  final kind = cardFieldLinkKind(field);
+  if (kind == null || value == null) return null;
+  final uri = cardFieldLinkUri(kind, value);
+  return uri == null ? null : (kind: kind, uri: uri);
+}
+
+/// Programs offered for a phone number.
+enum PhoneLinkAction { whatsApp, telegram, call, sms, other }
+
+/// The address each phone choice opens; [PhoneLinkAction.other] lets the
+/// system list every program that handles phone numbers.
+Uri phoneLinkActionUri(PhoneLinkAction action, String number) {
+  final digits = number.replaceAll('+', '');
+  return switch (action) {
+    PhoneLinkAction.whatsApp => Uri.parse('https://wa.me/$digits'),
+    PhoneLinkAction.telegram => Uri.parse('https://t.me/+$digits'),
+    PhoneLinkAction.call ||
+    PhoneLinkAction.other =>
+      Uri(scheme: 'tel', path: number),
+    PhoneLinkAction.sms => Uri(scheme: 'sms', path: number),
+  };
+}
+
+Future<PhoneLinkAction?> showPhoneLinkDialog(
+  BuildContext context,
+  String number,
+) {
+  return showDialog<PhoneLinkAction>(
+    context: context,
+    builder: (context) {
+      Widget option(PhoneLinkAction action, IconData icon, String label) =>
+          SimpleDialogOption(
+            key: ValueKey('phoneLinkAction-${action.name}'),
+            onPressed: () => Navigator.pop(context, action),
+            child: Row(
+              children: [
+                Icon(icon, size: 22),
+                const SizedBox(width: 14),
+                Expanded(child: Text(label)),
+              ],
+            ),
+          );
+      return SimpleDialog(
+        key: const Key('phoneLinkDialog'),
+        title: Text(number),
+        children: [
+          option(PhoneLinkAction.whatsApp, Icons.chat_outlined, 'WhatsApp'),
+          option(PhoneLinkAction.telegram, Icons.send_outlined, 'Telegram'),
+          option(PhoneLinkAction.call, Icons.call_outlined, 'Набор номера'),
+          option(PhoneLinkAction.sms, Icons.sms_outlined, 'SMS'),
+          option(
+            PhoneLinkAction.other,
+            Icons.apps_outlined,
+            'Другая программа…',
+          ),
+        ],
+      );
+    },
+  );
+}
+
+/// Globe, envelope or phone next to the copy button of a card field: opens
+/// the address in the default browser, a new message in the mail client, or
+/// offers the programs for a phone number.
+Widget cardFieldLinkButton(
+  BuildContext context,
+  FieldDefinition field,
+  ({CardFieldLink kind, Uri uri}) link,
+) {
+  final tokens = WalletSkinTokens.of(context);
+  final (icon, tooltip, failure) = switch (link.kind) {
+    CardFieldLink.website => (
+        Icons.public,
+        'Открыть сайт в браузере',
+        'Не удалось открыть браузер.',
+      ),
+    CardFieldLink.email => (
+        Icons.mail_outline,
+        'Написать письмо',
+        'Не удалось открыть почтовую программу.',
+      ),
+    CardFieldLink.phone => (
+        Icons.phone_outlined,
+        'Позвонить или написать',
+        'Не удалось открыть программу для этого номера.',
+      ),
+  };
+  return SizedBox(
+    width: 36,
+    child: IconButton(
+      key: ValueKey('cardPreviewOpenLink-${field.id}'),
+      padding: EdgeInsets.zero,
+      tooltip: tooltip,
+      icon: Icon(
+        icon,
+        size: 17,
+        color:
+            tokens.isRetro ? const Color(0xff777777) : tokens.onSurfaceVariant,
+      ),
+      onPressed: () async {
+        var uri = link.uri;
+        var chooser = false;
+        if (link.kind == CardFieldLink.phone) {
+          final action = await showPhoneLinkDialog(context, uri.path);
+          if (action == null) return;
+          uri = phoneLinkActionUri(action, uri.path);
+          chooser = action == PhoneLinkAction.other;
+        }
+        try {
+          await cardFieldLinkOpener(uri, chooser: chooser);
+        } catch (_) {
+          rootScaffoldMessengerKey.currentState
+            ?..hideCurrentSnackBar()
+            ..showSnackBar(SnackBar(content: Text(failure)));
+        }
+      },
+    ),
+  );
+}
+
+/// Replaced in tests.
+Future<void> Function(Uri uri, {bool chooser}) cardFieldLinkOpener =
+    openExternalUri;
+
+/// Opens [uri] with the system's default program for it. With [chooser],
+/// Android lists every program that handles it; elsewhere the system's own
+/// association decides.
+Future<void> openExternalUri(Uri uri, {bool chooser = false}) async {
+  if (Platform.isAndroid) {
+    await spbWalletChannel.invokeMethod<void>(
+      'openExternalUri',
+      {'uri': uri.toString(), 'chooser': chooser},
+    );
+  } else if (Platform.isWindows) {
+    await Process.start(
+      'rundll32.exe',
+      ['url.dll,FileProtocolHandler', uri.toString()],
+      mode: ProcessStartMode.detached,
+    );
+  } else {
+    await Process.start(
+      Platform.isMacOS ? 'open' : 'xdg-open',
+      [uri.toString()],
+      mode: ProcessStartMode.detached,
+    );
+  }
 }
 
 Future<void> copyCardFieldValue(String value) async {
@@ -5789,6 +6094,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         createSwlVaultFromBaseFile,
         payload,
       );
+      final layout = await loadTemplateLayoutForNewVaults();
+      if (layout != null) {
+        final created = SpbWalletDatabase.open(creatingFile.path, password);
+        try {
+          created.applyTemplateLayout(layout);
+        } finally {
+          created.close();
+        }
+      }
       if (!SpbWalletDatabase.isStructurallyValid(creatingFile.path)) {
         throw StateError('Созданный файл базы не прошёл проверку SQLite.');
       }
@@ -8077,18 +8391,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                               onKeyEvent: handleSpbCentralWorkspaceKeyEvent,
                               child: KeyedSubtree(
                                   key: iconPickerWorkspaceKey,
-                                  child: spbWorkspaceScrollbarTheme(
-                                    iconLibraryOpen
-                                        ? buildSpbIconWorkspace(
-                                            showPersistentScrollbar: true,
-                                          )
-                                        : mobileTemplatesOpen
-                                            ? buildSpbTemplateWorkspace(
-                                                showPersistentScrollbar: true,
-                                              )
-                                            : buildSpbFolderGrid(
-                                                showPersistentScrollbar: true,
-                                              ),
+                                  child: withCreateButton(
+                                    spbWorkspaceScrollbarTheme(
+                                      iconLibraryOpen
+                                          ? buildSpbIconWorkspace(
+                                              showPersistentScrollbar: true,
+                                            )
+                                          : mobileTemplatesOpen
+                                              ? buildSpbTemplateWorkspace(
+                                                  showPersistentScrollbar: true,
+                                                )
+                                              : buildSpbFolderGrid(
+                                                  showPersistentScrollbar: true,
+                                                ),
+                                    ),
                                   )),
                             ),
                           ),
@@ -8259,24 +8575,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 child: spbWorkspaceScrollbarTheme(
                   iconLibraryOpen
                       ? switch (mobilePane) {
-                          1 => buildSpbIconWorkspace(
+                          1 => withCreateButton(buildSpbIconWorkspace(
                               showPersistentScrollbar: true,
-                            ),
+                            )),
                           _ => buildSpbActionsPanel(),
                         }
                       : mobileTemplatesOpen
                           ? switch (mobilePane) {
-                              1 => buildSpbTemplateWorkspace(
+                              1 => withCreateButton(buildSpbTemplateWorkspace(
                                   showHeader: false,
                                   showPersistentScrollbar: true,
-                                ),
+                                )),
                               _ => buildSpbActionsPanel(),
                             }
                           : switch (mobilePane) {
-                              1 => buildSpbFolderGrid(
+                              1 => withCreateButton(buildSpbFolderGrid(
                                   showPersistentScrollbar: true,
                                   allowItemDragging: false,
-                                ),
+                                )),
                               _ => buildSpbActionsPanel(),
                             },
                 ),
@@ -8769,7 +9085,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
     if (iconLibraryOpen) {
       for (final kind in IconCatalogKind.values) {
-        measure(kind.label, 0, trailing: 40, style: spbTreeFolderStyle);
+        measure(kind.label, 0, trailing: 40, style: spbIconCatalogStyle);
       }
     } else if (mobileTemplatesOpen) {
       for (final folder in spbTemplateFolderNames) {
@@ -9181,6 +9497,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       : spbDesktopLayout
           ? spbTreeDesktopFolderStrut
           : WorkspaceGeometry.bodyStrut;
+
+  /// Icon folder names in the left panel are smaller than card folders.
+  TextStyle get spbIconCatalogStyle => spbTreeFolderStyle.copyWith(
+        fontSize: spbTreeFolderStyle.fontSize! * 0.85,
+      );
+
+  StrutStyle get spbIconCatalogStrut => StrutStyle(
+        fontSize: spbIconCatalogStyle.fontSize,
+        height: spbTreeFolderStrut.height,
+        forceStrutHeight: true,
+      );
+
   StrutStyle get spbTreeDesktopFolderStrut => StrutStyle(
         fontSize: spbTreeDesktopFolderStyle.fontSize,
         height: WorkspaceGeometry.desktopFolderStrut.height,
@@ -9593,8 +9921,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     ),
                     title: Text(
                       kind.label,
-                      style: spbTreeFolderStyle,
-                      strutStyle: spbTreeFolderStrut,
+                      style: spbIconCatalogStyle,
+                      strutStyle: spbIconCatalogStrut,
                       maxLines: 1,
                       softWrap: false,
                       overflow: TextOverflow.visible,
@@ -9963,7 +10291,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   bool get managedIconUsesCompactPickerFrame => true;
 
-  double get managedIconPickerContentSize => WorkspaceGeometry.iconFrameContent;
+  double get managedIconPickerContentSize =>
+      WorkspaceGeometry.iconBrowserContent;
 
   double get managedIconPickerImageScale => 1;
 
@@ -10024,8 +10353,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Widget managedIconDragFeedback(String iconId) {
-    final dimension =
-        managedIconUsesCompactPickerFrame ? WorkspaceGeometry.gridCell : 82.0;
+    final dimension = managedIconUsesCompactPickerFrame
+        ? WorkspaceGeometry.iconBrowserCell
+        : 82.0;
     return Material(
       color: Colors.transparent,
       child: SizedBox.square(
@@ -10038,7 +10368,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Widget buildManagedIconDraggable(String iconId, Widget child) {
     final data = ManagedIconDragData(iconId);
     if (spbWideMultiSelectEnabled) {
-      return Draggable<ManagedIconDragData>(
+      return PointerDraggable<ManagedIconDragData>(
         data: data,
         maxSimultaneousDrags: 1,
         feedback: managedIconDragFeedback(iconId),
@@ -10059,7 +10389,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool showHeader = true,
     bool showPersistentScrollbar = false,
   }) {
-    const pickerGridDelegate = WorkspaceGridDelegate();
+    const pickerGridDelegate = WorkspaceGridDelegate.iconBrowser();
     final query = searchController.text.trim().toLowerCase();
     final visible = managedIconIdsFor(selectedIconCatalog)
         .where(
@@ -10149,22 +10479,36 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 gradient: const [Color(0xff5bc96d), Color(0xff08772f)],
                 onTap: () => editIconFolder(),
               ),
+              // Retro: the yellow button pastes from the clipboard; uploading
+              // is the central "+" and the "Действие" task.
+              if (skinTokens.isRetro) ...[
+                const SizedBox(width: 4),
+                buildSpbSearchButton(
+                  key: const Key('pasteManagedIconButton'),
+                  icon: Icons.content_paste,
+                  tooltip: 'Вставить иконку из буфера',
+                  gradient: const [Color(0xffffdc58), Color(0xffc58a00)],
+                  onTap: pasteManagedIcon,
+                ),
+              ],
               const Spacer(),
-              buildSpbSearchButton(
-                key: const Key('uploadManagedIconButton'),
-                icon: Icons.folder_open,
-                tooltip: 'Загрузить иконку',
-                gradient: const [Color(0xffffdc58), Color(0xffc58a00)],
-                onTap: uploadManagedIcon,
-              ),
-              const SizedBox(width: 4),
-              buildSpbSearchButton(
-                key: const Key('pasteManagedIconButton'),
-                icon: Icons.add,
-                tooltip: 'Вставить иконку из буфера',
-                gradient: const [Color(0xff42bff5), Color(0xff006fc4)],
-                onTap: pasteManagedIcon,
-              ),
+              if (!skinTokens.isRetro) ...[
+                buildSpbSearchButton(
+                  key: const Key('uploadManagedIconButton'),
+                  icon: Icons.folder_open,
+                  tooltip: 'Загрузить иконку',
+                  gradient: const [Color(0xffffdc58), Color(0xffc58a00)],
+                  onTap: uploadManagedIcon,
+                ),
+                const SizedBox(width: 4),
+                buildSpbSearchButton(
+                  key: const Key('pasteManagedIconButton'),
+                  icon: Icons.add,
+                  tooltip: 'Вставить иконку из буфера',
+                  gradient: const [Color(0xff42bff5), Color(0xff006fc4)],
+                  onTap: pasteManagedIcon,
+                ),
+              ],
             ],
           ),
         ),
@@ -10190,106 +10534,123 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           if (query.isEmpty ||
               spbTemplatesInFolder(folder, query).isNotEmpty ||
               spbTemplateFolderMatchesQuery(folder, query)) ...[
-            GestureDetector(
-              key: ValueKey('spbTemplateFolder-$folder'),
-              onSecondaryTapDown: (details) =>
-                  showSpbTemplateFolderMenu(folder, details.globalPosition),
-              onLongPressStart: (details) =>
-                  showSpbTemplateFolderMenu(folder, details.globalPosition),
-              child: ListTile(
-                dense: true,
-                minTileHeight: rowHeight,
-                minLeadingWidth: iconSize,
-                horizontalTitleGap: 5,
-                minVerticalPadding: 0,
-                contentPadding: const EdgeInsets.only(left: 6, right: 8),
-                selected: selectedTemplateFolder == folder,
-                selectedTileColor: skinTokens.isRetro
-                    ? const Color(0xffcfe9fb)
-                    : skinTokens.selection,
-                selectedColor:
-                    skinTokens.isRetro ? null : skinTokens.onSelection,
-                leading: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    spbExpansionMark(
-                      query.isNotEmpty ||
-                          expandedTemplateFolders.contains(folder),
-                    ),
-                    const SizedBox(width: 6),
-                    spbSizedDataIcon(
-                      templateFolderSettings
-                              .where((entry) =>
-                                  entry.name == folder && !entry.hidden)
-                              .firstOrNull
-                              ?.iconId ??
-                          defaultIconForCategoryPath(folder),
-                      iconSize,
-                      fallbackColor: categoryPictogramColor(
-                          templateFolderSettings
-                              .where((entry) =>
-                                  entry.name == folder && !entry.hidden)
-                              .firstOrNull
-                              ?.colorId),
-                    ),
-                  ],
-                ),
-                title: Text(folder,
-                    style: spbTreeFolderStyle,
-                    maxLines: 1,
-                    softWrap: false,
-                    overflow: TextOverflow.visible),
-                trailing: Text(
-                  '${spbTemplatesInFolder(folder, query).length}',
-                  style: labelStyle,
-                ),
-                onTap: () => openSpbTemplateFolder(folder),
-              ),
-            ),
-            if (query.isNotEmpty || expandedTemplateFolders.contains(folder))
-              for (final template in spbTemplatesInFolder(folder, query))
-                GestureDetector(
-                  key: ValueKey('spbTemplate-${template.id}'),
-                  onDoubleTap: () {
-                    selectedTemplateFolder = folder;
-                    openTemplatePreview(template);
-                  },
-                  onSecondaryTapDown: (details) => showSpbTemplateTreeMenu(
-                      template, folder, details.globalPosition),
-                  onLongPressStart: (details) => showSpbTemplateTreeMenu(
-                      template, folder, details.globalPosition),
+            DragTarget<CardTemplate>(
+              key: ValueKey('spbTemplateFolderDrop-$folder'),
+              onWillAcceptWithDetails: (details) =>
+                  spbTemplateFolderFor(details.data) != folder,
+              onAcceptWithDetails: (details) =>
+                  unawaited(moveSpbTemplatesToFolder(details.data, folder)),
+              builder: (context, candidates, rejected) => Material(
+                color: candidates.isEmpty
+                    ? Colors.transparent
+                    : skinTokens.isRetro
+                        ? const Color(0xffcce9cf)
+                        : skinTokens.primary.withValues(alpha: 0.10),
+                child: GestureDetector(
+                  key: ValueKey('spbTemplateFolder-$folder'),
+                  onSecondaryTapDown: (details) =>
+                      showSpbTemplateFolderMenu(folder, details.globalPosition),
+                  onLongPressStart: (details) =>
+                      showSpbTemplateFolderMenu(folder, details.globalPosition),
                   child: ListTile(
                     dense: true,
                     minTileHeight: rowHeight,
                     minLeadingWidth: iconSize,
                     horizontalTitleGap: 5,
                     minVerticalPadding: 0,
-                    contentPadding: const EdgeInsets.only(left: 46),
-                    visualDensity: VisualDensity.standard,
-                    selected: selectedTemplateIds.contains(template.id) ||
-                        selectedTemplateId == template.id,
+                    contentPadding: const EdgeInsets.only(left: 6, right: 8),
+                    selected: selectedTemplateFolder == folder,
                     selectedTileColor: skinTokens.isRetro
                         ? const Color(0xffcfe9fb)
                         : skinTokens.selection,
                     selectedColor:
                         skinTokens.isRetro ? null : skinTokens.onSelection,
-                    leading: spbSizedDataIcon(
-                      template.iconId,
-                      iconSize,
-                      fallbackColor: templateDisplayPictogramColor(template),
+                    leading: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        spbExpansionMark(
+                          query.isNotEmpty ||
+                              expandedTemplateFolders.contains(folder),
+                        ),
+                        const SizedBox(width: 6),
+                        spbSizedDataIcon(
+                          templateFolderSettings
+                                  .where((entry) =>
+                                      entry.name == folder && !entry.hidden)
+                                  .firstOrNull
+                                  ?.iconId ??
+                              defaultIconForCategoryPath(folder),
+                          iconSize,
+                          fallbackColor: categoryPictogramColor(
+                              templateFolderSettings
+                                  .where((entry) =>
+                                      entry.name == folder && !entry.hidden)
+                                  .firstOrNull
+                                  ?.colorId),
+                        ),
+                      ],
                     ),
-                    title: Text(
-                      templateLabelInFolder(template.name, folder),
+                    title: Text(folder,
+                        style: spbTreeFolderStyle,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.visible),
+                    trailing: Text(
+                      '${spbTemplatesInFolder(folder, query).length}',
                       style: labelStyle,
-                      strutStyle: labelStrut,
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.visible,
                     ),
-                    onTap: () {
+                    onTap: () => openSpbTemplateFolder(folder),
+                  ),
+                ),
+              ),
+            ),
+            if (query.isNotEmpty || expandedTemplateFolders.contains(folder))
+              for (final template in spbTemplatesInFolder(folder, query))
+                buildSpbTemplateDraggable(
+                  template,
+                  GestureDetector(
+                    key: ValueKey('spbTemplate-${template.id}'),
+                    onDoubleTap: () {
                       selectedTemplateFolder = folder;
-                      selectSpbTemplateFromPrimaryClick(template);
+                      openTemplatePreview(template);
                     },
+                    onSecondaryTapDown: (details) => showSpbTemplateTreeMenu(
+                        template, folder, details.globalPosition),
+                    onLongPressStart: (details) => showSpbTemplateTreeMenu(
+                        template, folder, details.globalPosition),
+                    child: ListTile(
+                      dense: true,
+                      minTileHeight: rowHeight,
+                      minLeadingWidth: iconSize,
+                      horizontalTitleGap: 5,
+                      minVerticalPadding: 0,
+                      contentPadding: const EdgeInsets.only(left: 46),
+                      visualDensity: VisualDensity.standard,
+                      selected: selectedTemplateIds.contains(template.id) ||
+                          selectedTemplateId == template.id,
+                      selectedTileColor: skinTokens.isRetro
+                          ? const Color(0xffcfe9fb)
+                          : skinTokens.selection,
+                      selectedColor:
+                          skinTokens.isRetro ? null : skinTokens.onSelection,
+                      leading: spbSizedDataIcon(
+                        template.iconId,
+                        iconSize,
+                        fallbackColor: templateDisplayPictogramColor(template),
+                      ),
+                      title: Text(
+                        templateLabelInFolder(template.name, folder),
+                        style: labelStyle,
+                        strutStyle: labelStrut,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.visible,
+                      ),
+                      onTap: () {
+                        selectedTemplateFolder = folder;
+                        selectSpbTemplateFromPrimaryClick(template);
+                      },
+                    ),
                   ),
                 ),
           ],
@@ -10599,6 +10960,119 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
+  /// Wide layouts drag templates with the mouse (or a pen) onto a template
+  /// folder of the left panel; a finger keeps scrolling.
+  Widget buildSpbTemplateDraggable(CardTemplate template, Widget child) {
+    if (!spbWideMultiSelectEnabled || spbWallet == null) return child;
+    return PointerDraggable<CardTemplate>(
+      data: template,
+      maxSimultaneousDrags: spbWalletWritable ? 1 : 0,
+      dragAnchorStrategy: pointerDragAnchorStrategy,
+      feedback: Material(
+        key: ValueKey('spbTemplateDragFeedback-${template.id}'),
+        color: Colors.transparent,
+        child: Container(
+          width: 104,
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: const Color(0xffedf7fe),
+            border: Border.all(color: const Color(0xff367ca8)),
+            boxShadow: const [
+              BoxShadow(color: Colors.black26, blurRadius: 6),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              spbSizedDataIcon(
+                template.iconId,
+                42,
+                fallbackColor: templateDisplayPictogramColor(template),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                template.displayName,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(color: Color(0xff16212a)),
+              ),
+            ],
+          ),
+        ),
+      ),
+      childWhenDragging: Opacity(opacity: 0.35, child: child),
+      child: child,
+    );
+  }
+
+  /// Moves the dragged template, or every selected template when the dragged
+  /// one is part of a multiple selection, to [folder]. A "Папка: название"
+  /// name follows the folder.
+  Future<void> moveSpbTemplatesToFolder(
+    CardTemplate dragged,
+    String folder,
+  ) async {
+    final wallet = spbWallet;
+    if (wallet == null || !ensureSpbWalletWritable()) return;
+    final moving = selectedTemplateIds.length > 1 &&
+            selectedTemplateIds.contains(dragged.id)
+        ? templates
+            .where((entry) => selectedTemplateIds.contains(entry.id))
+            .toList()
+        : [dragged];
+    final changed = [
+      for (final template in moving)
+        if (spbTemplateFolderFor(template) != folder) template,
+    ];
+    if (changed.isEmpty) return;
+    SessionUndoEntry? undoEntry;
+    try {
+      undoEntry = await captureSessionUndo(
+        changed.length == 1
+            ? 'Перемещение шаблона: ${changed.single.displayName}'
+            : 'Перемещение шаблонов: ${changed.length}',
+        changed.first.iconId,
+      );
+      for (final template in changed) {
+        final moved = CardTemplate(
+          id: template.id,
+          name: templateNameInFolder(template.name, folder),
+          iconId: template.iconId,
+          colorId: template.colorId,
+          fields: template.fields,
+          builtIn: template.builtIn,
+          embeddedIconBase64: template.embeddedIconBase64,
+          iconFileName: template.iconFileName,
+          spbColor: template.spbColor,
+          categoryPath: folder,
+        );
+        wallet.saveTemplate(spbTemplateDraftFor(prepareSpbTemplate(
+          moved,
+          false,
+        )));
+      }
+      markVaultDirty();
+      final written = await writeBackSpbWallet();
+      final updated = wallet.loadSnapshot();
+      if (!mounted) return;
+      setState(() {
+        applySpbSnapshot(updated);
+        selectedTemplateFolder = folder;
+        expandedTemplateFolders.add(folder);
+        selectedTemplateId = changed.first.id;
+        if (written) message = null;
+      });
+      commitSessionUndo(undoEntry);
+      showTemplateActionMessage(changed.length == 1
+          ? 'Шаблон «${changed.single.displayName}» перемещён в «$folder».'
+          : 'Шаблонов перемещено в «$folder»: ${changed.length}.');
+    } catch (error) {
+      discardSessionUndo(undoEntry);
+      showTemplateActionMessage('Не удалось переместить шаблон: $error');
+    }
+  }
+
   Future<void> cloneSpbTemplate(CardTemplate template) async {
     final folder = spbTemplateFolderFor(template);
     final existingNames = templates
@@ -10687,35 +11161,36 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       final template = visible[index];
                       return KeyedSubtree(
                         key: ValueKey('spbCentralTemplate-${template.id}'),
-                        child: LayoutBuilder(
-                          builder: (context, constraints) => buildSpbGridEntry(
-                            label: template.displayName,
-                            labelWidth:
-                                spbEntryGridLabelWidth(constraints.maxWidth),
-                            iconSize: spbEntryGridIconSize,
-                            entryHeight: spbEntryGridHeight,
-                            labelHeight: spbEntryGridLabelHeight,
-                            narrowAndroidLabel: spbNarrowAndroid,
-                            wideAndroidLabel: spbWideAndroid,
-                            desktopCardLabel: spbDesktopLayout,
-                            icon: spbSizedDataIcon(
-                              template.iconId,
-                              spbEntryGridIconSize,
-                              fallbackColor: skinTokens.isRetro
-                                  ? templateDisplayPictogramColor(template)
-                                  : skinTileForTemplate(template).icon,
+                        child: buildSpbTemplateDraggable(
+                          template,
+                          LayoutBuilder(
+                            builder: (context, constraints) =>
+                                buildSpbGridEntry(
+                              label: template.displayName,
+                              labelWidth:
+                                  spbEntryGridLabelWidth(constraints.maxWidth),
+                              iconSize: spbEntryGridIconSize,
+                              entryHeight: spbEntryGridHeight,
+                              labelHeight: spbEntryGridLabelHeight,
+                              narrowAndroidLabel: spbNarrowAndroid,
+                              wideAndroidLabel: spbWideAndroid,
+                              desktopCardLabel: spbDesktopLayout,
+                              icon: spbSizedDataIcon(
+                                template.iconId,
+                                spbEntryGridIconSize,
+                                fallbackColor: skinTokens.isRetro
+                                    ? templateDisplayPictogramColor(template)
+                                    : skinTileForTemplate(template).icon,
+                              ),
+                              onTap: () =>
+                                  selectSpbTemplateFromPrimaryClick(template),
+                              onDoubleTap: () => openTemplatePreview(template),
+                              onContextMenu: (position) =>
+                                  showSpbTemplateMenu(template, position),
+                              selected:
+                                  selectedTemplateIds.contains(template.id) ||
+                                      selectedTemplateId == template.id,
                             ),
-                            tilePair: skinTokens.isRetro
-                                ? null
-                                : skinTileForTemplate(template),
-                            onTap: () =>
-                                selectSpbTemplateFromPrimaryClick(template),
-                            onDoubleTap: () => openTemplatePreview(template),
-                            onContextMenu: (position) =>
-                                showSpbTemplateMenu(template, position),
-                            selected:
-                                selectedTemplateIds.contains(template.id) ||
-                                    selectedTemplateId == template.id,
                           ),
                         ),
                       );
@@ -11249,9 +11724,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                   ? skinTileForFolder(folder.colorId).icon
                                   : categoryPictogramColor(folder.colorId),
                             ),
-                            tilePair: modern
-                                ? skinTileForFolder(folder.colorId)
-                                : null,
                             onTap: () => openSpbFolder(folder.path),
                             onContextMenu: (position) =>
                                 showSpbFolderMenu(folder, position),
@@ -11288,7 +11760,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                           labelHeight: gridLabelHeight,
                           selected: selectedItemIds.contains(item.id) ||
                               selectedItemId == item.id,
-                          tilePair: modern ? skinTileForItem(item) : null,
                           icon: spbCardIconWithAttachmentMark(
                             item: item,
                             template: template,
@@ -11309,7 +11780,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         child: Container(
                           key: spbGridEntryKey('card:${item.id}'),
                           child: allowItemDragging
-                              ? Draggable<SecretItem>(
+                              ? PointerDraggable<SecretItem>(
                                   data: item,
                                   maxSimultaneousDrags:
                                       spbWallet == null ? 0 : 1,
@@ -12000,7 +12471,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required Widget child,
   }) {
     if (!enabled) return child;
-    return Draggable<CategoryTreeNode>(
+    return PointerDraggable<CategoryTreeNode>(
       data: folder,
       maxSimultaneousDrags: spbWallet == null || !spbWalletWritable ? 0 : 1,
       dragAnchorStrategy: pointerDragAnchorStrategy,
@@ -12130,7 +12601,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool narrowAndroidLabel = false,
     bool wideAndroidLabel = false,
     bool desktopCardLabel = false,
-    SkinTilePair? tilePair,
   }) {
     final t = skinTokens;
     final modern = !t.isRetro;
@@ -12185,16 +12655,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 alignment: Alignment.topCenter,
                 child: SizedBox.square(
                   dimension: iconSize,
+                  // Light and Dark draw the icon on the window background
+                  // without a tile; selection is only a frame.
                   child: modern
                       ? Container(
-                          decoration: BoxDecoration(
-                            color: (tilePair ?? t.palette['neutral']!).tile,
-                            borderRadius: BorderRadius.circular(12),
-                            border: selected
-                                ? Border.all(color: t.primary, width: 2)
-                                : null,
-                          ),
-                          padding: EdgeInsets.all(iconSize * 0.125),
+                          foregroundDecoration: selected
+                              ? BoxDecoration(
+                                  borderRadius: BorderRadius.circular(12),
+                                  border:
+                                      Border.all(color: t.primary, width: 2),
+                                )
+                              : null,
+                          padding: EdgeInsets.all(iconSize * 0.04),
                           child: FittedBox(fit: BoxFit.contain, child: icon),
                         )
                       : Container(
@@ -13206,6 +13678,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ),
         (
           Icon(
+            Icons.palette_outlined,
+            size: 36,
+            color: taskIconColor,
+          ),
+          'Сменить тему',
+          openSkinDialog,
+        ),
+        (
+          Icon(
             Icons.logout,
             key: const Key('managedIconExitTaskIcon'),
             size: 36,
@@ -13236,6 +13717,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ),
         (
           Icon(
+            Icons.drive_folder_upload_outlined,
+            key: const Key('templateLayoutTaskIcon'),
+            size: 36,
+            color: taskIconColor,
+          ),
+          'Папки шаблонов для новых баз',
+          saveTemplateLayoutForNewVaults,
+        ),
+        (
+          Icon(
             Icons.delete_outline,
             key: const Key('templateDeleteTaskIcon'),
             size: 36,
@@ -13248,6 +13739,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           spbResourceIcon('icon_save_enable.png', 40),
           spbWritePending ? 'Повторить сохранение' : 'Сохранить базу',
           saveVaultThroughExplorer,
+        ),
+        (
+          Icon(
+            Icons.palette_outlined,
+            size: 36,
+            color: taskIconColor,
+          ),
+          'Сменить тему',
+          openSkinDialog,
         ),
         (
           Icon(Icons.logout, size: 36, color: taskIconColor),
@@ -13322,17 +13822,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         createDatedArchiveCopy,
       ),
       (
-        KeyedSubtree(
-          key: const Key('spbRepairTaskIcon'),
-          child: spbResourceIcon('icon_sync_small.png', 40),
-        ),
-        'Проверить и восстановить базу',
-        repairCurrentWalletCompatibility,
-      ),
-      (
         spbResourceIcon('icon_save_enable.png', 40),
         spbWritePending ? 'Повторить сохранение' : 'Сохранить базу',
         saveVaultThroughExplorer,
+      ),
+      (
+        Icon(
+          Icons.palette_outlined,
+          size: 36,
+          color: taskIconColor,
+        ),
+        'Сменить тему',
+        openSkinDialog,
       ),
       (
         Icon(Icons.logout, size: 36, color: taskIconColor),
@@ -13876,9 +14377,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 title == 'Действие'
             ? 1.0
             : 0.0;
-    final actionIconSize = androidSpacing
-        ? WorkspaceGeometry.narrowActionIcon
-        : WorkspaceGeometry.actionIcon;
+    // Task icons of "Действие" are 20 % larger than other panel icons.
+    final actionIconSize = (androidSpacing
+            ? WorkspaceGeometry.narrowActionIcon
+            : WorkspaceGeometry.actionIcon) *
+        (title == 'Действие' ? 1.2 : 1.0);
     final minimumRowHeight = androidSpacing
         ? WorkspaceGeometry.narrowRowHeight
         : WorkspaceGeometry.rowHeight;
@@ -14689,6 +15192,23 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
+  /// The password window keeps its 562 × 642 (702 with a message) design
+  /// and is drawn at 75 % on Windows, Linux and macOS. Phones and tablets
+  /// keep full size for touch.
+  double get passwordWindowScale => switch (defaultTargetPlatform) {
+        TargetPlatform.windows ||
+        TargetPlatform.linux ||
+        TargetPlatform.macOS =>
+          0.75,
+        _ => 1.0,
+      };
+
+  double passwordWindowDesignWidth(BuildContext context) =>
+      min(MediaQuery.sizeOf(context).width / passwordWindowScale, 562);
+
+  double get passwordWindowDesignHeight =>
+      message == null && !loginHintVisible ? 642 : 702;
+
   Widget buildLocked() {
     final t = skinTokens;
     final retro = t.isRetro;
@@ -14708,404 +15228,426 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
+            // Desktop draws the 562 × 642 design at 75 %; everything inside
+            // (keys, labels, icons) scales together.
             child: SizedBox(
               key: const Key('passwordWindow'),
-              width: min(MediaQuery.sizeOf(context).width, 562),
-              height: message == null && !loginHintVisible ? 642 : 702,
-              child: LayoutBuilder(
-                builder: (context, constraints) => SingleChildScrollView(
-                  padding: EdgeInsets.zero,
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(
-                      minHeight: constraints.maxHeight,
-                    ),
-                    child: Container(
-                      width: constraints.maxWidth,
-                      decoration: BoxDecoration(
-                        color: retro ? appWindowBackgroundColor : t.bg,
-                        border: Border.all(
-                          color: retro ? const Color(0xffc6c6c6) : t.outline,
+              width: passwordWindowDesignWidth(context) * passwordWindowScale,
+              height: passwordWindowDesignHeight * passwordWindowScale,
+              child: FittedBox(
+                fit: BoxFit.fill,
+                child: SizedBox(
+                  width: passwordWindowDesignWidth(context),
+                  height: passwordWindowDesignHeight,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => SingleChildScrollView(
+                      padding: EdgeInsets.zero,
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          minHeight: constraints.maxHeight,
                         ),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          GestureDetector(
-                            behavior: HitTestBehavior.opaque,
-                            onPanStart: (_) {
-                              unawaited(startLoginWindowDrag());
-                            },
-                            child: Container(
-                              height: 44,
+                        child: Container(
+                          width: constraints.maxWidth,
+                          decoration: BoxDecoration(
+                            color: retro ? appWindowBackgroundColor : t.bg,
+                            border: Border.all(
                               color:
-                                  retro ? const Color(0xff777777) : t.titleBar,
-                              alignment: Alignment.centerLeft,
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 12,
-                              ),
-                              child: Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      'Пароль',
-                                      style: retro
-                                          ? const TextStyle(
-                                              color: Colors.white,
-                                              fontSize: 18,
-                                            )
-                                          : TextStyle(
-                                              color: t.onSurface,
-                                              fontSize: 18,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                    ),
-                                  ),
-                                  const PasswordVersionLabel(
-                                    key: Key('passwordVersion'),
-                                  ),
-                                ],
-                              ),
+                                  retro ? const Color(0xffc6c6c6) : t.outline,
                             ),
                           ),
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 18, 20, 16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                FittedBox(
-                                  fit: BoxFit.scaleDown,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              GestureDetector(
+                                behavior: HitTestBehavior.opaque,
+                                onPanStart: (_) {
+                                  unawaited(startLoginWindowDrag());
+                                },
+                                child: Container(
+                                  height: 44,
+                                  color: retro
+                                      ? const Color(0xff777777)
+                                      : t.titleBar,
                                   alignment: Alignment.centerLeft,
-                                  child: Text.rich(
-                                    TextSpan(
-                                      children: [
-                                        TextSpan(
-                                          text: selectedVaultTitle,
-                                          style: TextStyle(
-                                            fontWeight: retro
-                                                ? FontWeight.bold
-                                                : FontWeight.w600,
-                                          ),
-                                        ),
-                                        if (selectedVaultModifiedText
-                                            case final modified?)
-                                          TextSpan(text: ', $modified'),
-                                      ],
-                                    ),
-                                    key: const Key('passwordPrompt'),
-                                    maxLines: 1,
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      color: retro
-                                          ? const Color(0xff16212a)
-                                          : t.onSurface,
-                                      fontWeight: FontWeight.normal,
-                                    ),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
                                   ),
-                                ),
-                                const SizedBox(height: 8),
-                                SizedBox(
-                                  height: 48,
                                   child: Row(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.stretch,
                                     children: [
                                       Expanded(
-                                        child: TextSelectionTheme(
-                                          data: TextSelectionThemeData(
-                                            cursorColor: retro
-                                                ? Colors.black
-                                                : t.primary,
-                                            selectionColor: Colors.transparent,
-                                            selectionHandleColor:
-                                                Colors.transparent,
-                                          ),
-                                          child: TextField(
-                                            key: const Key('passwordInput'),
-                                            controller: passwordController,
-                                            focusNode: passwordFocusNode,
-                                            autofocus: true,
-                                            obscureText: !showPassword,
-                                            enableSuggestions: false,
-                                            autocorrect: false,
-                                            keyboardType:
-                                                TextInputType.visiblePassword,
-                                            textInputAction:
-                                                TextInputAction.done,
-                                            onSubmitted: (_) => unlock(),
-                                            decoration: InputDecoration(
-                                              isDense: true,
-                                              filled: true,
-                                              fillColor: retro
-                                                  ? Colors.white
-                                                  : t.surface,
-                                              border: retro
-                                                  ? const OutlineInputBorder(
-                                                      borderRadius:
-                                                          BorderRadius.zero,
-                                                    )
-                                                  : modernFieldBorder(
-                                                      t.outline, 1),
-                                              enabledBorder: retro
-                                                  ? null
-                                                  : modernFieldBorder(
-                                                      t.outline, 1),
-                                              focusedBorder: retro
-                                                  ? null
-                                                  : modernFieldBorder(
-                                                      t.primary, 2),
-                                              suffixIcon: IconButton(
-                                                key: const Key(
-                                                  'loginPasswordVisibility',
+                                        child: Text(
+                                          'Пароль',
+                                          style: retro
+                                              ? const TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 18,
+                                                )
+                                              : TextStyle(
+                                                  color: t.onSurface,
+                                                  fontSize: 18,
+                                                  fontWeight: FontWeight.w600,
                                                 ),
-                                                tooltip: showPassword
-                                                    ? 'Скрыть пароль'
-                                                    : 'Показать пароль',
-                                                icon: Icon(
-                                                  showPassword
-                                                      ? Icons.visibility_off
-                                                      : Icons.visibility,
-                                                ),
-                                                onPressed: () => setState(
-                                                  () => showPassword =
-                                                      !showPassword,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
                                         ),
                                       ),
-                                      const SizedBox(width: 6),
-                                      Listener(
-                                        key: const Key(
-                                          'loginPasswordHintButton',
-                                        ),
-                                        onPointerDown: (_) =>
-                                            showLoginPasswordHint(),
-                                        onPointerUp: (_) =>
-                                            hideLoginPasswordHint(),
-                                        onPointerCancel: (_) =>
-                                            hideLoginPasswordHint(),
-                                        child: SizedBox.square(
-                                          dimension: 48,
-                                          child: passwordKey(
-                                            label: 'Подсказка пароля',
-                                            tooltip: 'Подсказка пароля',
-                                            height: 48,
-                                            top: const Color(0xffffdc58),
-                                            bottom: const Color(0xffc58a00),
-                                            role: SkinKeyRole.hint,
-                                            onPressed:
-                                                passwordFocusNode.requestFocus,
-                                            child: Icon(
-                                              Icons.question_mark,
-                                              color: retro
-                                                  ? Colors.white
-                                                  : t.warning,
-                                              size: retro ? 28 : 26,
-                                            ),
-                                          ),
-                                        ),
+                                      const PasswordVersionLabel(
+                                        key: Key('passwordVersion'),
                                       ),
                                     ],
                                   ),
                                 ),
-                                if (loginHintVisible) ...[
-                                  const SizedBox(height: 8),
-                                  Container(
-                                    key: const Key('loginPasswordHint'),
-                                    padding: const EdgeInsets.all(10),
-                                    decoration: retro
-                                        ? BoxDecoration(
-                                            color: const Color(0xfffff4bc),
-                                            border: Border.all(
-                                              color: const Color(0xffb18b00),
-                                            ),
-                                          )
-                                        : BoxDecoration(
-                                            color: t.warningContainer,
-                                            borderRadius:
-                                                BorderRadius.circular(10),
-                                          ),
-                                    child: Text(
-                                      loginPasswordHint,
-                                      style: retro
-                                          ? null
-                                          : TextStyle(
-                                              color: t.onWarningContainer,
-                                            ),
-                                    ),
-                                  ),
-                                ],
-                                SizedBox(height: retro ? 20 : 12),
-                                if (retro)
-                                  keyboard
-                                else
-                                  Container(
-                                    padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(
-                                      color: t.keyboardBase,
-                                      borderRadius: BorderRadius.circular(16),
-                                    ),
-                                    child: keyboard,
-                                  ),
-                                const SizedBox(height: 6),
-                                keypadRow([
-                                  passwordKey(
-                                    key: const Key('keypadModeUppercase'),
-                                    role: SkinKeyRole.mode,
-                                    label: 'ABC',
-                                    tooltip: 'Заглавные',
-                                    selected: virtualKeyboardMode ==
-                                        VirtualKeyboardMode.uppercase,
-                                    fontSize: 23,
-                                    top: modeTop,
-                                    bottom: modeBottom,
-                                    onPressed: () => selectVirtualKeyboardMode(
-                                      VirtualKeyboardMode.uppercase,
-                                    ),
-                                  ),
-                                  passwordKey(
-                                    key: const Key('keypadModeLowercase'),
-                                    role: SkinKeyRole.mode,
-                                    label: 'abc',
-                                    tooltip: 'Строчные',
-                                    selected: virtualKeyboardMode ==
-                                        VirtualKeyboardMode.lowercase,
-                                    fontSize: 23,
-                                    top: modeTop,
-                                    bottom: modeBottom,
-                                    onPressed: () => selectVirtualKeyboardMode(
-                                      VirtualKeyboardMode.lowercase,
-                                    ),
-                                  ),
-                                  passwordKey(
-                                    key: const Key('keypadModeNumeric'),
-                                    role: SkinKeyRole.mode,
-                                    label: '123',
-                                    tooltip: 'Цифры',
-                                    selected: virtualKeyboardMode ==
-                                        VirtualKeyboardMode.numeric,
-                                    fontSize: 23,
-                                    top: modeTop,
-                                    bottom: modeBottom,
-                                    onPressed: () => selectVirtualKeyboardMode(
-                                      VirtualKeyboardMode.numeric,
-                                    ),
-                                  ),
-                                  passwordKey(
-                                    key: const Key('keypadModeSymbols'),
-                                    role: SkinKeyRole.mode,
-                                    label: '#!?',
-                                    tooltip: 'Символы',
-                                    selected: virtualKeyboardMode ==
-                                        VirtualKeyboardMode.symbols,
-                                    fontSize: 23,
-                                    top: modeTop,
-                                    bottom: modeBottom,
-                                    onPressed: () => selectVirtualKeyboardMode(
-                                      VirtualKeyboardMode.symbols,
-                                    ),
-                                  ),
-                                ]),
-                                Padding(
-                                  padding: EdgeInsets.symmetric(
-                                      vertical: retro ? 18 : 12),
-                                  child: Divider(
-                                    height: 1,
-                                    color: retro ? null : t.outline,
-                                  ),
-                                ),
-                                Row(
+                              ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.fromLTRB(20, 18, 20, 16),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
                                   children: [
-                                    Expanded(
-                                      child: SizedBox(
-                                        width: double.infinity,
-                                        height: 48,
-                                        child: passwordKey(
-                                          key: const Key('fileMenu'),
-                                          label: 'Открыть файл',
-                                          tooltip: 'Открыть другую базу…',
-                                          role: SkinKeyRole.outlined,
-                                          child: Icon(
-                                            Icons.folder_outlined,
-                                            color: retro ? Colors.white : null,
-                                            size: 25,
+                                    FittedBox(
+                                      fit: BoxFit.scaleDown,
+                                      alignment: Alignment.centerLeft,
+                                      child: Text.rich(
+                                        TextSpan(
+                                          children: [
+                                            TextSpan(
+                                              text: selectedVaultTitle,
+                                              style: TextStyle(
+                                                fontWeight: retro
+                                                    ? FontWeight.bold
+                                                    : FontWeight.w600,
+                                              ),
+                                            ),
+                                            if (selectedVaultModifiedText
+                                                case final modified?)
+                                              TextSpan(text: ', $modified'),
+                                          ],
+                                        ),
+                                        key: const Key('passwordPrompt'),
+                                        maxLines: 1,
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          color: retro
+                                              ? const Color(0xff16212a)
+                                              : t.onSurface,
+                                          fontWeight: FontWeight.normal,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    SizedBox(
+                                      height: 48,
+                                      child: Row(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.stretch,
+                                        children: [
+                                          Expanded(
+                                            child: TextSelectionTheme(
+                                              data: TextSelectionThemeData(
+                                                cursorColor: retro
+                                                    ? Colors.black
+                                                    : t.primary,
+                                                selectionColor:
+                                                    Colors.transparent,
+                                                selectionHandleColor:
+                                                    Colors.transparent,
+                                              ),
+                                              child: TextField(
+                                                key: const Key('passwordInput'),
+                                                controller: passwordController,
+                                                focusNode: passwordFocusNode,
+                                                autofocus: true,
+                                                obscureText: !showPassword,
+                                                enableSuggestions: false,
+                                                autocorrect: false,
+                                                keyboardType: TextInputType
+                                                    .visiblePassword,
+                                                textInputAction:
+                                                    TextInputAction.done,
+                                                onSubmitted: (_) => unlock(),
+                                                decoration: InputDecoration(
+                                                  isDense: true,
+                                                  filled: true,
+                                                  fillColor: retro
+                                                      ? Colors.white
+                                                      : t.surface,
+                                                  border: retro
+                                                      ? const OutlineInputBorder(
+                                                          borderRadius:
+                                                              BorderRadius.zero,
+                                                        )
+                                                      : modernFieldBorder(
+                                                          t.outline, 1),
+                                                  enabledBorder: retro
+                                                      ? null
+                                                      : modernFieldBorder(
+                                                          t.outline, 1),
+                                                  focusedBorder: retro
+                                                      ? null
+                                                      : modernFieldBorder(
+                                                          t.primary, 2),
+                                                  suffixIcon: IconButton(
+                                                    key: const Key(
+                                                      'loginPasswordVisibility',
+                                                    ),
+                                                    tooltip: showPassword
+                                                        ? 'Скрыть пароль'
+                                                        : 'Показать пароль',
+                                                    icon: Icon(
+                                                      showPassword
+                                                          ? Icons.visibility_off
+                                                          : Icons.visibility,
+                                                    ),
+                                                    onPressed: () => setState(
+                                                      () => showPassword =
+                                                          !showPassword,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
                                           ),
-                                          height: 48,
-                                          fontSize: 18,
-                                          top: const Color(0xffffdc58),
-                                          bottom: const Color(0xffc58a00),
-                                          onPressed: pickSpbWalletFile,
+                                          const SizedBox(width: 6),
+                                          Listener(
+                                            key: const Key(
+                                              'loginPasswordHintButton',
+                                            ),
+                                            onPointerDown: (_) =>
+                                                showLoginPasswordHint(),
+                                            onPointerUp: (_) =>
+                                                hideLoginPasswordHint(),
+                                            onPointerCancel: (_) =>
+                                                hideLoginPasswordHint(),
+                                            child: SizedBox.square(
+                                              dimension: 48,
+                                              child: passwordKey(
+                                                label: 'Подсказка пароля',
+                                                tooltip: 'Подсказка пароля',
+                                                height: 48,
+                                                top: const Color(0xffffdc58),
+                                                bottom: const Color(0xffc58a00),
+                                                role: SkinKeyRole.hint,
+                                                onPressed: passwordFocusNode
+                                                    .requestFocus,
+                                                child: Icon(
+                                                  Icons.question_mark,
+                                                  color: retro
+                                                      ? Colors.white
+                                                      : t.warning,
+                                                  size: retro ? 28 : 26,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (loginHintVisible) ...[
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        key: const Key('loginPasswordHint'),
+                                        padding: const EdgeInsets.all(10),
+                                        decoration: retro
+                                            ? BoxDecoration(
+                                                color: const Color(0xfffff4bc),
+                                                border: Border.all(
+                                                  color:
+                                                      const Color(0xffb18b00),
+                                                ),
+                                              )
+                                            : BoxDecoration(
+                                                color: t.warningContainer,
+                                                borderRadius:
+                                                    BorderRadius.circular(10),
+                                              ),
+                                        child: Text(
+                                          loginPasswordHint,
+                                          style: retro
+                                              ? null
+                                              : TextStyle(
+                                                  color: t.onWarningContainer,
+                                                ),
                                         ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: passwordKey(
-                                        key: const Key('createVault'),
-                                        role: SkinKeyRole.outlined,
-                                        label: '+',
-                                        tooltip: 'Создать новую базу',
-                                        height: 40,
-                                        fontSize: 24,
-                                        fontWeight: FontWeight.bold,
-                                        top: const Color(0xffffdc58),
-                                        bottom: const Color(0xffc58a00),
-                                        onPressed: createNewVaultFromLogin,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: passwordKey(
-                                        key: const Key('loginOk'),
-                                        role: SkinKeyRole.primary,
-                                        label: 'OK',
-                                        height: 40,
-                                        fontSize: 18,
-                                        top: greenTop,
-                                        bottom: greenBottom,
-                                        onPressed: unlock,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Expanded(
-                                      child: passwordKey(
-                                        key: const Key('loginCancel'),
-                                        label: '',
-                                        role: SkinKeyRole.danger,
-                                        child: Icon(
-                                          Icons.power_settings_new,
-                                          color: retro ? Colors.white : null,
-                                          size: 25,
+                                    ],
+                                    SizedBox(height: retro ? 20 : 12),
+                                    if (retro)
+                                      keyboard
+                                    else
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: t.keyboardBase,
+                                          borderRadius:
+                                              BorderRadius.circular(16),
                                         ),
-                                        height: 40,
-                                        fontSize: 18,
-                                        top: redTop,
-                                        bottom: redBottom,
-                                        onPressed: () {
-                                          exitApplication();
-                                        },
+                                        child: keyboard,
+                                      ),
+                                    const SizedBox(height: 6),
+                                    keypadRow([
+                                      passwordKey(
+                                        key: const Key('keypadModeUppercase'),
+                                        role: SkinKeyRole.mode,
+                                        label: 'ABC',
+                                        tooltip: 'Заглавные',
+                                        selected: virtualKeyboardMode ==
+                                            VirtualKeyboardMode.uppercase,
+                                        fontSize: 23,
+                                        top: modeTop,
+                                        bottom: modeBottom,
+                                        onPressed: () =>
+                                            selectVirtualKeyboardMode(
+                                          VirtualKeyboardMode.uppercase,
+                                        ),
+                                      ),
+                                      passwordKey(
+                                        key: const Key('keypadModeLowercase'),
+                                        role: SkinKeyRole.mode,
+                                        label: 'abc',
+                                        tooltip: 'Строчные',
+                                        selected: virtualKeyboardMode ==
+                                            VirtualKeyboardMode.lowercase,
+                                        fontSize: 23,
+                                        top: modeTop,
+                                        bottom: modeBottom,
+                                        onPressed: () =>
+                                            selectVirtualKeyboardMode(
+                                          VirtualKeyboardMode.lowercase,
+                                        ),
+                                      ),
+                                      passwordKey(
+                                        key: const Key('keypadModeNumeric'),
+                                        role: SkinKeyRole.mode,
+                                        label: '123',
+                                        tooltip: 'Цифры',
+                                        selected: virtualKeyboardMode ==
+                                            VirtualKeyboardMode.numeric,
+                                        fontSize: 23,
+                                        top: modeTop,
+                                        bottom: modeBottom,
+                                        onPressed: () =>
+                                            selectVirtualKeyboardMode(
+                                          VirtualKeyboardMode.numeric,
+                                        ),
+                                      ),
+                                      passwordKey(
+                                        key: const Key('keypadModeSymbols'),
+                                        role: SkinKeyRole.mode,
+                                        label: '#!?',
+                                        tooltip: 'Символы',
+                                        selected: virtualKeyboardMode ==
+                                            VirtualKeyboardMode.symbols,
+                                        fontSize: 23,
+                                        top: modeTop,
+                                        bottom: modeBottom,
+                                        onPressed: () =>
+                                            selectVirtualKeyboardMode(
+                                          VirtualKeyboardMode.symbols,
+                                        ),
+                                      ),
+                                    ]),
+                                    Padding(
+                                      padding: EdgeInsets.symmetric(
+                                          vertical: retro ? 18 : 12),
+                                      child: Divider(
+                                        height: 1,
+                                        color: retro ? null : t.outline,
                                       ),
                                     ),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: SizedBox(
+                                            width: double.infinity,
+                                            height: 48,
+                                            child: passwordKey(
+                                              key: const Key('fileMenu'),
+                                              label: 'Открыть файл',
+                                              tooltip: 'Открыть другую базу…',
+                                              role: SkinKeyRole.outlined,
+                                              child: Icon(
+                                                Icons.folder_outlined,
+                                                color:
+                                                    retro ? Colors.white : null,
+                                                size: 25,
+                                              ),
+                                              height: 48,
+                                              fontSize: 18,
+                                              top: const Color(0xffffdc58),
+                                              bottom: const Color(0xffc58a00),
+                                              onPressed: pickSpbWalletFile,
+                                            ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: passwordKey(
+                                            key: const Key('createVault'),
+                                            role: SkinKeyRole.outlined,
+                                            label: '+',
+                                            tooltip: 'Создать новую базу',
+                                            height: 40,
+                                            fontSize: 24,
+                                            fontWeight: FontWeight.bold,
+                                            top: const Color(0xffffdc58),
+                                            bottom: const Color(0xffc58a00),
+                                            onPressed: createNewVaultFromLogin,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: passwordKey(
+                                            key: const Key('loginOk'),
+                                            role: SkinKeyRole.primary,
+                                            label: 'OK',
+                                            height: 40,
+                                            fontSize: 18,
+                                            top: greenTop,
+                                            bottom: greenBottom,
+                                            onPressed: unlock,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: passwordKey(
+                                            key: const Key('loginCancel'),
+                                            label: '',
+                                            role: SkinKeyRole.danger,
+                                            child: Icon(
+                                              Icons.power_settings_new,
+                                              color:
+                                                  retro ? Colors.white : null,
+                                              size: 25,
+                                            ),
+                                            height: 40,
+                                            fontSize: 18,
+                                            top: redTop,
+                                            bottom: redBottom,
+                                            onPressed: () {
+                                              exitApplication();
+                                            },
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    if (message != null) ...[
+                                      const SizedBox(height: 12),
+                                      Text(
+                                        message!,
+                                        key: const Key('loginMessage'),
+                                        style: TextStyle(
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.error,
+                                        ),
+                                      ),
+                                    ],
+                                    buildSkinSelector(),
                                   ],
                                 ),
-                                if (message != null) ...[
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    message!,
-                                    key: const Key('loginMessage'),
-                                    style: TextStyle(
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.error,
-                                    ),
-                                  ),
-                                ],
-                                buildSkinSelector(),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
@@ -16048,6 +16590,23 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
+  /// "Папки шаблонов для новых баз": new bases put their templates into the
+  /// folders of the open base.
+  Future<void> saveTemplateLayoutForNewVaults() async {
+    final wallet = spbWallet;
+    if (wallet == null) return;
+    try {
+      final layout = wallet.captureTemplateLayout();
+      await saveTemplateLayoutForNewVaultsFile(layout);
+      showTemplateActionMessage(
+        'Новые базы получат эти папки шаблонов: шаблонов — '
+        '${layout.templates.length}, папок — ${layout.folderCount}.',
+      );
+    } catch (error) {
+      showTemplateActionMessage('Не удалось сохранить папки шаблонов: $error');
+    }
+  }
+
   void showTemplateActionMessage(String text) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -16118,30 +16677,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               : 'Изменение шаблона: ${saved.name}',
           saved.iconId,
         );
-        spbWallet!.saveTemplate(
-          SpbWalletTemplateDraft(
-            id: prepared.id,
-            name: prepared.name,
-            iconId: spbIconIdForUi(prepared.iconId, prepared.iconId),
-            cardColor: prepared.spbColor ?? paletteColorToSpb(prepared.colorId),
-            categoryPath: prepared.categoryPath,
-            iconBytes: prepared.embeddedIconBase64 == null
-                ? null
-                : base64Decode(prepared.embeddedIconBase64!),
-            iconFileName: prepared.iconFileName,
-            fields: prepared.fields
-                .where((field) => field.id != spbDescriptionFieldId)
-                .map(
-                  (field) => SpbWalletTemplateFieldRecord(
-                    id: field.id,
-                    name: field.label,
-                    templateId: prepared.id,
-                    fieldTypeId: spbFieldTypeId(field),
-                  ),
-                )
-                .toList(),
-          ),
-        );
+        spbWallet!.saveTemplate(spbTemplateDraftFor(prepared));
         markVaultDirty();
         final written = await writeBackSpbWallet();
         final updated = spbWallet!.loadSnapshot();
@@ -16167,6 +16703,30 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
     return false;
   }
+
+  SpbWalletTemplateDraft spbTemplateDraftFor(CardTemplate prepared) =>
+      SpbWalletTemplateDraft(
+        id: prepared.id,
+        name: prepared.name,
+        iconId: spbIconIdForUi(prepared.iconId, prepared.iconId),
+        cardColor: prepared.spbColor ?? paletteColorToSpb(prepared.colorId),
+        categoryPath: prepared.categoryPath,
+        iconBytes: prepared.embeddedIconBase64 == null
+            ? null
+            : base64Decode(prepared.embeddedIconBase64!),
+        iconFileName: prepared.iconFileName,
+        fields: prepared.fields
+            .where((field) => field.id != spbDescriptionFieldId)
+            .map(
+              (field) => SpbWalletTemplateFieldRecord(
+                id: field.id,
+                name: field.label,
+                templateId: prepared.id,
+                fieldTypeId: spbFieldTypeId(field),
+              ),
+            )
+            .toList(),
+      );
 
   CardTemplate prepareSpbTemplate(CardTemplate template, bool isNew) {
     final id = isNew ? SpbWalletDatabase.makeId() : template.id;
@@ -16979,7 +17539,7 @@ Future<String?> showIconPickerDialog(
             controller: controller,
             padding: const EdgeInsets.only(right: 12),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 52,
+              maxCrossAxisExtent: 39,
               mainAxisSpacing: 6,
               crossAxisSpacing: 6,
             ),
@@ -17005,7 +17565,7 @@ Future<String?> showIconPickerDialog(
                       ),
                     ),
                     child: Center(
-                      child: Icon(templateIconGlyph(icon.id), size: 24),
+                      child: Icon(templateIconGlyph(icon.id), size: 18),
                     ),
                   ),
                 ),
@@ -17046,7 +17606,7 @@ Future<String?> showSpbOriginalIconPickerDialog(
             controller: controller,
             padding: const EdgeInsets.only(right: 12),
             gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-              maxCrossAxisExtent: 82,
+              maxCrossAxisExtent: 61.5,
               childAspectRatio: 1,
               mainAxisSpacing: 7,
               crossAxisSpacing: 7,
@@ -17075,13 +17635,13 @@ Future<String?> showSpbOriginalIconPickerDialog(
                       borderRadius: BorderRadius.circular(7),
                     ),
                     child: Padding(
-                      padding: const EdgeInsets.all(8),
+                      padding: const EdgeInsets.all(6),
                       child: spbPackedImage(
                         asset,
-                        width: 56,
-                        height: 56,
+                        width: 42,
+                        height: 42,
                         fit: BoxFit.contain,
-                        fallback: const Icon(Icons.image_outlined, size: 40),
+                        fallback: const Icon(Icons.image_outlined, size: 30),
                       ),
                     ),
                   ),
@@ -17154,7 +17714,7 @@ Future<String?> showThirdPartyIconPickerDialog(
                     padding: const EdgeInsets.only(right: 12),
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 82,
+                      maxCrossAxisExtent: 61.5,
                       childAspectRatio: 1,
                       mainAxisSpacing: 7,
                       crossAxisSpacing: 7,
@@ -17178,13 +17738,13 @@ Future<String?> showThirdPartyIconPickerDialog(
                               borderRadius: BorderRadius.circular(7),
                             ),
                             child: Padding(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               child: bytes == null
                                   ? const Icon(Icons.broken_image_outlined)
                                   : Image.memory(
                                       bytes,
-                                      width: 56,
-                                      height: 56,
+                                      width: 42,
+                                      height: 42,
                                       fit: BoxFit.contain,
                                       filterQuality: FilterQuality.medium,
                                     ),
@@ -17260,7 +17820,7 @@ Future<String?> showBrandIconPickerDialog(
                     padding: const EdgeInsets.only(right: 12),
                     gridDelegate:
                         const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 82,
+                      maxCrossAxisExtent: 61.5,
                       childAspectRatio: 1,
                       mainAxisSpacing: 7,
                       crossAxisSpacing: 7,
@@ -17284,13 +17844,13 @@ Future<String?> showBrandIconPickerDialog(
                               borderRadius: BorderRadius.circular(7),
                             ),
                             child: Padding(
-                              padding: const EdgeInsets.all(8),
+                              padding: const EdgeInsets.all(6),
                               child: bytes == null
                                   ? const Icon(Icons.broken_image_outlined)
                                   : Image.memory(
                                       bytes,
-                                      width: 56,
-                                      height: 56,
+                                      width: 42,
+                                      height: 42,
                                       fit: BoxFit.contain,
                                       filterQuality: FilterQuality.medium,
                                     ),
@@ -18373,9 +18933,19 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                     ),
                                     suffixIconConstraints:
                                         BoxConstraints.tightFor(
-                                      width: fieldDefinitionIsSecret(field)
-                                          ? 72
-                                          : 36,
+                                      width: 36.0 *
+                                          (1 +
+                                              (fieldDefinitionIsSecret(field)
+                                                  ? 1
+                                                  : 0) +
+                                              (cardFieldLinkFor(
+                                                        field,
+                                                        currentItem
+                                                            .values[field.id],
+                                                      ) !=
+                                                      null
+                                                  ? 1
+                                                  : 0)),
                                       height: 40,
                                     ),
                                     suffixIcon: Row(
@@ -18406,6 +18976,16 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                                                         .add(field.id);
                                               }),
                                             ),
+                                          ),
+                                        if (cardFieldLinkFor(
+                                          field,
+                                          currentItem.values[field.id],
+                                        )
+                                            case final link?)
+                                          cardFieldLinkButton(
+                                            context,
+                                            field,
+                                            link,
                                           ),
                                         SizedBox(
                                           width: 36,
@@ -21836,22 +22416,34 @@ Widget managedCatalogIconFrame(
   final preferred =
       spbIconIdForDrawableDirectory(id, managedSpbPreviewDrawableDirectory);
   final preview = spbPackedIconBytes(preferred) != null ? preferred : id;
+  // Light and Dark show the icon on the window background; only the
+  // selected icon gets a frame.
+  final modern = !WalletSkinTokens.of(context).isRetro;
   return DecoratedBox(
       key: key,
-      decoration: BoxDecoration(
-          color: selected ? theme.colorScheme.primaryContainer : baseColor,
-          border: Border.all(
-              color: selected ? theme.colorScheme.primary : theme.dividerColor),
-          borderRadius: BorderRadius.circular(8)),
+      decoration: modern
+          ? BoxDecoration(
+              border: Border.all(
+                  color:
+                      selected ? theme.colorScheme.primary : Colors.transparent,
+                  width: 2),
+              borderRadius: BorderRadius.circular(8))
+          : BoxDecoration(
+              color: selected ? theme.colorScheme.primaryContainer : baseColor,
+              border: Border.all(
+                  color: selected
+                      ? theme.colorScheme.primary
+                      : theme.dividerColor),
+              borderRadius: BorderRadius.circular(8)),
       child: Center(
           child: SizedBox.square(
               key: contentKey,
-              dimension: WorkspaceGeometry.iconFrameContent,
+              dimension: WorkspaceGeometry.iconBrowserContent,
               child: bytes != null
                   ? Image.memory(bytes,
                       fit: BoxFit.contain, filterQuality: FilterQuality.medium)
                   : templateIconWidget(preview,
-                      size: WorkspaceGeometry.iconFrameContent,
+                      size: WorkspaceGeometry.iconBrowserContent,
                       color: const Color(0xff6f7f89),
                       scaleOriginalToFit: true))));
 }
@@ -22020,7 +22612,8 @@ class _ManagedIconSelectionDialogState
                                     controller: controller,
                                     padding: const EdgeInsets.only(
                                         right: WorkspaceGeometry.treeScrollbar),
-                                    gridDelegate: const WorkspaceGridDelegate(),
+                                    gridDelegate: const WorkspaceGridDelegate
+                                        .iconBrowser(),
                                     itemCount: icons.length,
                                     itemBuilder: (context, index) {
                                       final id = icons[index];

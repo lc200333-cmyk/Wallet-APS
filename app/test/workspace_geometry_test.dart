@@ -319,7 +319,9 @@ void main() {
         );
         final taskLabel = state.spbTasksForCurrentMode().first.$2 as String;
         final taskIcon = find.byKey(ValueKey('spbActionIcon-$taskLabel'));
-        expect(tester.getSize(taskIcon), Size.square(actionIconSize));
+        // Task icons of "Действие" are 20 % larger than other panel icons.
+        expect(tester.getSize(taskIcon).width,
+            closeTo(actionIconSize * 1.2, 0.01));
         expect(
           tester.widget<Text>(find.text(taskLabel)).style?.fontSize,
           wideAndroid ? 16 : (windows ? 15 : 14),
@@ -543,7 +545,7 @@ void main() {
     final taskLabel = state.spbTasksForCurrentMode().first.$2 as String;
     final taskIcon = find.byKey(ValueKey('spbActionIcon-$taskLabel'));
     expect(tester.getSize(taskIcon).width,
-        closeTo(WorkspaceGeometry.narrowActionIcon, 0.01));
+        closeTo(WorkspaceGeometry.narrowActionIcon * 1.2, 0.01));
     final taskText = tester.widget<Text>(find.text(taskLabel));
     expect(taskText.style?.fontSize, 16);
     final frequentTitle = state.frequentItems().first.title as String;

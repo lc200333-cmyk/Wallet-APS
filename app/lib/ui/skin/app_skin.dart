@@ -4,13 +4,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
-/// Interface skins. Retro is the original look and stays the default.
+/// Interface skins. Retro is the original look; Dark is the default for a
+/// profile that has never chosen a skin.
 enum AppSkin { retro, light, dark }
 
 AppSkin appSkinFromName(Object? name) => switch (name) {
+      'retro' => AppSkin.retro,
       'light' => AppSkin.light,
-      'dark' => AppSkin.dark,
-      _ => AppSkin.retro,
+      _ => AppSkin.dark,
     };
 
 /// Meaning of a password-window button in the Light and Dark skins. Retro
@@ -21,11 +22,16 @@ enum SkinKeyRole { character, service, mode, hint, outlined, primary, danger }
 final appSkin = ValueNotifier<AppSkin>(AppSkin.retro);
 
 /// Stores the selected skin in the program settings directory, never in a
-/// vault. The file is `wallet_aps_ui_settings.json` with `{"skin":"retro"}`.
+/// vault. The file is `wallet_aps_ui_settings.json` with
+/// `{"skin":"retro","version":2}`.
 class AppSkinStore {
   AppSkinStore._();
 
   static const fileName = 'wallet_aps_ui_settings.json';
+
+  /// Choices stored before the Dark default (no version) are ignored once,
+  /// so the first start of this version opens in Dark (owner decision).
+  static const settingsVersion = 2;
 
   /// Supplies the existing application state directory.
   static Future<Directory> Function()? directoryProvider;
@@ -37,17 +43,20 @@ class AppSkinStore {
     return File('${directory.path}${Platform.pathSeparator}$fileName');
   }
 
-  /// A missing, unreadable or unknown value always yields Retro.
+  /// A missing, unreadable, unknown or older value yields the default Dark
+  /// skin.
   static Future<AppSkin> load() async {
     try {
       final file = await _file();
-      if (file == null || !file.existsSync()) return AppSkin.retro;
+      if (file == null || !file.existsSync()) return AppSkin.dark;
       final decoded = jsonDecode(await file.readAsString());
-      if (decoded is! Map) return AppSkin.retro;
+      if (decoded is! Map || decoded['version'] != settingsVersion) {
+        return AppSkin.dark;
+      }
       return appSkinFromName(decoded['skin']);
     } catch (error) {
       debugPrint('Wallet APS: skin settings could not be read: $error');
-      return AppSkin.retro;
+      return AppSkin.dark;
     }
   }
 
@@ -64,7 +73,7 @@ class AppSkinStore {
   static Future<void> _write(AppSkin skin) async {
     final file = await _file();
     if (file == null) return;
-    final content = jsonEncode({'skin': skin.name});
+    final content = jsonEncode({'skin': skin.name, 'version': settingsVersion});
     final temporary = File('${file.path}.tmp');
     await temporary.writeAsString(content, flush: true);
     // Windows refuses to replace a file that another process (antivirus,

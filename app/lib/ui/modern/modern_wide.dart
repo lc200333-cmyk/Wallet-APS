@@ -6,13 +6,12 @@ SkinTilePair skinTileForPalette(WalletSkinTokens t, PaletteColor color) =>
         ? t.customTile(color.bg)
         : t.tileFor(color.id, custom: color.bg);
 
-/// A rounded tile holding an icon of any kind (section 6.4). Raster icons
-/// are drawn unchanged at 75 % of the tile.
+/// A square slot holding an icon of any kind. The icon stands directly on
+/// the window background, so a transparent icon shows the light or dark
+/// surface behind it rather than a coloured tile.
 Widget skinIconTile({
   required Widget icon,
-  required SkinTilePair pair,
   required double size,
-  double radius = 12,
   Key? key,
 }) =>
     Container(
@@ -20,12 +19,8 @@ Widget skinIconTile({
       width: size,
       height: size,
       alignment: Alignment.center,
-      decoration: BoxDecoration(
-        color: pair.tile,
-        borderRadius: BorderRadius.circular(radius),
-      ),
       child: SizedBox.square(
-        dimension: size * 0.75,
+        dimension: size * 0.9,
         child: FittedBox(fit: BoxFit.contain, child: icon),
       ),
     );
@@ -493,6 +488,8 @@ extension _ModernWideShell on _VaultShellState {
     final t = skinTokens;
     final danger = label == 'Удалить';
     final tileSize = frequentRow ? 30.0 : 24.0;
+    // Icons stand on the panel without a tile; task icons are 20 % larger.
+    final iconSize = tileSize * 0.8 * (frequentRow ? 1.0 : 1.2);
     final rowHeight = modernTouch
         ? 44.0
         : subtitle == null
@@ -512,12 +509,8 @@ extension _ModernWideShell on _VaultShellState {
                 width: tileSize,
                 height: tileSize,
                 alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: t.s2,
-                  borderRadius: BorderRadius.circular(frequentRow ? 8 : 6),
-                ),
                 child: SizedBox.square(
-                  dimension: tileSize * 0.8,
+                  dimension: iconSize,
                   child: FittedBox(fit: BoxFit.contain, child: icon),
                 ),
               ),
@@ -554,6 +547,91 @@ extension _ModernWideShell on _VaultShellState {
           ),
         ),
       ),
+    );
+  }
+
+  /// Central window with a create button in the bottom right corner: the
+  /// narrow Light/Dark button in the modern skins, a blue Retro button that
+  /// opens the creation menu in Retro.
+  Widget withCreateButton(Widget workspace) {
+    final fab = skinTokens.isRetro
+        ? buildRetroCreateButton()
+        : buildModernCreateFab(
+            iconLibraryOpen
+                ? 2
+                : mobileTemplatesOpen
+                    ? 1
+                    : 0,
+          );
+    if (fab == null) return workspace;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        workspace,
+        // The icons workspace keeps its own button row at the bottom.
+        Positioned(right: 28, bottom: iconLibraryOpen ? 64 : 20, child: fab),
+      ],
+    );
+  }
+
+  /// Retro "+" button of the central window. Cards and templates open their
+  /// existing creation menus at the button; icons open the upload directly,
+  /// as the modern button does.
+  Widget buildRetroCreateButton() {
+    const size = 56.0;
+    final radius = BorderRadius.circular(8);
+    return Builder(
+      builder: (context) {
+        Offset anchor() {
+          final box = context.findRenderObject() as RenderBox?;
+          return box == null || !box.hasSize
+              ? MediaQuery.sizeOf(context).bottomRight(Offset.zero)
+              : box.localToGlobal(Offset.zero);
+        }
+
+        void open() {
+          if (iconLibraryOpen) {
+            unawaited(uploadManagedIcon());
+          } else if (mobileTemplatesOpen) {
+            unawaited(showSpbTemplateImportMenu(anchor()));
+          } else {
+            unawaited(showSpbCreationMenu(
+              anchor(),
+              destinationCategoryPath: selectedCategoryPath,
+            ));
+          }
+        }
+
+        return Tooltip(
+          message: iconLibraryOpen ? 'Загрузить иконку' : 'Создать',
+          child: SizedBox.square(
+            key: const Key('retroCreateButton'),
+            dimension: size,
+            child: Material(
+              color: Colors.transparent,
+              elevation: 4,
+              shadowColor: Colors.black54,
+              borderRadius: radius,
+              child: Ink(
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [Color(0xff42bff5), Color(0xff006fc4)],
+                  ),
+                  borderRadius: radius,
+                  border: Border.all(color: const Color(0x99000000)),
+                ),
+                child: InkWell(
+                  borderRadius: radius,
+                  onTap: open,
+                  child: const Icon(Icons.add, color: Colors.white, size: 36),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -719,7 +797,7 @@ extension _ModernWideShell on _VaultShellState {
     }) =>
         narrow
             ? buildModernListRow(
-                leading: skinIconTile(icon: icon, pair: pair, size: 40),
+                leading: skinIconTile(icon: icon, size: 40),
                 title: title,
                 subtitle: subtitle,
                 onTap: onTap,
@@ -737,9 +815,7 @@ extension _ModernWideShell on _VaultShellState {
                         skinIconTile(
                           key: ValueKey('spbFoundIcon-$title'),
                           icon: icon,
-                          pair: pair,
                           size: 30,
-                          radius: 8,
                         ),
                         const SizedBox(width: 10),
                         Expanded(

@@ -51,3 +51,13 @@ String templateLabelInFolder(String name, String folder) {
   }
   return name;
 }
+
+/// Stored name of a template moved to [folder]. A "Папка: название" prefix
+/// follows the new folder; a name without a prefix is unchanged, because the
+/// folder is then kept in the template's category path.
+String templateNameInFolder(String name, String folder) {
+  final colon = name.indexOf(':');
+  if (colon <= 0 || name.substring(0, colon).trim().isEmpty) return name;
+  final label = name.substring(colon + 1).trim();
+  return label.isEmpty ? '$folder:' : '$folder: $label';
+}

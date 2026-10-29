@@ -73,6 +73,32 @@ class MainActivity : FlutterActivity() {
                         result.error("browser_unavailable", "Open Design Releases in a browser", null)
                     }
                 }
+                "openExternalUri" -> {
+                    // Card fields open web sites (also WhatsApp and Telegram
+                    // links), e-mail and phone addresses; nothing else is
+                    // started. "chooser" lists every program for the address.
+                    val uri = Uri.parse(call.argument<String>("uri") ?: "")
+                    val intent = when (uri.scheme?.lowercase()) {
+                        "http", "https" -> Intent(Intent.ACTION_VIEW, uri)
+                        "mailto", "sms" -> Intent(Intent.ACTION_SENDTO, uri)
+                        "tel" -> Intent(Intent.ACTION_DIAL, uri)
+                        else -> null
+                    }
+                    if (intent == null) {
+                        result.error("unsupported_uri", "Only web, mail and phone addresses open", null)
+                    } else {
+                        try {
+                            if (call.argument<Boolean>("chooser") == true) {
+                                startActivity(Intent.createChooser(intent, null))
+                            } else {
+                                startActivity(intent)
+                            }
+                            result.success(null)
+                        } catch (error: ActivityNotFoundException) {
+                            result.error("no_handler", "No browser or mail client", null)
+                        }
+                    }
+                }
                 "pickSpbWallet" -> pickSpbWallet(result)
                 "getLaunchWallet" -> {
                     if (launchWalletConsumed) {
