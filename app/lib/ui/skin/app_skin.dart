@@ -515,6 +515,11 @@ double contrastRatio(Color a, Color b) {
   return (lighter + 0.05) / (darker + 0.05);
 }
 
+/// Linux draws text in Wallet Sans (`assets/fonts`): Roboto with the line
+/// metrics of Segoe UI, so text sizes match the Windows version.
+String? get platformFontFamily =>
+    defaultTargetPlatform == TargetPlatform.linux ? 'WalletSans' : null;
+
 /// Material 3 theme of the Light and Dark skins (sections 6–8).
 ThemeData buildModernTheme(Brightness brightness) {
   final t = brightness == Brightness.dark
@@ -597,7 +602,8 @@ ThemeData buildModernTheme(Brightness brightness) {
   );
   final textTheme =
       (brightness == Brightness.dark ? typography.white : typography.black)
-          .merge(ownText);
+          .merge(ownText)
+          .apply(fontFamily: platformFontFamily);
   final buttonHeight = narrowText ? 48.0 : 34.0;
   const fullRadius = StadiumBorder();
   final fieldRadius = BorderRadius.circular(narrowText ? 12 : 8);
@@ -608,6 +614,7 @@ ThemeData buildModernTheme(Brightness brightness) {
       );
   return ThemeData(
     useMaterial3: true,
+    fontFamily: platformFontFamily,
     brightness: brightness,
     colorScheme: scheme,
     scaffoldBackgroundColor: t.bg,

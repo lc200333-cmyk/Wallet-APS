@@ -134,21 +134,24 @@ void main() {
           scale: scale,
         );
         final wideAndroid = platform == TargetPlatform.android;
-        final windows = platform == TargetPlatform.windows;
-        final enlargedControls = wideAndroid || windows;
+        // Linux has the sizes of the Windows version.
+        final windowsSizes = platform == TargetPlatform.windows ||
+            platform == TargetPlatform.linux;
+        final enlargedControls = wideAndroid || windowsSizes;
         final desktopFolderLayout = platform == TargetPlatform.windows ||
             platform == TargetPlatform.linux;
-        final sideRowHeight = wideAndroid
-            ? WorkspaceGeometry.androidListRowHeight
-            : desktopFolderLayout
-                ? (windows
-                    ? WorkspaceGeometry.desktopTreeIcon * 1.15
-                    : WorkspaceGeometry.desktopFolderRowHeight)
-                : WorkspaceGeometry.rowHeight;
+        final sideRowHeight = (wideAndroid
+                ? WorkspaceGeometry.androidListRowHeight
+                : desktopFolderLayout
+                    ? (windowsSizes
+                        ? WorkspaceGeometry.desktopTreeIcon * 1.15
+                        : WorkspaceGeometry.desktopFolderRowHeight)
+                    : WorkspaceGeometry.rowHeight) +
+            WorkspaceGeometry.treeRowExtraSpacing;
         final sideIconSize = wideAndroid
             ? WorkspaceGeometry.androidListSmallIcon * 1.15
             : desktopFolderLayout
-                ? WorkspaceGeometry.desktopTreeIcon * (windows ? 1.15 : 1)
+                ? WorkspaceGeometry.desktopTreeIcon * (windowsSizes ? 1.15 : 1)
                 : WorkspaceGeometry.smallIcon;
         final centerCellWidth = wideAndroid
             ? WorkspaceGeometry.wideAndroidGridCell
@@ -210,7 +213,7 @@ void main() {
           wideAndroid
               ? 17 * 1.15
               : desktopFolderLayout
-                  ? 16 * (windows ? 1.15 : 1)
+                  ? 16 * (windowsSizes ? 1.15 : 1)
                   : 14,
         );
         expect(treeFolderLabel.style?.fontWeight, FontWeight.normal);
@@ -226,8 +229,10 @@ void main() {
             matching: find.byWidgetPredicate(
               (widget) =>
                   widget is SizedBox &&
-                  widget.width == sideIconSize &&
-                  widget.height == sideIconSize,
+                  widget.width ==
+                      sideIconSize * WorkspaceGeometry.treeCardIconScale &&
+                  widget.height ==
+                      sideIconSize * WorkspaceGeometry.treeCardIconScale,
             ),
           ),
           findsWidgets,
@@ -324,12 +329,26 @@ void main() {
             closeTo(actionIconSize * 1.2, 0.01));
         expect(
           tester.widget<Text>(find.text(taskLabel)).style?.fontSize,
-          wideAndroid ? 16 : (windows ? 15 : 14),
+          wideAndroid ? 16 : (windowsSizes ? 15 : 14),
         );
         final frequentIcon = find.byKey(
           ValueKey('spbActionIcon-${state.frequentItems().first.title}'),
         );
-        expect(tester.getSize(frequentIcon), Size.square(actionIconSize));
+        // Retro "Последние" rows repeat the "Действие" rows.
+        expect(tester.getSize(frequentIcon), tester.getSize(taskIcon));
+        final frequentLabel = tester.widget<Text>(find
+            .descendant(
+              of: find
+                  .ancestor(of: frequentIcon, matching: find.byType(Row))
+                  .first,
+              matching: find.byType(Text),
+            )
+            .first);
+        final taskText = tester.widget<Text>(find.text(taskLabel));
+        expect(frequentLabel.style?.fontSize, taskText.style?.fontSize);
+        expect(
+            frequentLabel.strutStyle?.fontSize, taskText.strutStyle?.fontSize);
+        expect(frequentLabel.strutStyle?.height, taskText.strutStyle?.height);
         state.searchController.text = 'Card 01';
         state.setState(() => state.spbSubmittedSearchQuery = 'Card 01');
         await tester.pumpAndSettle();
@@ -397,7 +416,7 @@ void main() {
             treeTemplateTile.minTileHeight,
             (desktopFolderLayout
                     ? WorkspaceGeometry.desktopFolderRowHeight
-                    : sideRowHeight) *
+                    : sideRowHeight - WorkspaceGeometry.treeRowExtraSpacing) *
                 1.2);
         final treeTemplateIcon = find.descendant(
           of: find.byKey(
@@ -450,7 +469,8 @@ void main() {
     final card = find.byKey(const ValueKey('spbTreeCard-nested-geometry'));
     expect(
       tester.getSize(card).height,
-      WorkspaceGeometry.desktopTreeIcon * 1.15,
+      WorkspaceGeometry.desktopTreeIcon * 1.15 +
+          WorkspaceGeometry.treeRowExtraSpacing,
     );
     final ScrollController horizontal = state.spbTreeHorizontalScrollController;
     expect(horizontal.position.maxScrollExtent, greaterThan(0));
@@ -471,11 +491,12 @@ void main() {
     expect(find.byKey(const Key('spbNavigatorSplitter')), findsNothing);
     final firstTreeRow = find.byKey(const ValueKey('spbTreeFolderIconRow-A'));
     final secondTreeRow = find.byKey(const ValueKey('spbTreeFolderIconRow-B'));
-    expect(tester.getSize(firstTreeRow).height,
-        closeTo(WorkspaceGeometry.androidListRowHeight, 0.01));
+    const treeRowHeight = WorkspaceGeometry.androidListRowHeight +
+        WorkspaceGeometry.treeRowExtraSpacing;
+    expect(tester.getSize(firstTreeRow).height, closeTo(treeRowHeight, 0.01));
     expect(
       tester.getCenter(secondTreeRow).dy - tester.getCenter(firstTreeRow).dy,
-      closeTo(WorkspaceGeometry.androidListRowHeight, 0.01),
+      closeTo(treeRowHeight, 0.01),
     );
     final treeIcon =
         find.descendant(of: firstTreeRow, matching: find.byType(Icon));

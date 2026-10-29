@@ -42,3 +42,12 @@ flutter:
     # Base wallet used when the user creates a new encrypted .swl database.
     - assets/base_wallet/MyWallet.swl
     - assets/base_wallet/template_layout.json
+  # Linux font: Roboto sized like Segoe UI (assets/fonts/README.md).
+  fonts:
+    - family: WalletSans
+      fonts:
+        - asset: assets/fonts/WalletSans-regular.ttf
+        - asset: assets/fonts/WalletSans-semibold.ttf
+          weight: 600
+        - asset: assets/fonts/WalletSans-bold.ttf
+          weight: 700

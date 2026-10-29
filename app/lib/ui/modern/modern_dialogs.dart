@@ -126,18 +126,59 @@ List<BoxShadow> skinFrameShadow(BuildContext context) {
   ];
 }
 
-/// Colour of a card's own surface in the preview and the editor.
+/// Colour of a card's own surface in the preview and the editor; Dark
+/// uses the main theme colour for every card (owner decision, 29.10.2026).
 Color skinCardSurface(BuildContext context, PaletteColor color) {
   final t = WalletSkinTokens.of(context);
   if (t.isRetro) return color.bg;
+  if (skinIsDark(context)) return t.bg;
   return skinTileForPalette(t, color).tile;
 }
 
-/// Field background placed on a card surface.
+/// Field background placed on a card surface; in Dark the surface itself
+/// (see [skinCardFieldsTheme]).
 Color skinCardFieldFill(BuildContext context, PaletteColor color) {
   final t = WalletSkinTokens.of(context);
   if (t.isRetro) return color.bg;
+  if (skinIsDark(context)) return skinCardSurface(context, color);
   return t.surface.withValues(alpha: 0.92);
+}
+
+bool skinIsDark(BuildContext context) =>
+    !WalletSkinTokens.of(context).isRetro &&
+    Theme.of(context).brightness == Brightness.dark;
+
+/// Dark card and template dialogs (preview and editor): fields have the
+/// dialog's colour, and their outline and label are the grey of the Light
+/// outline (owner decision). Focus and errors keep their colours.
+Widget skinCardFieldsTheme(BuildContext context, Widget child) {
+  if (!skinIsDark(context)) return child;
+  final theme = Theme.of(context);
+  final fields = theme.inputDecorationTheme;
+  final grey = WalletSkinTokens.light.outline;
+  final enabled = fields.enabledBorder;
+  final border = enabled is OutlineInputBorder
+      ? enabled.copyWith(borderSide: BorderSide(color: grey))
+      : OutlineInputBorder(borderSide: BorderSide(color: grey));
+  return Theme(
+    data: theme.copyWith(
+      inputDecorationTheme: fields.copyWith(
+        filled: false,
+        fillColor: Colors.transparent,
+        labelStyle: TextStyle(color: grey),
+        floatingLabelStyle: WidgetStateTextStyle.resolveWith(
+          (states) => TextStyle(
+            color: states.contains(WidgetState.focused)
+                ? theme.colorScheme.primary
+                : grey,
+          ),
+        ),
+        border: border,
+        enabledBorder: border,
+      ),
+    ),
+    child: child,
+  );
 }
 
 /// Footer and toolbar buttons of the large dialogs. Retro draws its 3D

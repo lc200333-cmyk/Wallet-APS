@@ -122,8 +122,20 @@ the core are unchanged; only presentation differs between skins.
 - Touch screens: wide card, folder and icon drags use `PointerDraggable`,
   which starts for a mouse or pen only, so a finger scrolls grids and trees.
   Touch users move items through the long-press menu.
-- Light/Dark draw icons without tiles (rows, grids, icon catalogue, icon
-  picker, menu headers, task rows); a selected grid icon has a frame only.
+- Light/Dark draw icons without tiles (rows, grids, icon picker, menu
+  headers, task rows); a selected grid icon has a frame only. Exception
+  (owner decision, 29.10.2026): the "Иконки" workspace frames every icon
+  as Retro does — Light with the Retro fill, border and selection colours,
+  Dark with those colours inverted (`managedCatalogIconFrame`,
+  `skinFrames`).
+- Narrow Light/Dark: the fourth tab and its screen are called
+  "Управление" (was "База"; owner decision, 29.10.2026).
+- Dark card preview, card editor, template preview and template editor
+  (owner decision, 29.10.2026): background and fields have the main Dark
+  colour (`bg`) whatever the card or template colour (`skinCardSurface`);
+  field outlines and labels are the grey of the Light outline
+  (`skinCardFieldsTheme`). Focus and errors keep their colours; the card
+  colour remains on the icon and the colour swatches.
 - "Действие" task icons are 20 % larger in every skin.
 - Card preview, every skin: a web-site field (type `url`, or a label with
   "сайт"/"website") has a globe left of the copy button that opens the
@@ -162,13 +174,45 @@ the core are unchanged; only presentation differs between skins.
 - Icon folder names in the left panel use 85 % of the folder font.
 - Icon browsers ("Иконки" workspace, the folder icon picker and the card
   editor's icon pickers) show icons 25 % smaller in every skin
-  (`WorkspaceGeometry.iconBrowserScale`).
+  (`WorkspaceGeometry.iconBrowserScale`). Owner decision (29.10.2026): the
+  "Иконки" workspace is 25 % larger again (`iconWorkspaceScale`); its
+  frames are grey (`managedIconFrameGrey`, inverted in Dark), 0.75 px wide
+  and rounded by 6 instead of 1 px and 8. The pickers keep 75 %.
+- Light/Dark card mode grid (cards and folders): the selection frame is
+  grey (`managedIconFrameGrey`, inverted in Dark), 1.5 px and rounded by 6
+  instead of primary, 2 px and 12 (owner decision, 30.10.2026). The
+  templates grid keeps its frame.
+- Light/Dark search field (wide and narrow): always a grey frame
+  (`managedIconFrameGrey`, inverted in Dark), 1.5 px instead of the former
+  2 px focus frame, corner radius 30 % of the former pill (owner decision,
+  30.10.2026).
+- Light/Dark password field: grey frame (inverted in Dark), 0.75 px and
+  1.5 px focused instead of 1 px and 2 px primary, radius 3.6 instead of
+  12 (`modernFieldBorder`; owner decision, 30.10.2026).
+- Password keypad, every skin and keyboard mode: the backspace key draws
+  "⌫" itself (`BackspaceGlyph`), sized like the Segoe UI Symbol glyph, with
+  a cross half as large (owner decision, 30.10.2026).
+- Left "Мои записи" tree, every skin and layout (owner decision,
+  29.10.2026): folder and card rows are 2 px taller
+  (`treeRowExtraSpacing`), card icons 4 % smaller (`treeCardIconScale`).
+  The template and icon folder trees are unchanged.
+- Retro "Последние" rows repeat the "Действие" rows: icon size, font and
+  row spacing (owner decision, 29.10.2026). Light and Dark are unchanged.
 - Retro "Иконки" bottom row: the yellow button (`pasteManagedIconButton`,
   paste glyph) pastes from the clipboard and sits right of the icon folder
   button; the blue "+" and the upload button are gone there (upload is the
   central "+" and the "Действие" task). Light/Dark keep their row.
 - Icon folders renamed: "Логотипы компаний" → "Логотипы", "Дополнительные" →
   "Разные" (labels only; storage keys unchanged).
+- Linux looks like Windows (owner decision, 29.10.2026), Windows is the
+  reference. Every size that was Windows-only (search field and buttons,
+  mode rows, left tree folder font and icons, larger "Действие" text,
+  full-screen icon pickers in the card editor) now applies to both
+  (`isDesktopTargetPlatform`). Text uses Wallet Sans on Linux
+  (`platformFontFamily`, `assets/fonts/README.md`): Roboto with the width
+  and line height of Segoe UI per weight, because Segoe UI may not be
+  shipped and the usual Linux default (DejaVu Sans) is 16 % wider. Window
+  handling (login window size, title bar) is unchanged.
 - Retro references were regenerated for these intentional changes; only the
   right "Действие" panel and the Retro "+" button differ.
 

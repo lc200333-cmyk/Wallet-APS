@@ -24,7 +24,7 @@ class WorkspaceSectionBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scale = defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.windows
+            isDesktopTargetPlatform
         ? 1.1
         : 1.0;
     return Container(

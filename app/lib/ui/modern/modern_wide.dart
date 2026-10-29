@@ -149,7 +149,15 @@ extension _ModernWideShell on _VaultShellState {
   /// Search field with the clear button and the exact-search chip.
   Widget buildModernSearchField({required double height}) {
     final t = skinTokens;
-    final radius = BorderRadius.circular(height / 2);
+    // Grey frame, 25 % thinner than the former 2 px focus frame and 70 %
+    // less rounded than the former pill (owner decision, 30.10.2026).
+    final radius = BorderRadius.circular(height / 2 * 0.3);
+    final frame = BorderSide(
+      color: skinIsDark(context)
+          ? invertedColor(managedIconFrameGrey)
+          : managedIconFrameGrey,
+      width: 1.5,
+    );
     final exact = spbExactSearch;
     final chip = Tooltip(
       message: 'Точное совпадение',
@@ -198,18 +206,11 @@ extension _ModernWideShell on _VaultShellState {
           hintText: 'Поиск',
           hintStyle: TextStyle(color: t.onSurfaceVariant),
           contentPadding: EdgeInsets.zero,
-          border: OutlineInputBorder(
-            borderRadius: radius,
-            borderSide: BorderSide.none,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: radius,
-            borderSide: BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: radius,
-            borderSide: BorderSide(color: t.primary, width: 2),
-          ),
+          border: OutlineInputBorder(borderRadius: radius, borderSide: frame),
+          enabledBorder:
+              OutlineInputBorder(borderRadius: radius, borderSide: frame),
+          focusedBorder:
+              OutlineInputBorder(borderRadius: radius, borderSide: frame),
           prefixIcon: Icon(Icons.search, size: 18, color: t.onSurfaceVariant),
           prefixIconConstraints: const BoxConstraints(minWidth: 36),
           suffixIcon: Padding(

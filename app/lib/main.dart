@@ -36,6 +36,7 @@ import 'widgets/object_selection_menu_label.dart';
 import 'widgets/pointer_draggable.dart';
 import 'widgets/workspace_section_bar.dart';
 import 'widgets/android_screen_scale.dart';
+import 'widgets/backspace_glyph.dart';
 import 'widgets/workspace_geometry.dart';
 
 part 'ui/modern/modern_password.dart';
@@ -1662,6 +1663,7 @@ class WalletApsApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final baseTheme = ThemeData(
       useMaterial3: true,
+      fontFamily: platformFontFamily,
       colorScheme: ColorScheme.fromSeed(
         seedColor: const Color(0xff2d6f73),
         brightness: Brightness.light,
@@ -1704,7 +1706,7 @@ class WalletApsApp extends StatelessWidget {
       fontSize: (enlargedText.labelLarge?.fontSize ?? 16) + 1,
     );
     final retroTheme = baseTheme.copyWith(
-      textTheme: enlargedText,
+      textTheme: enlargedText.apply(fontFamily: platformFontFamily),
       popupMenuTheme: PopupMenuThemeData(textStyle: popupMenuTextStyle),
       extensions: const [WalletSkinTokens.retro],
     );
@@ -3064,6 +3066,12 @@ Color templateDisplayBackground(CardTemplate template) =>
     template.spbColor == null
         ? colorById(template.colorId).bg
         : Color(0xff000000 | (template.spbColor! & 0x00ffffff));
+
+PaletteColor templateDisplayColor(CardTemplate template) =>
+    template.spbColor == null
+        ? colorById(template.colorId)
+        : PaletteColor('custom', 'Свой цвет',
+            templateDisplayBackground(template), Colors.white);
 
 Color templateDisplayPictogramColor(CardTemplate template) =>
     pictogramColorForBackground(templateDisplayBackground(template));
@@ -7856,7 +7864,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }) {
     if (!skinTokens.isRetro && !mobile) return buildModernToolbar();
     final android = defaultTargetPlatform == TargetPlatform.android;
-    final enlarged = android || defaultTargetPlatform == TargetPlatform.windows;
+    final enlarged = android || isDesktopTargetPlatform;
     final searchScale = enlarged ? 1.1 : 1.0;
     final searchField = SizedBox(
       height: WorkspaceGeometry.searchHeight,
@@ -7996,7 +8004,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool selected = false,
   }) {
     final scale = defaultTargetPlatform == TargetPlatform.android ||
-            defaultTargetPlatform == TargetPlatform.windows
+            isDesktopTargetPlatform
         ? 1.1
         : 1.0;
     final dimension = WorkspaceGeometry.searchHeight * scale;
@@ -9270,7 +9278,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final desktopFolderLayout =
         defaultTargetPlatform == TargetPlatform.windows ||
             defaultTargetPlatform == TargetPlatform.linux;
-    final folderRowHeight = spbTreeFolderRowHeight;
+    final folderRowHeight =
+        spbTreeFolderRowHeight + WorkspaceGeometry.treeRowExtraSpacing;
     final treeIconSize = spbEntryTreeIconSize;
     final expansionSize = androidLayout
         ? WorkspaceGeometry.androidListExpansionSize
@@ -9324,10 +9333,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   width: androidLayout
                       ? 38.75 + WorkspaceGeometry.androidListSmallIcon * 0.15
                       : desktopFolderLayout
-                          ? 39.12 +
-                              (defaultTargetPlatform == TargetPlatform.windows
-                                  ? WorkspaceGeometry.desktopTreeIcon * 0.15
-                                  : 0)
+                          ? 39.12 + WorkspaceGeometry.desktopTreeIcon * 0.15
                           : 31,
                   height: folderRowHeight,
                   child: Row(
@@ -9442,7 +9448,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               leading: spbCardIconWithAttachmentMark(
                 item: item,
                 template: template,
-                dimension: treeIconSize,
+                dimension: treeIconSize * WorkspaceGeometry.treeCardIconScale,
                 attachmentMarkKey:
                     ValueKey('treeCardAttachmentArrow-${item.id}'),
               ),
@@ -9478,10 +9484,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       defaultTargetPlatform == TargetPlatform.linux;
 
   TextStyle get spbTreeDesktopFolderStyle =>
-      defaultTargetPlatform == TargetPlatform.windows
-          ? WorkspaceGeometry.desktopFolderStyle.copyWith(
-              fontSize: WorkspaceGeometry.desktopFolderStyle.fontSize! * 1.15)
-          : WorkspaceGeometry.desktopFolderStyle;
+      WorkspaceGeometry.desktopFolderStyle.copyWith(
+          fontSize: WorkspaceGeometry.desktopFolderStyle.fontSize! * 1.15);
 
   double get spbTreeFolderRowHeight =>
       max(spbEntryRowHeight, spbEntryTreeIconSize);
@@ -9534,8 +9538,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   double get spbEntryTreeIconSize => spbNarrowAndroid || spbWideAndroid
       ? WorkspaceGeometry.androidListSmallIcon * 1.15
       : spbDesktopLayout
-          ? WorkspaceGeometry.desktopTreeIcon *
-              (defaultTargetPlatform == TargetPlatform.windows ? 1.15 : 1)
+          ? WorkspaceGeometry.desktopTreeIcon * 1.15
           : WorkspaceGeometry.smallIcon;
 
   TextStyle get spbEntryTreeStyle => spbNarrowAndroid
@@ -10292,7 +10295,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   bool get managedIconUsesCompactPickerFrame => true;
 
   double get managedIconPickerContentSize =>
-      WorkspaceGeometry.iconBrowserContent;
+      WorkspaceGeometry.iconWorkspaceContent;
 
   double get managedIconPickerImageScale => 1;
 
@@ -10312,14 +10315,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           selected: selected,
           key: key,
           contentKey: ValueKey('managedIconContent-$iconId'),
+          skinFrames: true,
+          contentSize: managedIconPickerContentSize,
           baseColor: selectedIconCatalog == IconCatalogKind.brands ||
                   selectedIconCatalog == IconCatalogKind.thirdParty
               ? Colors.white
-              : Theme.of(context).colorScheme.surface);
+              : WalletSkinTokens.of(context).isRetro
+                  ? Theme.of(context).colorScheme.surface
+                  : retroIconFrameTheme.colorScheme.surface);
 
   Widget buildManagedIconPickerEntry(String iconId) {
     final radius = BorderRadius.circular(
-      managedIconUsesCompactPickerFrame ? 8 : 7,
+      managedIconUsesCompactPickerFrame ? managedIconFrameRadius : 7,
     );
     return Tooltip(
       message: managedIconPickerTooltip(iconId),
@@ -10354,7 +10361,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget managedIconDragFeedback(String iconId) {
     final dimension = managedIconUsesCompactPickerFrame
-        ? WorkspaceGeometry.iconBrowserCell
+        ? WorkspaceGeometry.iconWorkspaceCell
         : 82.0;
     return Material(
       color: Colors.transparent,
@@ -10389,7 +10396,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool showHeader = true,
     bool showPersistentScrollbar = false,
   }) {
-    const pickerGridDelegate = WorkspaceGridDelegate.iconBrowser();
+    const pickerGridDelegate = WorkspaceGridDelegate.iconWorkspace();
     final query = searchController.text.trim().toLowerCase();
     final visible = managedIconIdsFor(selectedIconCatalog)
         .where(
@@ -11710,6 +11717,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         final folder = folders[index];
                         final folderEntry = LayoutBuilder(
                           builder: (context, constraints) => buildSpbGridEntry(
+                            cardModeFrame: true,
                             label: folder.name,
                             labelWidth:
                                 spbEntryGridLabelWidth(constraints.maxWidth),
@@ -11751,6 +11759,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       final template = templateFor(item.templateId);
                       final cardEntry = LayoutBuilder(
                         builder: (context, constraints) => buildSpbGridEntry(
+                          cardModeFrame: true,
                           label: item.title,
                           labelKey: ValueKey('spbCardGridLabel-${item.id}'),
                           labelWidth:
@@ -12601,9 +12610,19 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool narrowAndroidLabel = false,
     bool wideAndroidLabel = false,
     bool desktopCardLabel = false,
+    bool cardModeFrame = false,
   }) {
     final t = skinTokens;
     final modern = !t.isRetro;
+    // Light and Dark card mode: the selection frame is grey, half as round
+    // and 25 % thinner (owner decision, 30.10.2026).
+    final frameColor = cardModeFrame
+        ? (skinIsDark(context)
+            ? invertedColor(managedIconFrameGrey)
+            : managedIconFrameGrey)
+        : t.primary;
+    final frameRadius = cardModeFrame ? 6.0 : 12.0;
+    final frameWidth = cardModeFrame ? 1.5 : 2.0;
     final stabilizeAndroidLabel =
         defaultTargetPlatform == TargetPlatform.android;
     const selectedDecoration = BoxDecoration(
@@ -12661,9 +12680,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       ? Container(
                           foregroundDecoration: selected
                               ? BoxDecoration(
-                                  borderRadius: BorderRadius.circular(12),
-                                  border:
-                                      Border.all(color: t.primary, width: 2),
+                                  borderRadius:
+                                      BorderRadius.circular(frameRadius),
+                                  border: Border.all(
+                                      color: frameColor, width: frameWidth),
                                 )
                               : null,
                           padding: EdgeInsets.all(iconSize * 0.04),
@@ -14372,16 +14392,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final narrowAndroid = spbNarrowAndroid;
     final wideAndroid = spbWideAndroid;
     final androidSpacing = narrowAndroid || wideAndroid;
+    // Retro draws "Последние" rows like "Действие" rows: icon, font and row
+    // spacing (owner decision, 29.10.2026).
+    final taskSized =
+        title == 'Действие' || (frequentRows && skinTokens.isRetro);
+    final itemRows = frequentRows && !taskSized;
     final taskFontIncrease =
-        (androidSpacing || defaultTargetPlatform == TargetPlatform.windows) &&
-                title == 'Действие'
-            ? 1.0
-            : 0.0;
+        (androidSpacing || isDesktopTargetPlatform) && taskSized ? 1.0 : 0.0;
     // Task icons of "Действие" are 20 % larger than other panel icons.
     final actionIconSize = (androidSpacing
             ? WorkspaceGeometry.narrowActionIcon
             : WorkspaceGeometry.actionIcon) *
-        (title == 'Действие' ? 1.2 : 1.0);
+        (taskSized ? 1.2 : 1.0);
     final minimumRowHeight = androidSpacing
         ? WorkspaceGeometry.narrowRowHeight
         : WorkspaceGeometry.rowHeight;
@@ -14433,26 +14455,26 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   6,
             );
             final rowTextStyle = narrowAndroid || wideAndroid
-                ? (frequentRows
+                ? (itemRows
                     ? WorkspaceGeometry.enlargeActionText(
                         WorkspaceGeometry.androidActionItemNameStyle)
                     : WorkspaceGeometry.enlargeActionText(
                         WorkspaceGeometry.androidActionBodyStyle,
                         increase: 2 + taskFontIncrease))
-                : (frequentRows
+                : (itemRows
                     ? WorkspaceGeometry.enlargeActionText(
                         WorkspaceGeometry.itemNameStyle)
                     : WorkspaceGeometry.enlargeActionText(
                         WorkspaceGeometry.bodyStyle,
                         increase: 2 + taskFontIncrease));
             final rowStrutStyle = narrowAndroid || wideAndroid
-                ? (frequentRows
+                ? (itemRows
                     ? WorkspaceGeometry.enlargeActionStrut(
                         WorkspaceGeometry.androidActionItemNameStrut)
                     : WorkspaceGeometry.enlargeActionStrut(
                         WorkspaceGeometry.androidActionBodyStrut,
                         increase: 2 + taskFontIncrease))
-                : (frequentRows
+                : (itemRows
                     ? WorkspaceGeometry.enlargeActionStrut(
                         WorkspaceGeometry.itemNameStrut)
                     : WorkspaceGeometry.enlargeActionStrut(
@@ -14929,18 +14951,26 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             borderRadius: BorderRadius.circular(3),
             child: Center(
               child: child ??
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: fontSize,
-                      height: 1,
-                      fontWeight: fontWeight,
-                      shadows: const [
-                        Shadow(color: Colors.black45, offset: Offset(1, 1)),
-                      ],
-                    ),
-                  ),
+                  (label == '⌫'
+                      ? BackspaceGlyph(
+                          size: fontSize,
+                          color: Colors.white,
+                          shadow: const Shadow(
+                              color: Colors.black45, offset: Offset(1, 1)),
+                        )
+                      : Text(
+                          label,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: fontSize,
+                            height: 1,
+                            fontWeight: fontWeight,
+                            shadows: const [
+                              Shadow(
+                                  color: Colors.black45, offset: Offset(1, 1)),
+                            ],
+                          ),
+                        )),
             ),
           ),
         ),
@@ -15376,15 +15406,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                                               BorderRadius.zero,
                                                         )
                                                       : modernFieldBorder(
-                                                          t.outline, 1),
+                                                          focused: false),
                                                   enabledBorder: retro
                                                       ? null
                                                       : modernFieldBorder(
-                                                          t.outline, 1),
+                                                          focused: false),
                                                   focusedBorder: retro
                                                       ? null
                                                       : modernFieldBorder(
-                                                          t.primary, 2),
+                                                          focused: true),
                                                   suffixIcon: IconButton(
                                                     key: const Key(
                                                       'loginPasswordVisibility',
@@ -16024,14 +16054,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       if (!mounted) return;
       final action = await showDialog<CardPreviewAction>(
         context: context,
-        builder: (context) => CardPreviewDialog(
-          item: previewItem,
-          template: templateFor(previewItem.templateId),
-          loadAttachmentBytes: spbWallet == null
-              ? null
-              : (attachmentId) async =>
-                  spbWallet!.readAttachmentBytes(attachmentId),
-          onAddAttachment: spbWallet == null ? null : addAttachmentFromPreview,
+        builder: (context) => skinCardFieldsTheme(
+          context,
+          CardPreviewDialog(
+            item: previewItem,
+            template: templateFor(previewItem.templateId),
+            loadAttachmentBytes: spbWallet == null
+                ? null
+                : (attachmentId) async =>
+                    spbWallet!.readAttachmentBytes(attachmentId),
+            onAddAttachment:
+                spbWallet == null ? null : addAttachmentFromPreview,
+          ),
         ),
       );
       if (!mounted || !unlocked) return;
@@ -16271,21 +16305,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final saved = await showDialog<SecretItem>(
       context: context,
       barrierDismissible: false,
-      builder: (context) => ItemEditorDialog(
-        templates: templates,
-        categories: existingCategories(),
-        categoryIcons: {
-          for (final category in existingCategories())
-            category: categoryIconsByPath[category] ??
-                defaultIconForCategoryPath(category),
-        },
-        initial: item,
-        initialCategory: initialCategory,
-        supportsAttachments: spbWallet != null,
-        loadAttachmentBytes: spbWallet == null
-            ? null
-            : (attachmentId) async =>
-                spbWallet!.readAttachmentBytes(attachmentId),
+      builder: (context) => skinCardFieldsTheme(
+        context,
+        ItemEditorDialog(
+          templates: templates,
+          categories: existingCategories(),
+          categoryIcons: {
+            for (final category in existingCategories())
+              category: categoryIconsByPath[category] ??
+                  defaultIconForCategoryPath(category),
+          },
+          initial: item,
+          initialCategory: initialCategory,
+          supportsAttachments: spbWallet != null,
+          loadAttachmentBytes: spbWallet == null
+              ? null
+              : (attachmentId) async =>
+                  spbWallet!.readAttachmentBytes(attachmentId),
+        ),
       ),
     );
     if (!mounted || !unlocked) return null;
@@ -16622,9 +16659,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }) async {
     final saved = await showDialog<CardTemplate>(
       context: context,
-      builder: (context) => TemplateEditorDialog(
-        initial: draft ?? template,
-        initialCategoryPath: selectedTemplateFolder ?? '',
+      builder: (context) => skinCardFieldsTheme(
+        context,
+        TemplateEditorDialog(
+          initial: draft ?? template,
+          initialCategoryPath: selectedTemplateFolder ?? '',
+        ),
       ),
     );
     if (saved == null) return;
@@ -16637,7 +16677,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     while (mounted) {
       final action = await showDialog<TemplatePreviewAction>(
         context: context,
-        builder: (context) => TemplatePreviewDialog(template: currentTemplate),
+        builder: (context) => skinCardFieldsTheme(
+          context,
+          TemplatePreviewDialog(template: currentTemplate),
+        ),
       );
       if (!mounted || !unlocked) return;
       if (action == TemplatePreviewAction.edit) {
@@ -19293,15 +19336,21 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         : t.customTile(retroEditorBackgroundColor);
   }
 
-  /// Surface colour of the editor; Retro keeps the stored card colour.
+  /// Surface colour of the editor; Retro keeps the stored card colour, Dark
+  /// uses the main theme colour (see skinCardSurface).
   Color get editorBackgroundColor => WalletSkinTokens.of(context).isRetro
       ? retroEditorBackgroundColor
-      : skinEditorTile.tile;
+      : skinIsDark(context)
+          ? WalletSkinTokens.of(context).bg
+          : skinEditorTile.tile;
 
   /// Field fill on the editor surface.
+  // Dark fields show the editor surface (see skinCardFieldsTheme).
   Color get editorFieldFill => WalletSkinTokens.of(context).isRetro
       ? retroEditorBackgroundColor
-      : WalletSkinTokens.of(context).surface.withValues(alpha: 0.92);
+      : skinIsDark(context)
+          ? Colors.transparent
+          : WalletSkinTokens.of(context).surface.withValues(alpha: 0.92);
 
   /// Colour of single-colour pictograms on the editor surface.
   Color get editorPictogramColor => WalletSkinTokens.of(context).isRetro
@@ -21138,7 +21187,10 @@ class TemplatePreviewDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final media = MediaQuery.sizeOf(context);
     final fullScreen = Platform.isAndroid || media.width < 700;
-    final backgroundColor = templateDisplayBackground(template);
+    // Dark draws the template on the main theme colour, like a card.
+    final backgroundColor = skinIsDark(context)
+        ? skinCardSurface(context, templateDisplayColor(template))
+        : templateDisplayBackground(template);
     Uint8List? customIconBytes;
     try {
       final encoded = template.embeddedIconBase64;
@@ -21203,9 +21255,14 @@ class TemplatePreviewDialog extends StatelessWidget {
                                     template.iconId,
                                     size:
                                         112 * WorkspaceGeometry.framedIconScale,
-                                    color: pictogramColorForBackground(
-                                      backgroundColor,
-                                    ),
+                                    color: skinIsDark(context)
+                                        ? skinTileForPalette(
+                                            WalletSkinTokens.of(context),
+                                            templateDisplayColor(template),
+                                          ).icon
+                                        : pictogramColorForBackground(
+                                            backgroundColor,
+                                          ),
                                     scaleOriginalToFit: true,
                                   )
                                 : Image.memory(
@@ -21436,15 +21493,21 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
         : t.customTile(retroEditorBackgroundColor);
   }
 
-  /// Surface colour of the editor; Retro keeps the stored card colour.
+  /// Surface colour of the editor; Retro keeps the stored card colour, Dark
+  /// uses the main theme colour (see skinCardSurface).
   Color get editorBackgroundColor => WalletSkinTokens.of(context).isRetro
       ? retroEditorBackgroundColor
-      : skinEditorTile.tile;
+      : skinIsDark(context)
+          ? WalletSkinTokens.of(context).bg
+          : skinEditorTile.tile;
 
   /// Field fill on the editor surface.
+  // Dark fields show the editor surface (see skinCardFieldsTheme).
   Color get editorFieldFill => WalletSkinTokens.of(context).isRetro
       ? retroEditorBackgroundColor
-      : WalletSkinTokens.of(context).surface.withValues(alpha: 0.92);
+      : skinIsDark(context)
+          ? Colors.transparent
+          : WalletSkinTokens.of(context).surface.withValues(alpha: 0.92);
 
   /// Colour of single-colour pictograms on the editor surface.
   Color get editorPictogramColor => WalletSkinTokens.of(context).isRetro
@@ -22309,7 +22372,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       context,
       iconId,
       fullScreenOnNarrow: defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.windows,
+          isDesktopTargetPlatform,
     );
     if (picked != null && mounted) changeIcon(picked);
   }
@@ -22319,7 +22382,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       context,
       iconId,
       fullScreenOnNarrow: defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.windows,
+          isDesktopTargetPlatform,
     );
     if (picked != null && mounted) changeIcon(picked);
   }
@@ -22328,7 +22391,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     final picked = await showBrandIconPickerDialog(
       context,
       fullScreenOnNarrow: defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.windows,
+          isDesktopTargetPlatform,
     );
     if (picked == null || !mounted) return;
     final bytes = brandIconPngs[picked];
@@ -22338,8 +22401,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
 
   Future<void> pickThirdPartyIcon() async {
     final android = defaultTargetPlatform == TargetPlatform.android;
-    final matchCardPicker =
-        android || defaultTargetPlatform == TargetPlatform.windows;
+    final matchCardPicker = android || isDesktopTargetPlatform;
     final picked = await showThirdPartyIconPickerDialog(
       context,
       fullScreenOnNarrow: matchCardPicker,
@@ -22403,6 +22465,26 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   }
 }
 
+/// Colours of the Retro skin, used by the Light and Dark icon frames.
+final retroIconFrameTheme = ThemeData(
+  useMaterial3: true,
+  colorScheme: ColorScheme.fromSeed(
+    seedColor: const Color(0xff2d6f73),
+    brightness: Brightness.light,
+  ),
+);
+
+/// Border and corner of the icon workspace frames.
+const managedIconFrameGrey = Color(0xff9e9e9e);
+const managedIconFrameRadius = 6.0;
+
+Color invertedColor(Color color) => Color.from(
+      alpha: color.a,
+      red: 1 - color.r,
+      green: 1 - color.g,
+      blue: 1 - color.b,
+    );
+
 Widget managedCatalogIconFrame(
   BuildContext context,
   String id, {
@@ -22410,40 +22492,63 @@ Widget managedCatalogIconFrame(
   required Color baseColor,
   Key? key,
   Key? contentKey,
+  bool skinFrames = false,
+  double contentSize = WorkspaceGeometry.iconBrowserContent,
 }) {
-  final theme = Theme.of(context);
+  final skinTheme = Theme.of(context);
+  final modern = !WalletSkinTokens.of(context).isRetro;
+  // The "Иконки" workspace frames icons as Retro does in every skin: Light
+  // with the Retro colours, Dark with them inverted (owner decision).
+  final retroFrames = !modern || skinFrames;
+  final theme = modern && skinFrames ? retroIconFrameTheme : skinTheme;
+  final dark = modern && skinFrames && skinTheme.brightness == Brightness.dark;
+  Color frameColor(Color color) => dark ? invertedColor(color) : color;
   final bytes = brandIconPngs[id] ?? thirdPartyIconPngs[id];
   final preferred =
       spbIconIdForDrawableDirectory(id, managedSpbPreviewDrawableDirectory);
   final preview = spbPackedIconBytes(preferred) != null ? preferred : id;
-  // Light and Dark show the icon on the window background; only the
-  // selected icon gets a frame.
-  final modern = !WalletSkinTokens.of(context).isRetro;
+  // Elsewhere Light and Dark show the icon on the window background; only
+  // the selected icon gets a frame.
   return DecoratedBox(
       key: key,
-      decoration: modern
+      decoration: !retroFrames
           ? BoxDecoration(
               border: Border.all(
                   color:
                       selected ? theme.colorScheme.primary : Colors.transparent,
                   width: 2),
               borderRadius: BorderRadius.circular(8))
-          : BoxDecoration(
-              color: selected ? theme.colorScheme.primaryContainer : baseColor,
-              border: Border.all(
-                  color: selected
-                      ? theme.colorScheme.primary
-                      : theme.dividerColor),
-              borderRadius: BorderRadius.circular(8)),
+          : skinFrames
+              // Workspace frames in every skin: grey, with a 25 % thinner line
+              // and a 25 % smaller corner radius than the picker frames.
+              ? BoxDecoration(
+                  color: frameColor(selected
+                      ? theme.colorScheme.primaryContainer
+                      : baseColor),
+                  border: Border.all(
+                      color: frameColor(selected
+                          ? theme.colorScheme.primary
+                          : managedIconFrameGrey),
+                      width: 0.75),
+                  borderRadius: BorderRadius.circular(managedIconFrameRadius))
+              : BoxDecoration(
+                  color: frameColor(selected
+                      ? theme.colorScheme.primaryContainer
+                      : baseColor),
+                  border: Border.all(
+                      color: frameColor(selected
+                          ? theme.colorScheme.primary
+                          : theme.dividerColor)),
+                  borderRadius: BorderRadius.circular(8)),
       child: Center(
           child: SizedBox.square(
               key: contentKey,
-              dimension: WorkspaceGeometry.iconBrowserContent,
+              dimension: contentSize,
               child: bytes != null
                   ? Image.memory(bytes,
                       fit: BoxFit.contain, filterQuality: FilterQuality.medium)
                   : templateIconWidget(preview,
-                      size: WorkspaceGeometry.iconBrowserContent,
+                      size: contentSize,
                       color: const Color(0xff6f7f89),
                       scaleOriginalToFit: true))));
 }

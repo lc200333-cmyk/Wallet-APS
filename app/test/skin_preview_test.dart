@@ -45,6 +45,11 @@ Future<void> _loadFonts() async {
     '$_fontDir/roboto-bold.ttf',
   ]);
   await family('MaterialIcons', ['$_fontDir/materialicons-regular.otf']);
+  await family('WalletSans', [
+    'assets/fonts/WalletSans-regular.ttf',
+    'assets/fonts/WalletSans-semibold.ttf',
+    'assets/fonts/WalletSans-bold.ttf',
+  ]);
 }
 
 Future<void> _shoot(
@@ -329,6 +334,32 @@ void main() {
         await tester.pumpAndSettle();
         await _shoot(tester, '${s}_narrow_card_menu');
       });
+    }
+
+    // Linux is drawn like Windows: same sizes, Wallet Sans for Segoe UI.
+    for (final platform in [TargetPlatform.windows, TargetPlatform.linux]) {
+      for (final (layout, size) in [
+        ('wide', const Size(1280, 769.5)),
+        ('narrow', const Size(480, 800)),
+      ]) {
+        final name = '${s}_${platform.name}_$layout';
+        _preview('$s ${platform.name} $layout desktop', (tester) async {
+          final dynamic state =
+              await _pump(tester, skin, size: size, platform: platform);
+          await _shoot(tester, '${name}_root');
+          state.openSpbFolder('Финансы');
+          await tester.pumpAndSettle();
+          await _shoot(tester, '${name}_folder');
+          state.showSpbTemplatesMode();
+          await tester.pumpAndSettle();
+          await _shoot(tester, '${name}_templates');
+          final SecretItem first = state.items.first as SecretItem;
+          state.showSpbCardsMode();
+          state.openCardPreviewDialog(first);
+          await tester.pumpAndSettle();
+          await _shoot(tester, '${name}_card_preview');
+        });
+      }
     }
 
     _preview('$s android tablet', (tester) async {

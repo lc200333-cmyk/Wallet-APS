@@ -42,10 +42,18 @@ const _skinDialogKeys = <AppSkin, Key>{
 extension _ModernPasswordWindow on _VaultShellState {
   WalletSkinTokens get skinTokens => WalletSkinTokens.of(context);
 
-  OutlineInputBorder modernFieldBorder(Color color, double width) =>
+  /// Password field frame: grey, 25 % thinner and 70 % less rounded than
+  /// the former 1 px (2 px focused), radius 12 frame (owner decision,
+  /// 30.10.2026).
+  OutlineInputBorder modernFieldBorder({required bool focused}) =>
       OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: color, width: width),
+        borderRadius: BorderRadius.circular(12 * 0.3),
+        borderSide: BorderSide(
+          color: skinIsDark(context)
+              ? invertedColor(managedIconFrameGrey)
+              : managedIconFrameGrey,
+          width: (focused ? 2 : 1) * 0.75,
+        ),
       );
 
   /// Flat password-window button of the Light and Dark skins (section 6.6).
@@ -114,15 +122,17 @@ extension _ModernPasswordWindow on _VaultShellState {
               child: IconTheme(
                 data: IconThemeData(color: foreground),
                 child: child ??
-                    Text(
-                      label,
-                      style: TextStyle(
-                        color: foreground,
-                        fontSize: fontSize,
-                        height: 1,
-                        fontWeight: fontWeight,
-                      ),
-                    ),
+                    (label == '⌫'
+                        ? BackspaceGlyph(size: fontSize, color: foreground)
+                        : Text(
+                            label,
+                            style: TextStyle(
+                              color: foreground,
+                              fontSize: fontSize,
+                              height: 1,
+                              fontWeight: fontWeight,
+                            ),
+                          )),
               ),
             ),
           ),

@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:file_picker/file_picker.dart';
 import 'package:wallet_aps/app_version.dart';
 import 'package:wallet_aps/main.dart';
+import 'package:wallet_aps/widgets/backspace_glyph.dart';
 import 'package:wallet_aps/widgets/workspace_geometry.dart';
 import 'package:wallet_aps/services/platform/secure_clipboard_service.dart';
 import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
@@ -2732,15 +2733,15 @@ void main() {
     );
     final firstFrameDecoration = firstFrame.decoration as BoxDecoration;
     expect(firstFrameDecoration.border, isNotNull);
-    expect(firstFrameDecoration.borderRadius, BorderRadius.circular(8));
+    expect(firstFrameDecoration.borderRadius, BorderRadius.circular(6));
     final dynamic state = tester.state(find.byType(VaultShell));
-    expect(state.managedIconPickerContentSize, 48);
+    expect(state.managedIconPickerContentSize, 60);
     expect(state.managedIconPickerImageScale, 1);
     expect(
       tester.getSize(
         find.byKey(ValueKey('managedIconContent-$firstIconId')),
       ),
-      const Size.square(48),
+      const Size.square(60),
     );
     final iconGrid = find.descendant(
       of: find.byKey(const Key('spbIconGridScrollbar')),
@@ -2762,7 +2763,7 @@ void main() {
       expect(gridDelegate, isA<WorkspaceGridDelegate>());
       expect(
         state.managedIconPickerContentSize,
-        48,
+        60,
       );
       expect(
         state.managedIconPickerImageScale,
@@ -3727,7 +3728,8 @@ void main() {
     );
     expect(
       firstFolderTile.minTileHeight,
-      WorkspaceGeometry.androidListRowHeight,
+      (WorkspaceGeometry.androidListRowHeight +
+          WorkspaceGeometry.treeRowExtraSpacing),
     );
     final topLevelHighlight = tester.widget<CustomPaint>(
       find.byKey(
@@ -3736,7 +3738,8 @@ void main() {
     );
     expect(
       (topLevelHighlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      WorkspaceGeometry.androidListRowHeight,
+      (WorkspaceGeometry.androidListRowHeight +
+          WorkspaceGeometry.treeRowExtraSpacing),
     );
     final firstFolderIcon = find.byKey(
       const ValueKey('spbTreeFolderIconRow-Folder spacing A'),
@@ -3744,8 +3747,10 @@ void main() {
     final secondFolderIcon = find.byKey(
       const ValueKey('spbTreeFolderIconRow-Folder spacing B'),
     );
-    expect(tester.getSize(firstFolderIcon).height,
-        WorkspaceGeometry.androidListRowHeight);
+    expect(
+        tester.getSize(firstFolderIcon).height,
+        (WorkspaceGeometry.androidListRowHeight +
+            WorkspaceGeometry.treeRowExtraSpacing));
     expect(
       tester.getRect(secondFolderIcon).top -
           tester.getRect(firstFolderIcon).bottom,
@@ -3769,7 +3774,8 @@ void main() {
     );
     expect(
       firstNestedTile.minTileHeight,
-      WorkspaceGeometry.androidListRowHeight,
+      (WorkspaceGeometry.androidListRowHeight +
+          WorkspaceGeometry.treeRowExtraSpacing),
     );
     final nestedHighlight = tester.widget<CustomPaint>(
       find.byKey(const ValueKey(
@@ -3778,12 +3784,16 @@ void main() {
     );
     expect(
       (nestedHighlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      WorkspaceGeometry.androidListRowHeight,
+      (WorkspaceGeometry.androidListRowHeight +
+          WorkspaceGeometry.treeRowExtraSpacing),
     );
     expect(
       tester.getCenter(secondNestedFolder).dy -
           tester.getCenter(firstNestedFolder).dy,
-      closeTo(WorkspaceGeometry.androidListRowHeight, 0.1),
+      closeTo(
+          (WorkspaceGeometry.androidListRowHeight +
+              WorkspaceGeometry.treeRowExtraSpacing),
+          0.1),
     );
 
     final treeFolderTitle = tester.widget<Text>(
@@ -3864,7 +3874,10 @@ void main() {
     final tile = tester.widget<ExpansionTile>(
       find.descendant(of: folder, matching: find.byType(ExpansionTile)),
     );
-    expect(tile.minTileHeight, WorkspaceGeometry.androidListRowHeight);
+    expect(
+        tile.minTileHeight,
+        (WorkspaceGeometry.androidListRowHeight +
+            WorkspaceGeometry.treeRowExtraSpacing));
     final highlight = tester.widget<CustomPaint>(
       find.byKey(const ValueKey(
         'spbTreeFolderHighlight-Narrow unchanged folder',
@@ -3872,7 +3885,8 @@ void main() {
     );
     expect(
       (highlight.painter as SpbFolderHighlightPainter).highlightHeight,
-      WorkspaceGeometry.androidListRowHeight,
+      (WorkspaceGeometry.androidListRowHeight +
+          WorkspaceGeometry.treeRowExtraSpacing),
     );
 
     await tester.longPress(folder);
@@ -4597,7 +4611,7 @@ void main() {
       findsOneWidget,
     );
     expect(find.text('CLR'), findsOneWidget);
-    expect(find.text('⌫'), findsOneWidget);
+    expect(find.byType(BackspaceGlyph), findsOneWidget);
     expect(find.text('OK'), findsOneWidget);
     expect(
       find.descendant(

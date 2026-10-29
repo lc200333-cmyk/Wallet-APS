@@ -1,6 +1,12 @@
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
+
+/// Windows and Linux share the desktop sizes; Windows is the reference.
+bool get isDesktopTargetPlatform =>
+    defaultTargetPlatform == TargetPlatform.windows ||
+    defaultTargetPlatform == TargetPlatform.linux;
 
 /// V1 geometry in Flutter logical pixels on every platform. The reference's
 /// presumed 200% scale is applied by the framework, never multiplied here.
@@ -58,6 +64,16 @@ abstract final class WorkspaceGeometry {
   static const iconBrowserScale = 0.75;
   static const iconBrowserCell = gridCell * iconBrowserScale;
   static const iconBrowserContent = iconFrameContent * iconBrowserScale;
+
+  /// The "Иконки" workspace shows its icons 25 % larger than the pickers.
+  static const iconWorkspaceScale = iconBrowserScale * 1.25;
+  static const iconWorkspaceCell = gridCell * iconWorkspaceScale;
+  static const iconWorkspaceContent = iconFrameContent * iconWorkspaceScale;
+
+  /// Card icons of the left tree are 4 % smaller than their row icon slot,
+  /// and tree rows are 2 px further apart.
+  static const treeCardIconScale = 0.96;
+  static const treeRowExtraSpacing = 2.0;
   static const framedIconScale = 0.90;
   static const labelWidth = 72.0;
   static const labelHeight = 30.0;
@@ -329,6 +345,9 @@ class WorkspaceGridDelegate extends SliverGridDelegate {
 
   const WorkspaceGridDelegate.iconBrowser()
       : cell = WorkspaceGeometry.iconBrowserCell;
+
+  const WorkspaceGridDelegate.iconWorkspace()
+      : cell = WorkspaceGeometry.iconWorkspaceCell;
 
   final double cell;
 

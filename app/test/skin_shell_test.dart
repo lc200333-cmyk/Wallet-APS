@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -246,6 +248,11 @@ void main() {
       await tester.tap(find.byKey(const Key('modernTabVault')));
       await _pumpFrames(tester);
       expect(state.modernVaultTabOpen, isTrue);
+      expect(
+          find.descendant(
+              of: find.byKey(const Key('modernTabVault')),
+              matching: find.text('Управление')),
+          findsOneWidget);
       await tester.scrollUntilVisible(
         find.text('Нет изменений для отмены'),
         200,
@@ -602,6 +609,181 @@ void main() {
       );
       expect(region.value.statusBarIconBrightness, brightness,
           reason: skin.name);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  _skinTest('Light and Dark frame the icons of the icon workspace like Retro',
+      (tester) async {
+    for (final skin in [AppSkin.light, AppSkin.dark]) {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      await tester.pumpWidget(MaterialApp(
+        theme: buildModernTheme(
+            skin == AppSkin.dark ? Brightness.dark : Brightness.light),
+        home: Builder(
+          builder: (context) => Column(children: [
+            for (final selected in [false, true])
+              SizedBox.square(
+                dimension: 48,
+                child: managedCatalogIconFrame(context, 'missing',
+                    key: ValueKey('frame-$selected'),
+                    selected: selected,
+                    skinFrames: true,
+                    baseColor: retroIconFrameTheme.colorScheme.surface),
+              ),
+          ]),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      final scheme = retroIconFrameTheme.colorScheme;
+      Color expected(Color color) =>
+          skin == AppSkin.dark ? invertedColor(color) : color;
+      for (final (selected, fill, border) in [
+        (false, scheme.surface, managedIconFrameGrey),
+        (true, scheme.primaryContainer, scheme.primary),
+      ]) {
+        final decoration = tester
+            .widget<DecoratedBox>(find.byKey(ValueKey('frame-$selected')))
+            .decoration as BoxDecoration;
+        expect(decoration.color, expected(fill),
+            reason: '${skin.name} $selected');
+        final side = (decoration.border! as Border).top;
+        expect(side.color, expected(border), reason: '${skin.name} $selected');
+        // 25 % thinner and less rounded than the picker frames (1 px, 8).
+        expect(side.width, 0.75);
+        expect(decoration.borderRadius, BorderRadius.circular(6));
+      }
+    }
+  });
+
+  _skinTest(
+      'Dark card preview fields have the main dark colour and grey outlines',
+      (tester) async {
+    final dynamic state = await _pumpShell(tester, AppSkin.dark, _Layout.wide);
+    final SecretItem first = state.items.first as SecretItem;
+    final template = state.templateFor(first.templateId) as CardTemplate;
+    final card = SecretItem(
+      id: first.id,
+      templateId: first.templateId,
+      title: first.title,
+      category: first.category,
+      colorId: first.colorId,
+      values: {for (final field in template.fields) field.id: 'value'},
+      modifiedAt: first.modifiedAt,
+    );
+    state.setState(() {
+      state.items = [card];
+      state.itemsById = {card.id: card};
+    });
+    await tester.pumpAndSettle();
+    unawaited(state.openCardPreviewDialog(card) as Future<void>);
+    await tester.pumpAndSettle();
+    final surface = WalletSkinTokens.dark.bg;
+    final fields = find.byWidgetPredicate((widget) =>
+        widget.key is ValueKey<String> &&
+        (widget.key! as ValueKey<String>)
+            .value
+            .startsWith('cardPreviewField-'));
+    expect(find.byKey(const Key('cardPreviewTitle')), findsOneWidget);
+    expect(fields, findsWidgets);
+    final grey = WalletSkinTokens.light.outline;
+    for (final decorator in tester.widgetList<InputDecorator>(
+        find.descendant(of: fields, matching: find.byType(InputDecorator)))) {
+      final decoration = decorator.decoration;
+      expect(decoration.fillColor, surface);
+      expect(decoration.enabledBorder!.borderSide.color, grey);
+      expect(decoration.labelStyle!.color, grey);
+    }
+  });
+
+  _skinTest('Light and Dark card mode selection frame is grey and thin',
+      (tester) async {
+    for (final skin in [AppSkin.light, AppSkin.dark]) {
+      final dynamic state = await _pumpShell(tester, skin, _Layout.wide);
+      state.setState(() => state.selectedItemId = 's-root');
+      await tester.pumpAndSettle();
+      final frame = tester
+          .widgetList<Container>(find.descendant(
+            of: find.byKey(const ValueKey('spbCentralCard-s-root')),
+            matching: find.byType(Container),
+          ))
+          .map((container) => container.foregroundDecoration)
+          .whereType<BoxDecoration>()
+          .single;
+      final side = (frame.border! as Border).top;
+      expect(
+          side.color,
+          skin == AppSkin.dark
+              ? invertedColor(managedIconFrameGrey)
+              : managedIconFrameGrey,
+          reason: skin.name);
+      // Half the radius (12) and 25 % thinner (2 px) than before.
+      expect(side.width, 1.5);
+      expect(frame.borderRadius, BorderRadius.circular(6));
+      await tester.pumpWidget(const SizedBox.shrink());
+    }
+  });
+
+  _skinTest('Light and Dark search field has a thin grey frame',
+      (tester) async {
+    for (final skin in [AppSkin.light, AppSkin.dark]) {
+      for (final layout in [_Layout.wide, _Layout.narrow]) {
+        await _pumpShell(tester, skin, layout);
+        final decorator = tester.widget<InputDecorator>(find.descendant(
+          of: find.byKey(const Key('spbSearchInput')),
+          matching: find.byType(InputDecorator),
+        ));
+        final grey = skin == AppSkin.dark
+            ? invertedColor(managedIconFrameGrey)
+            : managedIconFrameGrey;
+        final height =
+            tester.getSize(find.byKey(const Key('spbSearchInput'))).height;
+        for (final border in [
+          decorator.decoration.enabledBorder!,
+          decorator.decoration.focusedBorder!,
+        ]) {
+          expect(border.borderSide.color, grey, reason: skin.name);
+          expect(border.borderSide.width, 1.5);
+          expect((border as OutlineInputBorder).borderRadius,
+              BorderRadius.circular(height / 2 * 0.3),
+              reason: '${skin.name} ${layout.name}');
+        }
+        await tester.pumpWidget(const SizedBox.shrink());
+      }
+    }
+  });
+
+  _skinTest('Light and Dark password field has a thin grey frame',
+      (tester) async {
+    for (final skin in [AppSkin.light, AppSkin.dark]) {
+      debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+      appSkin.value = skin;
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(600, 700);
+      addTearDown(() {
+        tester.view.resetDevicePixelRatio();
+        tester.view.resetPhysicalSize();
+      });
+      await tester.pumpWidget(const WalletApsApp());
+      await tester.pumpAndSettle();
+      final decoration = tester
+          .widget<InputDecorator>(find.descendant(
+            of: find.byKey(const Key('passwordInput')),
+            matching: find.byType(InputDecorator),
+          ))
+          .decoration;
+      final grey = skin == AppSkin.dark
+          ? invertedColor(managedIconFrameGrey)
+          : managedIconFrameGrey;
+      for (final (border, width) in [
+        (decoration.enabledBorder!, 0.75),
+        (decoration.focusedBorder!, 1.5),
+      ]) {
+        expect(border.borderSide.color, grey, reason: skin.name);
+        expect(border.borderSide.width, width);
+        expect((border as OutlineInputBorder).borderRadius,
+            BorderRadius.circular(12 * 0.3));
+      }
       await tester.pumpWidget(const SizedBox.shrink());
     }
   });

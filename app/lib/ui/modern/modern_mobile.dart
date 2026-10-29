@@ -358,7 +358,7 @@ extension _ModernMobileShell on _VaultShellState {
                     fit: BoxFit.contain,
                   ),
                 ),
-                label: 'База',
+                label: 'Управление',
               ),
             ],
           ),
@@ -977,7 +977,7 @@ extension _ModernMobileShell on _VaultShellState {
       children: [
         buildModernScreenHeader(
           title: Text(
-            'База',
+            'Управление',
             style: TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.w700,
