@@ -165,9 +165,8 @@ void main() {
       isEmpty,
     );
     expect(
-      createdSnapshot.categories
-          .where((category) => category.name == 'О программе Wallet'),
-      hasLength(1),
+      createdSnapshot.categories.map((category) => category.name).toSet(),
+      sourceSnapshot.categories.map((category) => category.name).toSet(),
     );
     expect(
       createdSnapshot.templates.map((template) => template.name).toSet(),

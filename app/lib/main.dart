@@ -53,6 +53,9 @@ Future<void> main(List<String> arguments) async {
         orElse: () => null,
       );
   WidgetsFlutterBinding.ensureInitialized();
+  // The PDF attachment preview opens documents through the engine API, which
+  // pdfrx requires to be initialised before use.
+  pdfrxFlutterInitialize();
   AppSkinStore.directoryProvider = resolveAppStateDirectory;
   appSkin.value = await AppSkinStore.load();
   runApp(WalletApsApp(initialVaultPath: initialVaultPath));
@@ -3106,8 +3109,9 @@ Widget templateIconWidget(
         fallback: Icon(Icons.vpn_key_outlined, size: size, color: color),
       );
     }
-    // Original SPB Wallet icons are 64x64. Do not scale them down to the
-    // Material icon size requested by compact callers.
+    // Original SPB Wallet icons occupy a 64x64 box. Do not scale them down to
+    // the Material icon size requested by compact callers; the owner's
+    // replacement "Базовые" pictures are 128x128 and are fitted into the box.
     return SizedBox(
       width: 64,
       height: 64,
@@ -3115,8 +3119,8 @@ Widget templateIconWidget(
         originalAsset,
         width: 64,
         height: 64,
-        fit: BoxFit.none,
-        filterQuality: FilterQuality.none,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
         fallback: Icon(Icons.vpn_key_outlined, size: size, color: color),
       ),
     );
@@ -3779,79 +3783,172 @@ class InlinePdfAttachmentPreview extends StatefulWidget {
 
   final Uint8List bytes;
 
+  /// Height of the preview box; every page is fitted whole into it, so a
+  /// wide card dialog no longer enlarges the page past the box and the page
+  /// fits the dialog without scrolling it (owner report, 01.11.2026).
+  static double boxHeightFor(BuildContext context) =>
+      (MediaQuery.sizeOf(context).height * 0.45).clamp(280.0, 560.0);
+
   @override
   State<InlinePdfAttachmentPreview> createState() =>
       _InlinePdfAttachmentPreviewState();
 }
 
+/// Opens the document once, renders the pages one after another into images
+/// sized to the box and closes it. pdfrx's own page widgets re-requested and
+/// cancelled renders on every rebuild of the card dialog and could leave the
+/// preview blank or loading for good.
 class _InlinePdfAttachmentPreviewState
     extends State<InlinePdfAttachmentPreview> {
-  late PdfDocumentRefData documentRef;
   final scrollController = ScrollController();
-
-  void updateDocument() {
-    documentRef = PdfDocumentRefData(
-      widget.bytes,
-      sourceName: 'attachment-${UniqueKey()}',
-    );
-  }
+  List<double> pageAspects = const [];
+  final pageImages = <int, ui.Image>{};
+  bool failed = false;
+  int generation = 0;
+  double? pixelHeight;
 
   @override
-  void initState() {
-    super.initState();
-    updateDocument();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scale = MediaQuery.devicePixelRatioOf(context).clamp(1.0, 3.0);
+    final height = (InlinePdfAttachmentPreview.boxHeightFor(context) * scale)
+        .roundToDouble();
+    if (pixelHeight != height) {
+      pixelHeight = height;
+      renderDocument();
+    }
   }
 
   @override
   void didUpdateWidget(covariant InlinePdfAttachmentPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!listEquals(oldWidget.bytes, widget.bytes)) updateDocument();
+    if (!identical(oldWidget.bytes, widget.bytes) &&
+        !listEquals(oldWidget.bytes, widget.bytes)) {
+      renderDocument();
+    }
+  }
+
+  void clearImages() {
+    for (final image in pageImages.values) {
+      image.dispose();
+    }
+    pageImages.clear();
+  }
+
+  Future<void> renderDocument() async {
+    final run = ++generation;
+    clearImages();
+    pageAspects = const [];
+    failed = false;
+    final pixelHeight = this.pixelHeight!;
+    PdfDocument? document;
+    try {
+      // openData streams files over 1 MB to PDFium through callbacks into
+      // this isolate, which now and then deadlocked on a later opening (the
+      // preview kept loading). The whole attachment is in memory anyway.
+      final data = widget.bytes;
+      document = await PdfDocument.openCustom(
+        read: (buffer, position, size) {
+          final count = min(size, data.length - position);
+          if (count < 0) return -1;
+          buffer.setRange(0, count, data, position);
+          return count;
+        },
+        fileSize: data.length,
+        maxSizeToCacheOnMemory: data.length,
+        sourceName: 'attachment-$run-${identityHashCode(this)}',
+      );
+      if (!mounted || run != generation) return;
+      setState(() {
+        pageAspects = [
+          for (final page in document!.pages) page.width / page.height,
+        ];
+      });
+      for (var index = 0; index < document.pages.length; index++) {
+        final page = document.pages[index];
+        final rendered = await page.render(
+          fullWidth: pixelHeight * page.width / page.height,
+          fullHeight: pixelHeight,
+          backgroundColor: 0xffffffff,
+        );
+        if (rendered == null) continue;
+        try {
+          final image = await rendered.createImage();
+          if (!mounted || run != generation) {
+            image.dispose();
+            return;
+          }
+          setState(() => pageImages[index] = image);
+        } finally {
+          rendered.dispose();
+        }
+      }
+    } catch (_) {
+      if (mounted && run == generation) setState(() => failed = true);
+    } finally {
+      await document?.dispose();
+    }
   }
 
   @override
   void dispose() {
+    generation++;
+    clearImages();
     scrollController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 320,
-      width: double.infinity,
-      child: PdfDocumentViewBuilder(
-        documentRef: documentRef,
-        loadingBuilder: (_) => const Center(child: CircularProgressIndicator()),
-        errorBuilder: (_, __, ___) => const Center(
-          child: Text(
-              'Не удалось показать PDF. Нажмите, чтобы открыть в программе.'),
-        ),
-        builder: (context, document) {
-          if (document == null) return const SizedBox.shrink();
-          return Scrollbar(
-            controller: scrollController,
-            thumbVisibility: true,
-            child: ListView.builder(
-              controller: scrollController,
-              primary: false,
-              itemCount: document.pages.length,
-              itemBuilder: (context, index) {
-                final page = document.pages[index];
-                return Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
+    final boxHeight = InlinePdfAttachmentPreview.boxHeightFor(context);
+    Widget content;
+    if (failed) {
+      content = const Center(
+        child: Text(
+            'Не удалось показать PDF. Нажмите, чтобы открыть в программе.'),
+      );
+    } else if (pageAspects.isEmpty) {
+      content = const Center(child: CircularProgressIndicator());
+    } else {
+      content = Scrollbar(
+        controller: scrollController,
+        thumbVisibility: true,
+        child: ListView.builder(
+          controller: scrollController,
+          primary: false,
+          itemCount: pageAspects.length,
+          itemBuilder: (context, index) {
+            final image = pageImages[index];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: SizedBox(
+                height: boxHeight,
+                child: Center(
                   child: AspectRatio(
-                    aspectRatio: page.width / page.height,
-                    child: PdfPageView(
-                      document: document,
-                      pageNumber: index + 1,
+                    aspectRatio: pageAspects[index],
+                    child: ColoredBox(
+                      color: Colors.white,
+                      child: image == null
+                          ? null
+                          : RawImage(
+                              key: ValueKey('inlinePdfPage-$index'),
+                              image: image,
+                              fit: BoxFit.contain,
+                              filterQuality: FilterQuality.medium,
+                            ),
                     ),
                   ),
-                );
-              },
-            ),
-          );
-        },
-      ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    }
+    return SizedBox(
+      height: boxHeight,
+      width: double.infinity,
+      child: content,
     );
   }
 }
@@ -4166,6 +4263,37 @@ Future<AttachmentContextAction?> showAttachmentContextMenu(
   );
 }
 
+/// Writes the working copy that an external program opens.
+///
+/// A viewer that still holds the previous copy (Foxit, Word) keeps the file
+/// locked. The same contents are then opened again as they are, and new
+/// contents go into a fresh folder under the same file name.
+Future<File> writeAttachmentWorkingCopy(
+  Directory directory,
+  String fileName,
+  Uint8List bytes,
+) async {
+  final file = File('${directory.path}${Platform.pathSeparator}$fileName');
+  try {
+    await file.writeAsBytes(bytes, flush: true);
+    return file;
+  } on FileSystemException {
+    try {
+      if (listEquals(await file.readAsBytes(), bytes)) return file;
+    } on FileSystemException {
+      // The viewer does not allow reading either; a fresh copy follows.
+    }
+  }
+  final fresh = Directory(
+    '${directory.path}${Platform.pathSeparator}'
+    'wallet_aps_open_${DateTime.now().microsecondsSinceEpoch}',
+  );
+  await fresh.create(recursive: true);
+  final copy = File('${fresh.path}${Platform.pathSeparator}$fileName');
+  await copy.writeAsBytes(bytes, flush: true);
+  return copy;
+}
+
 Future<void> openAttachmentBytesWithSystem(
   String fileName,
   Uint8List bytes,
@@ -4179,8 +4307,8 @@ Future<void> openAttachmentBytesWithSystem(
   final temporaryName = Platform.isAndroid
       ? 'wallet_aps_${safeName.hashCode.toUnsigned(32)}.apsblob'
       : 'wallet_aps_$safeName';
-  final file = File('${directory.path}${Platform.pathSeparator}$temporaryName');
-  await file.writeAsBytes(bytes, flush: true);
+  final file =
+      await writeAttachmentWorkingCopy(directory, temporaryName, bytes);
   if (Platform.isAndroid) {
     final opened = await spbWalletChannel.invokeMethod<bool>('openFile', {
       'path': file.path,

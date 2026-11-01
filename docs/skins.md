@@ -163,11 +163,13 @@ the core are unchanged; only presentation differs between skins.
   category path, so a new base gets no empty card folders. The shipped
   layout is the owner's (29.10.2026): all 59 standard templates in 11
   folders.
-- New-base contents (owner decision, 29.10.2026): `MyWallet.swl` is the
-  owner's demo base "тест", re-keyed to `0000` — 12 folders, 16 cards (SPB
-  demo cards, "О программе Wallet" notes and "С чего начать" with the
-  getting-started PDF attached), 60 templates (the standard set and
-  "Заметка") and its icons. Only invented demo data belongs there: every
+- New-base contents (owner decision, 01.11.2026, replacing "Новая база" and "тест" of
+  29.10.2026): `MyWallet.swl` is the owner's demo base "Новая база2",
+  re-keyed to `0000` — 11 folders, 12 cards (SPB demo cards, "Мой пропуск", "Заметка" and
+  "С чего начать" with the getting-started PDF attached), 60 templates (the
+  standard set and "Заметка") and its icons. The shipped
+  `template_layout.json` is captured from the same base, so a new base keeps
+  its template folders. Only invented demo data belongs there: every
   installation ships it.
 - Narrow Light/Dark "Мои записи": the path row and the search field stay
   above the scrolling list (folders, cards, "Найденные").

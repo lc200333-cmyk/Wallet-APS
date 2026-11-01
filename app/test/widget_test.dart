@@ -780,6 +780,19 @@ void main() {
     );
   });
 
+  testWidgets('SPB base icons are fitted whole into the dialog icon box',
+      (tester) async {
+    await tester.runAsync(loadSpb64PngIconAssets);
+    const id = 'spb://apk_icons/res/drawable-hdpi/icons_010.png';
+    await tester.pumpWidget(
+      Center(child: templateIconWidget(id, size: 24)),
+    );
+
+    final image = tester.widget<Image>(find.byType(Image));
+    expect(tester.getSize(find.byType(Image)), const Size(64, 64));
+    expect(image.fit, BoxFit.contain);
+  });
+
   testWidgets('brand icon bundle is available', (tester) async {
     addTearDown(() {
       brandIconAssetsFuture = null;

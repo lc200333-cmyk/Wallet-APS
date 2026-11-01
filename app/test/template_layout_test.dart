@@ -69,9 +69,9 @@ void main() {
     final wallet = SpbWalletDatabase.open(path, 'new-password');
     try {
       final snapshot = wallet.loadSnapshot();
-      expect(snapshot.cards, hasLength(16));
+      expect(snapshot.cards, hasLength(12));
       expect(snapshot.templates, hasLength(60));
-      expect(snapshot.categories, hasLength(12));
+      expect(snapshot.categories, hasLength(11));
       expect(snapshot.embeddedIconPngs, isNotEmpty);
       expect(snapshot.loadReport.hasIssues, isFalse);
       final start =
@@ -80,7 +80,7 @@ void main() {
       expect(snapshot.cards.map((card) => card.title),
           containsAll(['My Passport', 'My Money', 'My Credit Card']));
       expect(snapshot.categories.map((category) => category.name),
-          contains('О программе Wallet'));
+          containsAll(['Личные', 'Кредитные Карточки', 'Заметки', 'Отдых']));
     } finally {
       wallet.close();
     }
