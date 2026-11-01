@@ -1,4 +1,4 @@
-name: Design release cleanup
+name: Release cleanup
 
 on:
   workflow_dispatch:
@@ -13,7 +13,6 @@ permissions:
 
 jobs:
   cleanup:
-    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     runs-on: ubuntu-latest
     steps:
       - name: Keep latest releases

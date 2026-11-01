@@ -12,6 +12,8 @@ the core are unchanged; only presentation differs between skins.
   written for main-project `0465b68` (0.5.3); where names differ, the current
   code wins: "Мои записи", "Управление", "Действие", "Найденные",
   "Последние" are kept, because labels and task texts must not change.
+- Moved into Wallet-APS at 0.7.16 (owner decision, 01.11.2026) under the
+  Wallet APS name, application IDs, settings folder and release channel.
 - The earlier, reverted theme experiment (`6a01960`) was not reused.
 
 ## Selection and storage

@@ -30,7 +30,6 @@ concurrency:
 
 jobs:
   verify:
-    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +53,7 @@ jobs:
 
   version:
     needs: verify
-    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design' && (github.event_name == 'workflow_dispatch' || (github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message, '[skip release]')))
+    if: github.event_name == 'workflow_dispatch' || (github.actor != 'github-actions[bot]' && !contains(github.event.head_commit.message, '[skip release]'))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -96,11 +95,10 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add package.json package-lock.json app/pubspec.yaml app/lib/app_version.dart tools/windows/Wallet-APS.iss tools/build_linux_deb.sh
           git commit -m "chore: release v$VERSION [skip release]"
-          git tag -a "v$VERSION" -m "Wallet APS Design v$VERSION"
+          git tag -a "v$VERSION" -m "Wallet APS v$VERSION"
           git push --atomic origin HEAD:master "refs/tags/v$VERSION"
 
   windows:
-    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: version
     runs-on: windows-latest
     steps:
@@ -152,7 +150,6 @@ jobs:
           retention-days: 1
 
   android:
-    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: version
     runs-on: ubuntu-latest
     steps:
@@ -181,24 +178,10 @@ jobs:
 
       - name: Build release APK in Docker
         shell: bash
-        env:
-          DESIGN_ANDROID_KEYSTORE_BASE64: ${{ secrets.DESIGN_ANDROID_KEYSTORE_BASE64 }}
-          DESIGN_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.DESIGN_ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          set -euo pipefail
-          : "${DESIGN_ANDROID_KEYSTORE_BASE64:?Design signing key is missing}"
-          : "${DESIGN_ANDROID_KEYSTORE_PASSWORD:?Design signing password is missing}"
           mkdir -p dist
           docker compose build build-apk
-          umask 077
-          DESIGN_SIGNING_DIR="$(mktemp -d "$RUNNER_TEMP/design-signing.XXXXXX")"
-          trap 'rm -f -- "$DESIGN_SIGNING_DIR/keystore.p12"; rmdir -- "$DESIGN_SIGNING_DIR"' EXIT
-          printf '%s' "$DESIGN_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$DESIGN_SIGNING_DIR/keystore.p12"
-          HOST_UID="$(id -u)" HOST_GID="$(id -g)" docker compose run --rm \
-            --volume "$DESIGN_SIGNING_DIR:/run/design-signing:ro" \
-            -e BUILD_MODE=release \
-            -e DESIGN_ANDROID_KEYSTORE_PATH=/run/design-signing/keystore.p12 \
-            -e DESIGN_ANDROID_KEYSTORE_PASSWORD build-apk
+          HOST_UID="$(id -u)" HOST_GID="$(id -g)" docker compose run --rm -e BUILD_MODE=release build-apk
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
@@ -208,7 +191,6 @@ jobs:
           retention-days: 1
 
   linux:
-    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: version
     runs-on: ubuntu-latest
     steps:
@@ -236,7 +218,6 @@ jobs:
           retention-days: 1
 
   publish:
-    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     needs: [version, windows, android, linux]
     runs-on: ubuntu-latest
     steps:
@@ -250,7 +231,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: Wallet APS Design ${{ needs.version.outputs.version }}
+          name: Wallet APS ${{ needs.version.outputs.version }}
           generate_release_notes: true
           files: |
             release-assets/Wallet-APS-Setup.exe

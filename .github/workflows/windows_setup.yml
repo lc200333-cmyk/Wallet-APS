@@ -1,5 +1,4 @@
 name: Windows setup
-run-name: Wallet APS Design Windows setup @ ${{ github.sha }}
 
 on:
   workflow_dispatch:
@@ -12,7 +11,6 @@ on:
 
 jobs:
   build-setup:
-    if: github.repository == 'lc200333-cmyk/Wallet-APS-Design'
     runs-on: windows-latest
 
     steps:

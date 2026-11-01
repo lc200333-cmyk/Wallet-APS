@@ -2,8 +2,8 @@
 # Change values here, then run tools/apply_branding.sh (called automatically
 # by tools/build_android_apk.sh and tools/build_linux_deb.sh, and by the
 # Windows CI workflows) to propagate the name/icon to every platform.
-name: Wallet APS Design
-windows_name: Wallet APS Design
+name: Wallet APS
+windows_name: Wallet APS
 
 flutter_launcher_icons:
   android: "launcher_icon"

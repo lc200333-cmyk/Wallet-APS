@@ -4615,8 +4615,7 @@ void main() {
     );
     expect(find.text('Пароль'), findsOneWidget);
     expect(find.byKey(const Key('passwordVersion')), findsOneWidget);
-    expect(find.text('Design v. $currentAppVersion'), findsOneWidget);
-    expect(find.byKey(const Key('designReleasesButton')), findsOneWidget);
+    expect(find.text('v. $currentAppVersion'), findsOneWidget);
     expect(find.byKey(const Key('passwordPrompt')), findsOneWidget);
     expect(find.byKey(const Key('passwordInput')), findsOneWidget);
     expect(

@@ -28,7 +28,7 @@ class FlutterWindow : public Win32Window {
   void SetLoginWindowMode(bool expanded = false);
   void SetMainWindowMode(const std::wstring& title);
   void SetWindowMode(bool login, bool expanded,
-                     const std::wstring& title = L"Wallet APS Design");
+                     const std::wstring& title = L"Wallet APS");
 
   // The project to run.
   flutter::DartProject project_;

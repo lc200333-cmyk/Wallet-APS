@@ -74,7 +74,7 @@ assert.ok(spbDatabase.includes('UPDATE spbwlt_Category SET IconID'));
 const debScript = read('tools/build_linux_deb.sh');
 assert.ok(debScript.includes('flutter build linux --release'));
 assert.ok(debScript.includes('dpkg-deb --build'));
-assert.ok(debScript.includes('wallet-aps-design_${VERSION}_${ARCH}.deb'));
+assert.ok(debScript.includes('wallet-aps_${VERSION}_${ARCH}.deb'));
 assert.ok(debScript.includes('Wallet-APS-linux-amd64.deb'));
 
 const installer = read('tools/windows/Wallet-APS.iss');
@@ -179,6 +179,4 @@ assert.ok(pkg.scripts['docker:release'].includes('docker-compose build build-apk
 assert.ok(pkg.scripts['docker:build-image'].includes('COMPOSE_HTTP_TIMEOUT=300'));
 assert.ok(pkg.scripts['docker:test'].includes('COMPOSE_HTTP_TIMEOUT=300'));
 
-require('./design_repository_isolation.test.js');
-require('./design_android_signing.test.js');
 console.log('packaging_scaffold.test.js: all tests passed');
