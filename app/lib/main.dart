@@ -1503,7 +1503,7 @@ Future<void> Function(Uri uri, {bool chooser}) cardFieldLinkOpener =
 /// Android lists every program that handles it; elsewhere the system's own
 /// association decides.
 Future<void> openExternalUri(Uri uri, {bool chooser = false}) async {
-  if (Platform.isAndroid) {
+  if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
     await spbWalletChannel.invokeMethod<void>(
       'openExternalUri',
       {'uri': uri.toString(), 'chooser': chooser},
@@ -4250,7 +4250,7 @@ Future<void> openAttachmentBytesWithSystem(
       : 'wallet_aps_$safeName';
   final file =
       await writeAttachmentWorkingCopy(directory, temporaryName, bytes);
-  if (Platform.isAndroid) {
+  if (Platform.isAndroid || Platform.isIOS || Platform.isMacOS) {
     final opened = await spbWalletChannel.invokeMethod<bool>('openFile', {
       'path': file.path,
       'mimeType': attachmentMimeType(fileName),
@@ -5864,6 +5864,23 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return true;
   }
 
+  /// The iOS picker returns a temporary copy, so saves would never reach the
+  /// original. Keep a persistent copy in the app's Documents/Wallet APS.
+  Future<String> importIosWalletCopy(String pickedPath) async {
+    final directory = await appVaultDirectory();
+    if (File(pickedPath).parent.path == directory.path) return pickedPath;
+    final fileName = File(pickedPath).uri.pathSegments.last;
+    final dot = fileName.lastIndexOf('.');
+    final stem = dot > 0 ? fileName.substring(0, dot) : fileName;
+    final extension = dot > 0 ? fileName.substring(dot) : '';
+    var target = File('${directory.path}/$fileName');
+    for (var index = 2; target.existsSync(); index++) {
+      target = File('${directory.path}/$stem ($index)$extension');
+    }
+    await File(pickedPath).copy(target.path);
+    return target.path;
+  }
+
   Future<void> pickSpbWalletFile() async {
     if (Platform.isAndroid) {
       try {
@@ -5917,8 +5934,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       allowedExtensions: const ['swl', 'db', 'sqlite'],
       withData: false,
     );
-    final path = result?.files.single.path;
-    if (path == null) return;
+    final pickedPath = result?.files.single.path;
+    if (pickedPath == null) return;
+    var path = pickedPath;
+    if (Platform.isIOS) {
+      try {
+        path = await importIosWalletCopy(path);
+      } catch (error) {
+        setState(() => message = 'Не удалось выбрать файл базы: $error');
+        return;
+      }
+    }
     final closed = await closeCurrentVaultForPasswordPrompt();
     if (!closed || !mounted) return;
     setState(() {
@@ -6240,6 +6266,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final pathController = TextEditingController();
     if (Platform.isAndroid) {
       pathController.text = 'Android-хранилище';
+    } else if (Platform.isIOS) {
+      // iOS apps can only keep writing inside their own container; the
+      // Documents folder is exposed in the Files app.
+      pathController.text = (await appVaultDirectory()).path;
+      if (!mounted) return;
     }
     final nameController = TextEditingController(text: 'Новая база');
     final newPasswordController = TextEditingController();
@@ -6272,6 +6303,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         });
         return;
       }
+      if (Platform.isIOS) return;
       var selectedDirectory = await FilePicker.platform.getDirectoryPath(
         dialogTitle: 'Назначить путь для новой базы',
         lockParentWindow: true,
