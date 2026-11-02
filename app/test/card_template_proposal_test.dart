@@ -109,8 +109,9 @@ void main() {
                     .byKey(const Key('cardTemplateProposalText'))
                     .evaluate()
                     .isNotEmpty);
-        if (flowError != null)
+        if (flowError != null) {
           Error.throwWithStackTrace(flowError!, flowStack!);
+        }
         expect(
             find.byKey(const Key('cardTemplateProposalText')), findsOneWidget);
         expect(
@@ -155,8 +156,9 @@ void main() {
                 ? 'cardTemplateConfirm'
                 : 'cardTemplateDecline')));
         await settleStorage(tester, () => flowCompleted);
-        if (flowError != null)
+        if (flowError != null) {
           Error.throwWithStackTrace(flowError!, flowStack!);
+        }
         final snapshot = wallet.loadSnapshot();
         final stored = snapshot.cards.firstWhere((card) => card.id == cardId);
         final other =
