@@ -217,6 +217,110 @@ jobs:
           path: dist/Wallet-APS-linux-amd64.deb
           retention-days: 1
 
+  # Uploads iOS and macOS builds to TestFlight. Not a dependency of `publish`,
+  # so an Apple-side problem never blocks the GitHub release.
+  apple:
+    needs: version
+    runs-on: macos-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    env:
+      FLUTTER_VERSION: '3.44.7'
+      BUNDLE_ID: com.lc200333cmyk.walletaps
+      TESTFLIGHT_GROUP: Публичная ссылка
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.tag }}
+          persist-credentials: false
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
+      - name: Install App Store Connect API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "$RUNNER_TEMP/asc"
+          printf '%s\n' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8"
+          echo "ASC_KEY_PATH=$RUNNER_TEMP/asc/AuthKey_${ASC_KEY_ID}.p8" >> "$GITHUB_ENV"
+
+      - name: Prepare Flutter project
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          flutter pub get --enforce-lockfile
+          flutter build ios --release --config-only --no-pub
+          flutter build macos --release --config-only --no-pub
+          BUILD_NUMBER="$(sed -n 's/^version: [^+]*+\([0-9]*\)$/\1/p' pubspec.yaml)"
+          echo "BUILD_NUMBER=$BUILD_NUMBER" >> "$GITHUB_ENV"
+
+      # Archives are built without a signing identity; the export step signs
+      # them with Apple's cloud-managed distribution certificate via the API
+      # key. The macOS archive gets an ad-hoc signature so that its sandbox
+      # entitlements survive into the exported package.
+      - name: Upload iOS build
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -workspace ios/Runner.xcworkspace -scheme Runner \
+            -configuration Release -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/ios.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO archive
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/ios.xcarchive" \
+            -exportOptionsPlist ../tools/apple/ExportOptions-upload.plist \
+            -exportPath "$RUNNER_TEMP/ios-export" -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      # arm64 only: Flutter 3.44.7 fails to verify universal engine binaries
+      # with the lipo shipped in newer Xcode releases.
+      - name: Upload macOS build
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -workspace macos/Runner.xcworkspace -scheme Runner \
+            -configuration Release -archivePath "$RUNNER_TEMP/macos.xcarchive" \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
+            archive
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/macos.xcarchive" \
+            -exportOptionsPlist ../tools/apple/ExportOptions-upload.plist \
+            -exportPath "$RUNNER_TEMP/macos-export" -allowProvisioningUpdates \
+            -authenticationKeyPath "$ASC_KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+      - name: Distribute to TestFlight testers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for platform in IOS MAC_OS; do
+            python3 -I tools/apple/testflight_distribute.py \
+              --bundle-id "$BUNDLE_ID" --platform "$platform" \
+              --version "${{ needs.version.outputs.version }}" \
+              --build-number "$BUILD_NUMBER" --group "$TESTFLIGHT_GROUP"
+          done
+
+      - name: Remove App Store Connect API key
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/asc"
+
   publish:
     needs: [version, windows, android, linux]
     runs-on: ubuntu-latest
