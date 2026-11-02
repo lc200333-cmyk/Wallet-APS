@@ -132,7 +132,14 @@ Color skinCardSurface(BuildContext context, PaletteColor color) {
   final t = WalletSkinTokens.of(context);
   if (t.isRetro) return color.bg;
   if (skinIsDark(context)) return t.bg;
-  return skinTileForPalette(t, color).tile;
+  return skinCardWindowBackground(context, skinTileForPalette(t, color).tile);
+}
+
+/// Main card/template surface. Light is intentionally five percent closer to
+/// white; Retro and Dark retain their established colours.
+Color skinCardWindowBackground(BuildContext context, Color color) {
+  if (WalletSkinTokens.of(context).skin != AppSkin.light) return color;
+  return Color.lerp(color, Colors.white, 0.05)!;
 }
 
 /// Field background placed on a card surface; in Dark the surface itself
@@ -148,13 +155,33 @@ bool skinIsDark(BuildContext context) =>
     !WalletSkinTokens.of(context).isRetro &&
     Theme.of(context).brightness == Brightness.dark;
 
-/// Dark card and template dialogs (preview and editor): fields have the
-/// dialog's colour, and their outline and label are the grey of the Light
-/// outline (owner decision). Focus and errors keep their colours.
+/// Card and template dialogs (preview and editor). Light uses an outline that
+/// is twenty percent closer to black. Dark fields have the dialog's colour,
+/// and their outline and label are the grey of the Light outline. Focus and
+/// errors keep their colours in both themes.
 Widget skinCardFieldsTheme(BuildContext context, Widget child) {
-  if (!skinIsDark(context)) return child;
+  final tokens = WalletSkinTokens.of(context);
+  if (tokens.isRetro) return child;
   final theme = Theme.of(context);
   final fields = theme.inputDecorationTheme;
+  if (!tokens.isDark) {
+    final outline = Color.lerp(tokens.outline, Colors.black, 0.20)!;
+    OutlineInputBorder recolor(InputBorder? source) =>
+        source is OutlineInputBorder
+            ? source.copyWith(
+                borderSide: source.borderSide.copyWith(color: outline),
+              )
+            : OutlineInputBorder(borderSide: BorderSide(color: outline));
+    return Theme(
+      data: theme.copyWith(
+        inputDecorationTheme: fields.copyWith(
+          border: recolor(fields.border),
+          enabledBorder: recolor(fields.enabledBorder),
+        ),
+      ),
+      child: child,
+    );
+  }
   final grey = WalletSkinTokens.light.outline;
   final enabled = fields.enabledBorder;
   final border = enabled is OutlineInputBorder
@@ -239,16 +266,17 @@ Widget skinModernActionButton({
 
 /// Colour swatch fill: the stored colour in Retro, its modern tile otherwise.
 Color swatchColor(BuildContext context, PaletteColor color) {
+  if (color.id == 'template_white') return Colors.white;
   final t = WalletSkinTokens.of(context);
   return t.isRetro ? color.bg : skinTileForPalette(t, color).tile;
 }
 
 Color swatchBorder(BuildContext context, bool selected) {
   final t = WalletSkinTokens.of(context);
-  if (t.isRetro) {
-    return selected ? const Color(0xff253d4c) : const Color(0xff8b969d);
-  }
-  return selected ? t.primary : t.outline;
+  final color = t.isRetro
+      ? (selected ? const Color(0xff253d4c) : const Color(0xff8b969d))
+      : (selected ? t.primary : t.outline);
+  return Color.lerp(color, Colors.black, 0.15)!;
 }
 
 Color skinFrameEdge(BuildContext context) {

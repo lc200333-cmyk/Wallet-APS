@@ -1861,6 +1861,7 @@ class SecretItem {
     this.spbColor,
     this.fieldOrder = const [],
     this.hiddenFieldIds = const {},
+    this.customFields = const [],
   });
 
   final String id;
@@ -1880,6 +1881,7 @@ class SecretItem {
   final int? spbColor;
   final List<String> fieldOrder;
   final Set<String> hiddenFieldIds;
+  final List<FieldDefinition> customFields;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -1897,6 +1899,7 @@ class SecretItem {
         'spbColor': spbColor,
         'fieldOrder': fieldOrder,
         'hiddenFieldIds': hiddenFieldIds.toList(),
+        'customFields': customFields.map((field) => field.toJson()).toList(),
       };
 
   factory SecretItem.fromJson(Map<String, dynamic> json) => SecretItem(
@@ -1922,6 +1925,10 @@ class SecretItem {
         hiddenFieldIds: Set<String>.from(
           json['hiddenFieldIds'] as List? ?? const [],
         ),
+        customFields: (json['customFields'] as List? ?? const [])
+            .map((field) => FieldDefinition.fromJson(
+                Map<String, dynamic>.from(field as Map)))
+            .toList(),
       );
 }
 
@@ -4722,6 +4729,7 @@ List<FieldDefinition> fieldsForItem(
 }) {
   final byId = <String, FieldDefinition>{
     for (final field in template.fields) field.id: field,
+    for (final field in item.customFields) field.id: field,
   };
   final populatedValueIds = item.values.entries
       .where((entry) => cardFieldValueIsPopulated(entry.value))
@@ -4737,7 +4745,7 @@ List<FieldDefinition> fieldsForItem(
     );
   }
   final visibleIds = projectVisibleFieldIds(
-    definedIds: template.fields.map((field) => field.id),
+    definedIds: byId.keys,
     valueIds: populatedValueIds,
     preferredOrder: item.fieldOrder,
     hiddenIds: includeHidden ? const {} : item.hiddenFieldIds,
@@ -5077,11 +5085,19 @@ int passwordStrengthScore(String password) {
 
 String normalizeUrlInput(String value) {
   final trimmed = value.trim();
+  if (RegExp(r'^https?://$', caseSensitive: false).hasMatch(trimmed)) {
+    return '';
+  }
   if (trimmed.isEmpty ||
       RegExp(r'^[a-zA-Z][a-zA-Z0-9+.-]*://').hasMatch(trimmed)) {
     return trimmed;
   }
   return 'https://$trimmed';
+}
+
+String initialCardFieldText(FieldDefinition field, String value) {
+  if (field.type == 'url' && value.trim().isEmpty) return 'http://';
+  return value;
 }
 
 String formatDateInput(DateTime date) {
@@ -5566,7 +5582,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   void commitSessionUndo(SessionUndoEntry entry) {
     sessionUndoHistory.add(entry);
     while (sessionUndoHistory.length > 12) {
-      sessionUndoHistory.removeAt(0).databaseSnapshot.dispose();
+      // Keep the session's starting snapshot for "undo all".
+      sessionUndoHistory.removeAt(1).databaseSnapshot.dispose();
     }
     if (mounted) setState(() {});
   }
@@ -5582,7 +5599,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     sessionUndoHistory.clear();
   }
 
-  Future<void> restoreSessionUndoAt(int index) async {
+  Future<void> restoreSessionUndoAt(int index,
+      {bool allChanges = false}) async {
     final wallet = spbWallet;
     if (wallet == null ||
         sessionUndoInProgress ||
@@ -5629,7 +5647,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         }
         if (written) message = null;
       });
-      showSpbOperationMessage('Отменено: ${entry.label}');
+      showSpbOperationMessage(allChanges
+          ? 'Отменены все изменения этой сессии'
+          : 'Отменено: ${entry.label}');
     } catch (error) {
       showSpbOperationMessage('Не удалось отменить изменение: $error');
     } finally {
@@ -7462,6 +7482,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         spbColor: card.cardColor,
         fieldOrder: card.fieldOrder,
         hiddenFieldIds: card.hiddenFieldIds,
+        customFields: card.customFields.map(FieldDefinition.fromJson).toList(),
       );
     }).toList();
   }
@@ -8040,6 +8061,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               ),
             ]
           : [
+              const PopupMenuItem<int>(
+                key: Key('sessionUndoAll'),
+                value: -1,
+                child: ContextMenuLabel('Отменить все изменения',
+                    icon: Icons.undo),
+              ),
+              const PopupMenuDivider(),
               for (var index = sessionUndoHistory.length - 1;
                   index >= 0;
                   index--)
@@ -8051,7 +8079,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             ],
     );
     if (selected != null && mounted) {
-      await restoreSessionUndoAt(selected);
+      await restoreSessionUndoAt(selected == -1 ? 0 : selected,
+          allChanges: selected == -1);
     }
   }
 
@@ -11400,8 +11429,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   ) {
     final fieldIds = replacementTemplateFieldIds(source, destination);
     final values = <String, String>{};
+    final customIds = item.customFields.map((field) => field.id).toSet();
     for (final entry in item.values.entries) {
-      if (entry.key == spbDescriptionFieldId) {
+      if (entry.key == spbDescriptionFieldId || customIds.contains(entry.key)) {
         values[entry.key] = entry.value;
         continue;
       }
@@ -11413,6 +11443,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return SecretItem(
       id: item.id,
       templateId: destination.id,
+      customFields: item.customFields,
       title: item.title,
       category: item.category,
       colorId: item.colorId,
@@ -11424,12 +11455,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       backgroundImageBase64: item.backgroundImageBase64,
       spbColor: item.spbColor,
       fieldOrder: [
-        for (final fieldId in item.fieldOrder)
+        for (final fieldId in item.fieldOrder) ...[
+          if (customIds.contains(fieldId)) fieldId,
           if (fieldIds[fieldId] case final replacementId?) replacementId,
+        ],
       ],
       hiddenFieldIds: {
-        for (final fieldId in item.hiddenFieldIds)
+        for (final fieldId in item.hiddenFieldIds) ...[
+          if (customIds.contains(fieldId)) fieldId,
           if (fieldIds[fieldId] case final replacementId?) replacementId,
+        ],
       },
     );
   }
@@ -11578,6 +11613,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             backgroundImageBase64: item.backgroundImageBase64,
             fieldOrder: item.fieldOrder,
             hiddenFieldIds: item.hiddenFieldIds,
+            customFields:
+                item.customFields.map((field) => field.toJson()).toList(),
             modifiedAt: item.modifiedAt,
           ),
         );
@@ -12433,6 +12470,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           spbColor: item.spbColor,
           fieldOrder: item.fieldOrder,
           hiddenFieldIds: item.hiddenFieldIds,
+          customFields: item.customFields,
         );
         items = [
           for (final entry in items)
@@ -13118,7 +13156,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             description: item.values[spbDescriptionFieldId] ?? '',
             categoryPath: item.category,
             templateId: templateIds[item.templateId]!,
+            customFields:
+                item.customFields.map((field) => field.toJson()).toList(),
             fieldValues: {
+              for (final field in item.customFields)
+                field.id: item.values[field.id] ?? '',
               for (final field in template.fields)
                 if (field.id != spbDescriptionFieldId &&
                     (item.values[field.id]?.isNotEmpty ?? false))
@@ -13224,6 +13266,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         spbColor: item.spbColor,
         fieldOrder: item.fieldOrder,
         hiddenFieldIds: item.hiddenFieldIds,
+        customFields: item.customFields,
       );
       final savedId = await persistItem(clone);
       if (savedId != null) {
@@ -13570,6 +13613,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           for (final entry in card.fieldValues.entries)
             if (importedFieldIds[entry.key] != null)
               importedFieldIds[entry.key]!: entry.value,
+          for (final field in card.customFields)
+            field['id'] as String: card.fieldValues[field['id']] ?? '',
         };
         try {
           destination.saveCard(
@@ -13585,6 +13630,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     )
                   : destinationCategoryPath,
               templateId: importedTemplateId,
+              customFields: card.customFields,
               fieldValues: importedValues,
               iconId: importedCardIconId,
               iconBytes: snapshot.embeddedIconPngs[importedCardIconId],
@@ -13593,11 +13639,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               backgroundImageBase64: card.backgroundImageBase64,
               fieldOrder: [
                 for (final id in card.fieldOrder)
-                  if (importedFieldIds[id] != null) importedFieldIds[id]!,
+                  if (importedFieldIds[id] != null)
+                    importedFieldIds[id]!
+                  else if (card.customFields.any((field) => field['id'] == id))
+                    id,
               ],
               hiddenFieldIds: {
                 for (final id in card.hiddenFieldIds)
-                  if (importedFieldIds[id] != null) importedFieldIds[id]!,
+                  if (importedFieldIds[id] != null)
+                    importedFieldIds[id]!
+                  else if (card.customFields.any((field) => field['id'] == id))
+                    id,
               },
               modifiedAt: card.modifiedAt,
             ),
@@ -13619,6 +13671,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       )
                     : destinationCategoryPath,
                 templateId: importedTemplateId,
+                customFields: card.customFields,
                 fieldValues: importedValues,
                 iconId: importedCardIconId,
                 cardColor: card.cardColor,
@@ -16081,6 +16134,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       spbColor: current.spbColor,
       fieldOrder: current.fieldOrder,
       hiddenFieldIds: current.hiddenFieldIds,
+      customFields: current.customFields,
     );
     setState(() {
       selectedItemId = selected.id;
@@ -16202,6 +16256,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       spbColor: item.spbColor,
       fieldOrder: item.fieldOrder,
       hiddenFieldIds: item.hiddenFieldIds,
+      customFields: item.customFields,
     );
     final savedId = await persistItem(updated);
     return savedId == null ? null : itemById(savedId);
@@ -16392,7 +16447,76 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     if (saved == null) return null;
     final savedId = await persistItem(saved);
     if (savedId == null) return null;
-    return itemById(savedId) ?? saved;
+    final persisted = itemById(savedId) ?? saved;
+    if (persisted.customFields.isNotEmpty && mounted && unlocked) {
+      return offerTemplateForCard(persisted);
+    }
+    return persisted;
+  }
+
+  Future<SecretItem> offerTemplateForCard(SecretItem card) async {
+    final source = templateFor(card.templateId);
+    final fields = fieldsForItem(source, card, includeHidden: true);
+    final proposal = await showDialog<CardTemplate>(
+      context: context,
+      builder: (context) => skinCardFieldsTheme(
+        context,
+        TemplateEditorDialog(
+          fromCard: true,
+          cardSourceTemplate: source,
+          templateFolders: spbTemplateFolderNames,
+          initial: CardTemplate(
+            id: makeId('tpl'),
+            name: card.title,
+            iconId: itemIconId(card, source),
+            colorId: card.colorId,
+            spbColor: card.spbColor,
+            categoryPath: source.displayCategoryPath,
+            fields: fields,
+          ),
+        ),
+      ),
+    );
+    if (proposal == null || !mounted || !unlocked) return card;
+    final updateExisting = proposal.id == source.id;
+    if (!await saveSpbTemplateDefinition(proposal, isNew: !updateExisting)) {
+      return card;
+    }
+    if (!mounted || !unlocked) return card;
+    final created = templatesById[selectedTemplateId];
+    if (created == null) return card;
+    final sourceFields = proposal.fields
+        .where((field) => field.id != spbDescriptionFieldId)
+        .toList();
+    final mapping = <String, String>{
+      for (var i = 0; i < sourceFields.length; i++)
+        sourceFields[i].id: created.fields[i].id,
+    };
+    final converted = SecretItem(
+      id: card.id,
+      templateId: created.id,
+      title: card.title,
+      category: card.category,
+      colorId: card.colorId,
+      values: {
+        for (final entry in card.values.entries)
+          mapping[entry.key] ?? entry.key: entry.value,
+      },
+      modifiedAt: card.modifiedAt,
+      attachments: card.attachments,
+      hitCount: card.hitCount,
+      iconId: card.iconId,
+      backgroundImageBase64: card.backgroundImageBase64,
+      spbColor: card.spbColor,
+      fieldOrder: [for (final id in card.fieldOrder) mapping[id] ?? id],
+      hiddenFieldIds: {for (final id in card.hiddenFieldIds) mapping[id] ?? id},
+    );
+    final savedId = await saveSpbItem(
+      converted,
+      useTemplateView: true,
+      replacedFieldIds: mapping.keys.toSet(),
+    );
+    return savedId == null ? card : itemById(savedId) ?? converted;
   }
 
   Future<String?> persistItem(SecretItem saved) async {
@@ -16414,6 +16538,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         first.backgroundImageBase64 != second.backgroundImageBase64 ||
         first.spbColor != second.spbColor ||
         !mapEquals(first.values, second.values) ||
+        jsonEncode(
+                first.customFields.map((field) => field.toJson()).toList()) !=
+            jsonEncode(
+                second.customFields.map((field) => field.toJson()).toList()) ||
         !listEquals(first.fieldOrder, second.fieldOrder) ||
         !setEquals(first.hiddenFieldIds, second.hiddenFieldIds) ||
         first.attachments.length != second.attachments.length) {
@@ -16459,7 +16587,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return true;
   }
 
-  Future<String?> saveSpbItem(SecretItem saved) async {
+  Future<String?> saveSpbItem(
+    SecretItem saved, {
+    bool useTemplateView = false,
+    Set<String> replacedFieldIds = const {},
+  }) async {
     final wallet = spbWallet;
     if (wallet == null) return null;
     if (!ensureSpbWalletWritable()) return null;
@@ -16507,6 +16639,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       }
       wallet.saveCard(
         SpbWalletCardDraft(
+          useTemplateView: useTemplateView,
+          replacedFieldIds: replacedFieldIds,
           id: cardId,
           title: saved.title,
           description: saved.values[spbDescriptionFieldId] ?? '',
@@ -16524,6 +16658,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           backgroundImageBase64: saved.backgroundImageBase64,
           fieldOrder: saved.fieldOrder,
           hiddenFieldIds: saved.hiddenFieldIds,
+          customFields:
+              saved.customFields.map((field) => field.toJson()).toList(),
           modifiedAt: saved.modifiedAt,
         ),
       );
@@ -16576,6 +16712,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           spbColor: saved.spbColor,
           fieldOrder: List<String>.from(saved.fieldOrder),
           hiddenFieldIds: Set<String>.from(saved.hiddenFieldIds),
+          customFields: saved.customFields,
         );
         if (existing == null) {
           items = [...items, persisted];
@@ -16724,6 +16861,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         TemplateEditorDialog(
           initial: draft ?? template,
           initialCategoryPath: selectedTemplateFolder ?? '',
+          templateFolders: spbTemplateFolderNames,
         ),
       ),
     );
@@ -18958,6 +19096,7 @@ class _CardPreviewDialogState extends State<CardPreviewDialog> {
                   ),
                   Expanded(
                     child: DecoratedBox(
+                      key: const Key('cardPreviewBackground'),
                       decoration: cardSurfaceDecoration(
                         color: skinCardSurface(context, color),
                         backgroundImage: backgroundImage,
@@ -19303,6 +19442,7 @@ class CardEditorSnapshot {
     required this.attachments,
     this.backgroundImageBase64,
     this.spbColor,
+    this.customFields = const [],
   });
 
   final String templateId;
@@ -19317,6 +19457,7 @@ class CardEditorSnapshot {
   final List<SecretAttachment> attachments;
   final String? backgroundImageBase64;
   final int? spbColor;
+  final List<FieldDefinition> customFields;
 
   String get signature => [
         templateId,
@@ -19330,6 +19471,7 @@ class CardEditorSnapshot {
         fieldOrder.join('\u0001'),
         (hiddenFieldIds.toList()..sort()).join('\u0001'),
         for (final entry in values.entries) '${entry.key}\u0001${entry.value}',
+        jsonEncode(customFields.map((field) => field.toJson()).toList()),
         for (final entry in attachments)
           '${entry.id}\u0001${entry.fileName}\u0001${entry.size}\u0001${entry.deleted}',
       ].join('\u0002');
@@ -19377,6 +19519,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   String? backgroundImageBase64;
   int? spbColor;
   final Set<String> visibleSecrets = {};
+  final List<FieldDefinition> customFields = [];
   final List<CardEditorSnapshot> undoHistory = [];
   final ScrollController editorScrollController = ScrollController();
   bool attachmentDropActive = false;
@@ -19402,7 +19545,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       ? retroEditorBackgroundColor
       : skinIsDark(context)
           ? WalletSkinTokens.of(context).bg
-          : skinEditorTile.tile;
+          : skinCardWindowBackground(context, skinEditorTile.tile);
 
   /// Field fill on the editor surface.
   // Dark fields show the editor surface (see skinCardFieldsTheme).
@@ -19431,7 +19574,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
       widget.templates.firstWhere((entry) => entry.id == templateId);
 
   List<FieldDefinition> get allCardFields {
-    final result = <FieldDefinition>[...template.fields];
+    final result = <FieldDefinition>[...template.fields, ...customFields];
     final known = result.map((field) => field.id).toSet();
     for (final entry in widget.initial?.values.entries ??
         const <MapEntry<String, String>>[]) {
@@ -19455,6 +19598,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
   void initState() {
     super.initState();
     editorOpenedAt = DateTime.now();
+    customFields.addAll(widget.initial?.customFields ?? const []);
     templateId = widget.initial?.templateId ?? widget.templates.first.id;
     colorId = widget.initial?.colorId ?? template.colorId;
     iconId = widget.initial?.iconId ?? template.iconId;
@@ -19470,7 +19614,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     values = {
       for (final field in allCardFields)
         field.id: TextEditingController(
-          text: widget.initial?.values[field.id] ?? '',
+          text: initialCardFieldText(
+            field,
+            widget.initial?.values[field.id] ?? '',
+          ),
         ),
     };
     hiddenFieldIds = {...?widget.initial?.hiddenFieldIds};
@@ -19512,6 +19659,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         },
         fieldOrder: [...fieldOrder],
         hiddenFieldIds: {...hiddenFieldIds},
+        customFields: [...customFields],
         attachments: [...attachments],
         backgroundImageBase64: backgroundImageBase64,
         spbColor: spbColor,
@@ -19534,6 +19682,9 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     final snapshot = undoHistory.removeLast();
     setState(() {
       templateId = snapshot.templateId;
+      customFields
+        ..clear()
+        ..addAll(snapshot.customFields);
       colorId = snapshot.colorId;
       categorySelection = snapshot.categorySelection;
       iconId = snapshot.iconId;
@@ -19696,6 +19847,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                 ),
                 Expanded(
                   child: DecoratedBox(
+                    key: const Key('cardEditorBackground'),
                     decoration: cardSurfaceDecoration(
                       color: editorBackgroundColor,
                       backgroundImage: editorBackgroundImage,
@@ -19818,6 +19970,92 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     );
   }
 
+  Future<void> addCustomField() async {
+    final label = TextEditingController();
+    var type = 'text';
+    final field = await showDialog<FieldDefinition>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, update) => AlertDialog(
+          title: const Text('Добавить поле'),
+          content: SizedBox(
+            width: 360,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  key: const Key('cardNewFieldName'),
+                  controller: label,
+                  autofocus: true,
+                  onChanged: (_) => update(() {}),
+                  decoration: const InputDecoration(labelText: 'Название поля'),
+                ),
+                const SizedBox(height: 16),
+                DropdownButtonFormField<String>(
+                  key: const Key('cardNewFieldType'),
+                  initialValue: type,
+                  isExpanded: true,
+                  decoration:
+                      const InputDecoration(labelText: 'Тип переменной'),
+                  items: const [
+                    DropdownMenuItem(
+                        value: 'text', child: Text('Маленькая строка')),
+                    DropdownMenuItem(value: 'username', child: Text('Логин')),
+                    DropdownMenuItem(
+                        value: 'multiline_note', child: Text('Большая строка')),
+                    DropdownMenuItem(value: 'password', child: Text('Пароль')),
+                    DropdownMenuItem(
+                        value: 'custom_secret', child: Text('Секрет')),
+                    DropdownMenuItem(value: 'number', child: Text('Число')),
+                    DropdownMenuItem(value: 'email', child: Text('Email')),
+                    DropdownMenuItem(value: 'phone', child: Text('Телефон')),
+                    DropdownMenuItem(value: 'date', child: Text('Дата')),
+                    DropdownMenuItem(value: 'url', child: Text('WEB')),
+                  ],
+                  onChanged: (value) => update(() => type = value ?? 'text'),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Отмена'),
+            ),
+            TextButton(
+              key: const Key('cardNewFieldConfirm'),
+              onPressed: label.text.trim().isEmpty
+                  ? null
+                  : () => Navigator.pop(
+                        dialogContext,
+                        FieldDefinition(
+                          id: SpbWalletDatabase.makeId(),
+                          label: label.text.trim(),
+                          type: type,
+                          secret: fieldTypeIsSecret(type),
+                        ),
+                      ),
+              child: const Text('Добавить'),
+            ),
+          ],
+        ),
+      ),
+    );
+    // The dialog route may still animate after its result is delivered.
+    // Dispose only after its text field has left the widget tree.
+    await Future<void>.delayed(kThemeAnimationDuration);
+    label.dispose();
+    if (field == null || !mounted) return;
+    rememberCurrentAction();
+    setState(() {
+      customFields.add(field);
+      values[field.id] = TextEditingController(
+        text: initialCardFieldText(field, ''),
+      );
+      fieldOrder.add(field.id);
+    });
+  }
+
   Widget buildCardEditorContent({required bool wideLayout}) {
     return LayoutBuilder(
         builder: (context, constraints) => Column(
@@ -19827,6 +20065,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
                   ...buildWideCardEditorHeader()
                 else
                   ...buildNarrowCardEditorHeader(),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    key: const Key('cardAddFieldButton'),
+                    onPressed: addCustomField,
+                    icon: const Icon(Icons.add),
+                    label: const Text('Добавить поле'),
+                  ),
+                ),
                 const SizedBox(height: 10),
                 for (final field in orderedCardFields)
                   EnsureVisibleWhenFocused(
@@ -20100,12 +20347,15 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
               values.putIfAbsent(
                 field.id,
                 () => TextEditingController(
-                  text: widget.initial?.values[field.id] ?? '',
+                  text: initialCardFieldText(
+                    field,
+                    widget.initial?.values[field.id] ?? '',
+                  ),
                 ),
               );
             }
             hiddenFieldIds = {};
-            fieldOrder = [for (final field in template.fields) field.id];
+            fieldOrder = [for (final field in allCardFields) field.id];
           });
         },
       ),
@@ -20513,6 +20763,7 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
         spbColor: spbColor,
         fieldOrder: fieldOrder,
         hiddenFieldIds: hiddenFieldIds,
+        customFields: [...customFields],
       ),
     );
   }
@@ -21250,7 +21501,10 @@ class TemplatePreviewDialog extends StatelessWidget {
     // Dark draws the template on the main theme colour, like a card.
     final backgroundColor = skinIsDark(context)
         ? skinCardSurface(context, templateDisplayColor(template))
-        : templateDisplayBackground(template);
+        : skinCardWindowBackground(
+            context,
+            templateDisplayBackground(template),
+          );
     Uint8List? customIconBytes;
     try {
       final encoded = template.embeddedIconBase64;
@@ -21291,6 +21545,7 @@ class TemplatePreviewDialog extends StatelessWidget {
               ),
               Expanded(
                 child: ColoredBox(
+                  key: const Key('templatePreviewBackground'),
                   color: backgroundColor,
                   child: SingleChildScrollView(
                     padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
@@ -21450,11 +21705,17 @@ class TemplateEditorDialog extends StatefulWidget {
   const TemplateEditorDialog({
     this.initial,
     this.initialCategoryPath = '',
+    this.fromCard = false,
+    this.templateFolders = const [],
+    this.cardSourceTemplate,
     super.key,
   });
 
   final CardTemplate? initial;
   final String initialCategoryPath;
+  final bool fromCard;
+  final List<String> templateFolders;
+  final CardTemplate? cardSourceTemplate;
 
   @override
   State<TemplateEditorDialog> createState() => _TemplateEditorDialogState();
@@ -21559,7 +21820,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       ? retroEditorBackgroundColor
       : skinIsDark(context)
           ? WalletSkinTokens.of(context).bg
-          : skinEditorTile.tile;
+          : skinCardWindowBackground(context, skinEditorTile.tile);
 
   /// Field fill on the editor surface.
   // Dark fields show the editor surface (see skinCardFieldsTheme).
@@ -21653,6 +21914,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                 templateTitleBar(),
                 Expanded(
                   child: ColoredBox(
+                    key: const Key('templateEditorBackground'),
                     color: editorBackgroundColor,
                     child: Scrollbar(
                       controller: editorScrollController,
@@ -21664,8 +21926,54 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            if (widget.fromCard) ...[
+                              const Text(
+                                'Карточка сохранена. Изменить действующий шаблон '
+                                'или создать новый для совместимости со SPB Wallet?',
+                                key: Key('cardTemplateProposalText'),
+                              ),
+                              const SizedBox(height: 12),
+                              if (widget.cardSourceTemplate != null) ...[
+                                Text('«Изменить шаблон» обновит действующий '
+                                    'шаблон «${widget.cardSourceTemplate!.displayName}» '
+                                    'для всех связанных карточек.'),
+                                const SizedBox(height: 12),
+                              ],
+                            ],
                             templateIconPicker(),
                             const SizedBox(height: 10),
+                            if (widget.fromCard) ...[
+                              templateIconPickerButtons(),
+                              const SizedBox(height: 12),
+                            ],
+                            DropdownButtonFormField<String>(
+                              key: Key(widget.fromCard
+                                  ? 'cardTemplateFolder'
+                                  : 'templateCategoryFolder'),
+                              initialValue: categoryPath,
+                              isExpanded: true,
+                              decoration: const InputDecoration(
+                                labelText: 'Категория (папка)',
+                              ),
+                              items: {
+                                '',
+                                categoryPath,
+                                ...widget.templateFolders,
+                              }
+                                  .map((folder) => DropdownMenuItem(
+                                        value: folder,
+                                        child: ContextMenuLabel(
+                                          folder.isEmpty ? 'Без папки' : folder,
+                                          icon: Icons.folder_outlined,
+                                          maxLines: 1,
+                                        ),
+                                      ))
+                                  .toList(),
+                              onChanged: (folder) => setState(() {
+                                categoryPath = folder ?? '';
+                              }),
+                            ),
+                            const SizedBox(height: 12),
                             Row(
                               children: [
                                 Text(
@@ -21673,16 +21981,28 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
                                   style: Theme.of(context).textTheme.titleSmall,
                                 ),
                                 const Spacer(),
-                                TextButton.icon(
-                                  key: const Key('templateAddFieldButton'),
-                                  onPressed: addField,
-                                  icon: const Icon(Icons.add),
-                                  label: const Text('Добавить поле'),
-                                ),
+                                if (!widget.fromCard)
+                                  TextButton.icon(
+                                    key: const Key('templateAddFieldButton'),
+                                    onPressed: addField,
+                                    icon: const Icon(Icons.add),
+                                    label: const Text('Добавить поле'),
+                                  ),
                               ],
                             ),
                             const SizedBox(height: 8),
-                            ...fields.map(fieldEditor),
+                            if (widget.fromCard)
+                              for (final field in fields)
+                                ListTile(
+                                  key:
+                                      ValueKey('cardTemplateField-${field.id}'),
+                                  title: Text(field.label.text),
+                                  subtitle: Text(
+                                      TemplatePreviewDialog._fieldTypeLabel(
+                                          field.type)),
+                                )
+                            else
+                              ...fields.map(fieldEditor),
                           ],
                         ),
                       ),
@@ -21705,7 +22025,9 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
       decoration: skinDialogHeaderDecoration(context),
       alignment: Alignment.centerLeft,
       child: Text(
-        widget.initial?.displayName ?? 'Новый шаблон',
+        widget.fromCard
+            ? 'Сохранить шаблон по карточке'
+            : widget.initial?.displayName ?? 'Новый шаблон',
         key: const Key('templateTitleNameField'),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
@@ -21966,6 +22288,35 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
   }
 
   Widget templateBottomBar() {
+    if (widget.fromCard) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: skinDialogFooterDecoration(context),
+        child: Wrap(
+          alignment: WrapAlignment.end,
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            TextButton(
+              key: const Key('cardTemplateDecline'),
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Не сохранять шаблон'),
+            ),
+            if (widget.cardSourceTemplate != null)
+              OutlinedButton(
+                key: const Key('cardTemplateUpdate'),
+                onPressed: () => saveTemplate(updateCurrent: true),
+                child: const Text('Изменить шаблон'),
+              ),
+            FilledButton(
+              key: const Key('cardTemplateConfirm'),
+              onPressed: saveTemplate,
+              child: const Text('Создать новый шаблон'),
+            ),
+          ],
+        ),
+      );
+    }
     return Container(
       height: 64,
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
@@ -22501,7 +22852,7 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     });
   }
 
-  void saveTemplate() {
+  void saveTemplate({bool updateCurrent = false}) {
     if (name.text.trim().isEmpty) {
       setState(() => invalidName = true);
       return;
@@ -22509,7 +22860,9 @@ class _TemplateEditorDialogState extends State<TemplateEditorDialog> {
     Navigator.pop(
       context,
       CardTemplate(
-        id: widget.initial?.id ?? makeId('tpl'),
+        id: widget.fromCard && updateCurrent
+            ? widget.cardSourceTemplate!.id
+            : widget.initial?.id ?? makeId('tpl'),
         name: name.text.trim().isEmpty ? 'Новый шаблон' : name.text.trim(),
         iconId: iconId,
         colorId: colorId,
@@ -22898,7 +23251,11 @@ class ColorPicker extends StatelessWidget {
               ),
             ],
           ),
-          child: color.id == value ? const Icon(Icons.check, size: 17) : null,
+          child: color.id == value
+              ? Icon(Icons.check,
+                  size: 17,
+                  color: color.id == 'template_white' ? Colors.black : null)
+              : null,
         ),
       ),
     );

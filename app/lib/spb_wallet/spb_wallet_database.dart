@@ -144,6 +144,7 @@ class SpbWalletDatabase {
     final embeddedIconPngs = _loadEmbeddedIconPngs(loadIssues);
     final cardStates = _loadCardStates();
     final fieldValuesByCard = _loadAllCardFieldValues(loadIssues);
+    final customFieldsByCard = _loadCustomCardFields(fieldValuesByCard);
     final attachmentsByCard = _loadAllAttachments(loadIssues);
     final cards = <SpbWalletCardRecord>[];
     final cardLoadFailures = <SpbWalletCardLoadFailure>[];
@@ -167,6 +168,7 @@ class SpbWalletDatabase {
             ),
             templateId: templateId,
             fieldValues: values,
+            customFields: customFieldsByCard[id] ?? const [],
             attachments: attachmentsByCard[id] ?? const [],
             hitCount: (row['HitCount'] as int?) ?? 0,
             iconId: _string(row['IconID']),
@@ -403,6 +405,10 @@ class SpbWalletDatabase {
 
   void saveCard(SpbWalletCardDraft draft) {
     _transaction(() {
+      final previousBackground =
+          draft.useTemplateView && draft.backgroundImageBase64 == null
+              ? loadCardBackgroundBase64(draft.id)
+              : null;
       final categoryId = _ensureCategoryPath(draft.categoryPath);
       final iconId = _resolvedCardIconId(draft.iconId, draft.templateId);
       _saveEmbeddedIconData(
@@ -417,6 +423,20 @@ class SpbWalletDatabase {
         draft.id,
       ]).isNotEmpty;
       if (exists) {
+        if (draft.useTemplateView) {
+          final templateView = _db.select(
+            'SELECT hex(CardViewID) AS ID FROM spbwlt_Template WHERE hex(ID) = ?',
+            [draft.templateId],
+          );
+          if (templateView.isEmpty) {
+            throw StateError('Шаблон карточки отсутствует');
+          }
+          final viewId = _copyCardView(_string(templateView.single['ID']));
+          _db.execute(
+            'UPDATE spbwlt_Card SET CardViewID = ?, HasOwnCardView = 1 WHERE hex(ID) = ?',
+            [_idFromHex(viewId), draft.id],
+          );
+        }
         if (draft.preserveExistingDescriptionWhenEmpty &&
             draft.description.trim().isEmpty) {
           _db.execute(
@@ -471,6 +491,12 @@ class SpbWalletDatabase {
       }
 
       final existingValues = <String, String>{};
+      for (final fieldId in draft.replacedFieldIds) {
+        _db.execute(
+          'DELETE FROM spbwlt_CardFieldValue WHERE hex(CardID) = ? AND hex(TemplateFieldID) = ?',
+          [draft.id, fieldId],
+        );
+      }
       final valueIdsByField = <String, List<String>>{};
       for (final row in _db.select(
         'SELECT hex(ID) AS ID, hex(TemplateFieldID) AS TemplateFieldID FROM spbwlt_CardFieldValue WHERE hex(CardID) = ?',
@@ -494,7 +520,9 @@ class SpbWalletDatabase {
           ]);
         }
       }
+      final customIds = draft.customFields.map((field) => field['id']).toSet();
       for (final entry in draft.fieldValues.entries) {
+        if (customIds.contains(entry.key)) continue;
         final valueId = existingValues[entry.key];
         if (valueId == null) {
           _db.execute(
@@ -513,10 +541,14 @@ class SpbWalletDatabase {
           );
         }
       }
-      _saveCardBackground(draft.id, draft.backgroundImageBase64);
+      _saveCardBackground(
+        draft.id,
+        draft.backgroundImageBase64 ?? previousBackground,
+      );
       _saveCardColor(draft.id, draft.cardColor);
       _saveCardIcon(draft.id, iconId);
       _saveCardState(draft);
+      _saveCustomCardFields(draft);
     });
   }
 
@@ -580,6 +612,9 @@ class SpbWalletDatabase {
   }
 
   void _deleteCardById(String cardId) {
+    if (_hasCustomCardFieldsTable()) {
+      _db.execute('DELETE FROM actitpass_CardField WHERE CardID = ?', [cardId]);
+    }
     final rows = _db.select(
       'SELECT hex(CardViewID) AS CardViewID FROM spbwlt_Card WHERE hex(ID) = ?',
       [cardId],
@@ -1167,6 +1202,53 @@ CREATE TABLE IF NOT EXISTS actitpass_State (
   StateKey TEXT NOT NULL PRIMARY KEY,
   StateValue TEXT NOT NULL
 )''');
+  }
+
+  bool _hasCustomCardFieldsTable() => _db.select(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        ['actitpass_CardField'],
+      ).isNotEmpty;
+
+  Map<String, List<Map<String, dynamic>>> _loadCustomCardFields(
+    Map<String, Map<String, String>> values,
+  ) {
+    if (!_hasCustomCardFieldsTable()) return const {};
+    final result = <String, List<Map<String, dynamic>>>{};
+    for (final row in _db.select('SELECT * FROM actitpass_CardField')) {
+      final cardId = _string(row['CardID']);
+      final fieldId = _string(row['FieldID']);
+      result.putIfAbsent(cardId, () => []).add({
+        'id': fieldId,
+        'label': crypto.decryptText(row['Name']),
+        'type': _string(row['FieldType']),
+      });
+      values.putIfAbsent(cardId, () => {})[fieldId] =
+          crypto.decryptText(row['Value']);
+    }
+    return result;
+  }
+
+  void _saveCustomCardFields(SpbWalletCardDraft draft) {
+    if (draft.customFields.isEmpty && !_hasCustomCardFieldsTable()) return;
+    _db.execute('''CREATE TABLE IF NOT EXISTS actitpass_CardField (
+      CardID TEXT NOT NULL, FieldID TEXT NOT NULL, Name BLOB NOT NULL,
+      FieldType TEXT NOT NULL, Value BLOB NOT NULL,
+      PRIMARY KEY (CardID, FieldID))''');
+    _db.execute('DELETE FROM actitpass_CardField WHERE CardID = ?', [draft.id]);
+    for (final field in draft.customFields) {
+      final id = field['id'] as String;
+      _db.execute(
+        'INSERT INTO actitpass_CardField '
+        '(CardID, FieldID, Name, FieldType, Value) VALUES (?, ?, ?, ?, ?)',
+        [
+          draft.id,
+          id,
+          crypto.encryptText(field['label'] as String),
+          field['type'] as String,
+          crypto.encryptText(draft.fieldValues[id] ?? ''),
+        ],
+      );
+    }
   }
 
   Map<String, Map<String, String>> _loadAllCardFieldValues(
@@ -2244,6 +2326,7 @@ class SpbWalletCardRecord {
     this.backgroundImageBase64,
     this.fieldOrder = const [],
     this.hiddenFieldIds = const {},
+    this.customFields = const [],
     this.modifiedAt,
   });
 
@@ -2260,6 +2343,7 @@ class SpbWalletCardRecord {
   final String? backgroundImageBase64;
   final List<String> fieldOrder;
   final Set<String> hiddenFieldIds;
+  final List<Map<String, dynamic>> customFields;
   final DateTime? modifiedAt;
 }
 
@@ -2279,7 +2363,10 @@ class SpbWalletCardDraft {
     this.preserveExistingDescriptionWhenEmpty = false,
     this.fieldOrder = const [],
     this.hiddenFieldIds = const {},
+    this.customFields = const [],
     this.modifiedAt,
+    this.useTemplateView = false,
+    this.replacedFieldIds = const {},
   });
 
   final String id;
@@ -2296,7 +2383,10 @@ class SpbWalletCardDraft {
   final bool preserveExistingDescriptionWhenEmpty;
   final List<String> fieldOrder;
   final Set<String> hiddenFieldIds;
+  final List<Map<String, dynamic>> customFields;
   final DateTime? modifiedAt;
+  final bool useTemplateView;
+  final Set<String> replacedFieldIds;
 }
 
 class SpbWalletAttachmentRecord {

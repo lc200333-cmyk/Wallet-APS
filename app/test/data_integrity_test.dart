@@ -490,7 +490,7 @@ void main() {
           .widget<TextField>(find.byKey(const ValueKey('cardField-url')))
           .controller
           ?.text,
-      isEmpty,
+      'http://',
     );
     await tester.enterText(
       find.byKey(const ValueKey('cardField-filled')),
