@@ -4857,6 +4857,13 @@ String? normalizeNewVaultDirectorySelection(
   return entityType == FileSystemEntityType.directory ? path : null;
 }
 
+/// Android and iOS keep vaults behind a system file provider: the app edits a
+/// local working copy and the native side writes it back to the picked file.
+bool get usesDocumentProviderVaults => Platform.isAndroid || Platform.isIOS;
+
+String get documentProviderStorageLabel =>
+    Platform.isIOS ? 'Файлы iPhone' : 'Android-хранилище';
+
 bool get isDesktopFilePlatform =>
     Platform.isWindows || Platform.isLinux || Platform.isMacOS;
 
@@ -5346,7 +5353,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   bool isAndroidCacheWalletPath(String path) =>
-      Platform.isAndroid && path.contains('/cache/spbwallet_');
+      (Platform.isAndroid && path.contains('/cache/spbwallet_')) ||
+      (Platform.isIOS && path.contains('/Caches/spbwallet_'));
 
   @override
   void initState() {
@@ -5769,7 +5777,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         passwordUnlockDebounce?.cancel();
         passwordController.clear();
         confirmController.clear();
-        if (!Platform.isAndroid || spbWalletUri == null) {
+        if (!usesDocumentProviderVaults || spbWalletUri == null) {
           await rememberRecentVault(spbWalletPath!);
         }
         if (spbRecoveredWorkingCopy) {
@@ -5864,25 +5872,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return true;
   }
 
-  /// The iOS picker returns a temporary copy, so saves would never reach the
-  /// original. Keep a persistent copy in the app's Documents/Wallet APS.
-  Future<String> importIosWalletCopy(String pickedPath) async {
-    final directory = await appVaultDirectory();
-    if (File(pickedPath).parent.path == directory.path) return pickedPath;
-    final fileName = File(pickedPath).uri.pathSegments.last;
-    final dot = fileName.lastIndexOf('.');
-    final stem = dot > 0 ? fileName.substring(0, dot) : fileName;
-    final extension = dot > 0 ? fileName.substring(dot) : '';
-    var target = File('${directory.path}/$fileName');
-    for (var index = 2; target.existsSync(); index++) {
-      target = File('${directory.path}/$stem ($index)$extension');
-    }
-    await File(pickedPath).copy(target.path);
-    return target.path;
-  }
-
   Future<void> pickSpbWalletFile() async {
-    if (Platform.isAndroid) {
+    if (usesDocumentProviderVaults) {
       try {
         final picked = await spbWalletChannel.invokeMapMethod<String, Object?>(
           'pickSpbWallet',
@@ -5934,17 +5925,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       allowedExtensions: const ['swl', 'db', 'sqlite'],
       withData: false,
     );
-    final pickedPath = result?.files.single.path;
-    if (pickedPath == null) return;
-    var path = pickedPath;
-    if (Platform.isIOS) {
-      try {
-        path = await importIosWalletCopy(path);
-      } catch (error) {
-        setState(() => message = 'Не удалось выбрать файл базы: $error');
-        return;
-      }
-    }
+    final path = result?.files.single.path;
+    if (path == null) return;
     final closed = await closeCurrentVaultForPasswordPrompt();
     if (!closed || !mounted) return;
     setState(() {
@@ -6264,13 +6246,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Future<void> createNewVaultFromLogin() async {
     final pathController = TextEditingController();
-    if (Platform.isAndroid) {
-      pathController.text = 'Android-хранилище';
-    } else if (Platform.isIOS) {
-      // iOS apps can only keep writing inside their own container; the
-      // Documents folder is exposed in the Files app.
-      pathController.text = (await appVaultDirectory()).path;
-      if (!mounted) return;
+    if (usesDocumentProviderVaults) {
+      pathController.text = documentProviderStorageLabel;
     }
     final nameController = TextEditingController(text: 'Новая база');
     final newPasswordController = TextEditingController();
@@ -6284,7 +6261,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     String? dialogError;
 
     Future<void> pickNewVaultDirectory(StateSetter setDialogState) async {
-      if (Platform.isAndroid) {
+      if (usesDocumentProviderVaults) {
         final baseName = nameController.text.trim().replaceAll(
               RegExp(r'\.swl$', caseSensitive: false),
               '',
@@ -6298,12 +6275,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           androidDocument = document;
           pathController.text = document['displayPath']?.toString() ??
               document['displayName']?.toString() ??
-              'Android-хранилище';
+              documentProviderStorageLabel;
           dialogError = null;
         });
         return;
       }
-      if (Platform.isIOS) return;
       var selectedDirectory = await FilePicker.platform.getDirectoryPath(
         dialogTitle: 'Назначить путь для новой базы',
         lockParentWindow: true,
@@ -6398,7 +6374,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                           ),
                           suffixIcon: IconButton(
                             key: const Key('browseNewVaultPath'),
-                            tooltip: Platform.isAndroid
+                            tooltip: usesDocumentProviderVaults
                                 ? 'Выбрать файл в проводнике'
                                 : 'Выбрать папку в проводнике',
                             padding: EdgeInsets.zero,
@@ -6546,7 +6522,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                 '',
                               );
                           final newPassword = newPasswordController.text;
-                          if (!Platform.isAndroid &&
+                          if (!usesDocumentProviderVaults &&
                               selectedDirectory.isEmpty) {
                             setDialogState(
                               () => dialogError =
@@ -6580,7 +6556,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                           });
                           vaultNameController.text = name;
                           try {
-                            if (Platform.isAndroid) {
+                            if (usesDocumentProviderVaults) {
                               final document = androidDocument ??
                                   await spbWalletChannel
                                       .invokeMapMethod<String, Object?>(
@@ -7052,7 +7028,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Future<void> chooseExistingVault(ExistingVault vault) async {
     try {
-      if (Platform.isAndroid && vault.uri != null) {
+      if (usesDocumentProviderVaults && vault.uri != null) {
         final copied = await spbWalletChannel.invokeMapMethod<String, Object?>(
           'copySpbWallet',
           {'uri': vault.uri, 'displayName': vault.title},
@@ -7094,13 +7070,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       await rememberRecentVaultEntry(
         ExistingVault(
           title: vaultNameController.text,
-          path:
-              Platform.isAndroid && spbWalletUri != null ? null : spbWalletPath,
+          path: usesDocumentProviderVaults && spbWalletUri != null
+              ? null
+              : spbWalletPath,
           uri: spbWalletUri,
           displayPath: spbWalletDisplayPath,
         ),
       );
-      if (Platform.isAndroid && spbRecoveredWorkingCopy) {
+      if (usesDocumentProviderVaults && spbRecoveredWorkingCopy) {
         showSpbOperationMessage(
           'Исходный файл пуст или повреждён. Открыта последняя внутренняя резервная копия.',
         );
@@ -7160,7 +7137,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     try {
       spbWallet?.saveRecentlyOpenedCardIds(recentlyOpenedItemIds);
       spbWallet?.flushToDisk();
-      if (Platform.isAndroid && spbWalletUri != null && spbWalletPath != null) {
+      if (usesDocumentProviderVaults &&
+          spbWalletUri != null &&
+          spbWalletPath != null) {
         if (!spbWalletWritable) {
           throw StateError(
             'Файл открыт только для чтения. Выберите доступный для записи файл.',
@@ -7213,7 +7192,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   bool ensureSpbWalletWritable() {
-    if (!Platform.isAndroid || spbWalletUri == null || spbWalletWritable) {
+    if (!usesDocumentProviderVaults ||
+        spbWalletUri == null ||
+        spbWalletWritable) {
       return true;
     }
     showSpbOperationMessage(
@@ -7229,7 +7210,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
     final saved = await writeBackSpbWallet();
     if (!saved || !mounted) return;
-    if (Platform.isAndroid) {
+    if (usesDocumentProviderVaults) {
       File? snapshotFile;
       try {
         final now = DateTime.now();
@@ -17332,7 +17313,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ? '${selectedVaultTitle.replaceFirst(RegExp(r'\.swl$', caseSensitive: false), '')}.swl'
         : File(spbWalletDisplayPath!).uri.pathSegments.last;
     try {
-      if (Platform.isAndroid) {
+      if (usesDocumentProviderVaults) {
         final document = await spbWalletChannel
             .invokeMapMethod<String, Object?>('createSpbWalletDocument', {
           'displayName': suggestedName,
