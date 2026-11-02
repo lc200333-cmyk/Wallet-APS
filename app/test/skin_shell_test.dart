@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:wallet_aps/main.dart';
+import 'package:wallet_aps/app_version.dart';
 import 'package:wallet_aps/ui/skin/app_skin.dart';
 import 'package:wallet_aps/widgets/context_menu_label.dart';
 
@@ -94,6 +95,482 @@ List<String> _taskLabels(dynamic state) => [
     ];
 
 void main() {
+  for (final skin in AppSkin.values) {
+    for (final layout in _Layout.values) {
+      _skinTest('${skin.name} ${layout.name}: central icon creation menus',
+          (tester) async {
+        var clipboardReads = 0;
+        const channel = MethodChannel('wallet_aps/window');
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel,
+            (call) async {
+          if (call.method == 'readClipboardImage') clipboardReads++;
+          return null;
+        });
+        addTearDown(() => tester.binding.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null));
+        final dynamic state = await _pumpShell(tester, skin, layout);
+        state.showSpbIconsMode();
+        state.setState(() => state.mobilePane = 1);
+        await _pumpFrames(tester);
+        final area = tester
+            .getRect(find.byKey(const Key('spbIconWorkspaceCreationTarget')));
+        await tester.tapAt(area.topCenter + const Offset(0, 2));
+        await _pumpFrames(tester);
+        void expectActions() {
+          expect(find.byType(BottomSheet), findsNothing);
+          final entries = tester
+              .widgetList<PopupMenuItem<String>>(
+                  find.byType(PopupMenuItem<String>))
+              .take(3);
+          expect(entries.map((entry) => entry.value),
+              ['folder', 'upload', 'paste']);
+          expect(
+              entries.map((entry) => (entry.child as ContextMenuLabel).label), [
+            'Создать папку',
+            'Загрузить иконку из файла',
+            'Вставить иконку из буфера обмена'
+          ]);
+        }
+
+        expectActions();
+        await tester.tap(find.byKey(const Key('pasteIconWorkspaceAction')));
+        await _pumpFrames(tester);
+        expect(clipboardReads, 1);
+        unawaited(state.showManagedIconMenu('spb://synthetic', area.center)
+            as Future<void>);
+        await _pumpFrames(tester);
+        expectActions();
+        expect(find.byKey(const Key('deleteManagedIconContextAction')),
+            findsOneWidget);
+        expect(find.textContaining('Переместить в'), findsWidgets);
+        await tester.tap(find.byKey(const Key('pasteIconWorkspaceAction')));
+        await _pumpFrames(tester);
+        expect(clipboardReads, 2);
+        expect(state.selectedManagedIconId, 'spb://synthetic');
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+  for (final skin in AppSkin.values) {
+    for (final layout in _Layout.values) {
+      _skinTest(
+          '${skin.name} ${layout.name}: icons left popup and paste action',
+          (tester) async {
+        var clipboardReads = 0;
+        const channel = MethodChannel('wallet_aps/window');
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(channel,
+            (call) async {
+          if (call.method == 'readClipboardImage') clipboardReads++;
+          return null;
+        });
+        addTearDown(() => tester.binding.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null));
+        final dynamic state = await _pumpShell(tester, skin, layout);
+        state.showSpbIconsMode();
+        if (layout.isNarrow) {
+          state.setState(() {
+            state.mobilePane = 0;
+            if (skin != AppSkin.retro) state.modernVaultTabOpen = false;
+          });
+        }
+        await _pumpFrames(tester);
+        final panel = tester.getRect(find.byKey(const Key('spbLeftWorkspace')));
+        final point = panel.topCenter + const Offset(0, 2);
+        await tester.tapAt(point);
+        await _pumpFrames(tester);
+        expect(find.byType(BottomSheet), findsNothing);
+        final entries = tester
+            .widgetList<PopupMenuItem<String>>(
+                find.byType(PopupMenuItem<String>))
+            .toList();
+        expect(
+            entries.map((entry) => entry.value), ['folder', 'upload', 'paste']);
+        expect(
+            entries.map((entry) => (entry.child as ContextMenuLabel).label), [
+          'Создать папку',
+          'Загрузить иконку из файла',
+          'Вставить иконку из буфера обмена'
+        ]);
+        await tester.tap(find.byKey(const Key('pasteIconWorkspaceAction')));
+        await _pumpFrames(tester);
+        expect(clipboardReads, 1);
+        expect(find.text('В буфере обмена нет изображения.'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+  for (final skin in AppSkin.values) {
+    for (final layout in _Layout.values) {
+      _skinTest(
+          '${skin.name} ${layout.name}: template left popup includes category',
+          (tester) async {
+        final dynamic state = await _pumpShell(tester, skin, layout);
+        state.showSpbTemplatesMode();
+        if (layout.isNarrow) {
+          state.setState(() {
+            state.mobilePane = 0;
+            if (skin != AppSkin.retro) state.modernVaultTabOpen = false;
+          });
+        }
+        await _pumpFrames(tester);
+        final panel = tester.getRect(find.byKey(const Key('spbLeftWorkspace')));
+        final point = panel.topCenter + const Offset(0, 2);
+        await tester.tapAt(point);
+        await _pumpFrames(tester);
+        expect(find.byType(BottomSheet), findsNothing);
+        final entries = tester
+            .widgetList<PopupMenuItem<String>>(
+                find.byType(PopupMenuItem<String>))
+            .toList();
+        expect(entries.map((entry) => entry.value),
+            ['category', 'create', 'import']);
+        expect(entries.map((entry) => (entry.child as ContextMenuLabel).label),
+            ['Создать категорию', 'Создать шаблон', 'Импортировать шаблон']);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+  for (final skin in AppSkin.values) {
+    for (final layout in _Layout.values) {
+      _skinTest('${skin.name} ${layout.name}: cards left panel uses popup copy',
+          (tester) async {
+        final dynamic state = await _pumpShell(tester, skin, layout);
+        if (layout.isNarrow) {
+          state.setState(() {
+            state.mobilePane = 0;
+            if (skin != AppSkin.retro) state.modernVaultTabOpen = false;
+          });
+        }
+        await _pumpFrames(tester);
+        final panel = tester.getRect(find.byKey(const Key('spbLeftWorkspace')));
+        // Wide modern panels have empty padding above their first group.
+        final point = panel.topCenter + const Offset(0, 2);
+        for (final buttons in [kPrimaryMouseButton, kSecondaryMouseButton]) {
+          await tester.tapAt(point, buttons: buttons);
+          await _pumpFrames(tester);
+          expect(find.byType(BottomSheet), findsNothing);
+          final entries = tester
+              .widgetList<PopupMenuItem<String>>(
+                  find.byType(PopupMenuItem<String>))
+              .toList();
+          expect(entries.map((entry) => entry.value),
+              ['folder', 'card', 'import']);
+          expect(
+              entries.map((entry) => (entry.child as ContextMenuLabel).label),
+              ['Создать папку', 'Создать карточку', 'Импорт']);
+          expect(
+              entries.map((entry) => (entry.child as ContextMenuLabel).icon), [
+            Icons.create_new_folder_outlined,
+            Icons.note_add_outlined,
+            Icons.file_open_outlined
+          ]);
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await _pumpFrames(tester);
+        }
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+  for (final skin in AppSkin.values) {
+    for (final layout in _Layout.values) {
+      _skinTest(
+          '${skin.name} ${layout.name}: empty right panel no longer opens menus',
+          (tester) async {
+        final dynamic state = await _pumpShell(tester, skin, layout);
+        Future<void> checkMenu(List<String> keys) async {
+          state.setState(() {
+            state.spbTasksExpanded = false;
+            state.spbFoundExpanded = false;
+            state.spbFrequentExpanded = false;
+          });
+          if (layout.isNarrow) {
+            state.setState(() {
+              state.mobilePane = 2;
+              if (skin != AppSkin.retro) state.modernVaultTabOpen = true;
+            });
+          }
+          await _pumpFrames(tester);
+          final target = find.byKey(const Key('spbRightWorkspace'));
+          expect(target, findsOneWidget);
+          final rect = tester.getRect(target);
+          // The narrow management tab has full-width history rows; its side
+          // margin is empty. Wide panes have empty space below their groups.
+          await tester.tapAt(layout.isNarrow
+              ? rect.bottomRight - const Offset(8, 8)
+              : rect.bottomCenter - const Offset(0, 8));
+          await _pumpFrames(tester);
+          for (final key in keys) {
+            expect(find.byKey(Key(key)), findsNothing);
+          }
+
+          await _pumpFrames(tester);
+        }
+
+        await checkMenu([
+          'createFolderRootContextAction',
+          'createCardRootContextAction',
+          'importRootContextAction',
+        ]);
+        state.showSpbTemplatesMode();
+        await checkMenu([
+          'createTemplateRightContextAction',
+          'importTemplateRightContextAction',
+        ]);
+        state.showSpbIconsMode();
+        await checkMenu([
+          'createIconFolderWorkspaceAction',
+          'uploadIconWorkspaceAction',
+        ]);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+  for (final layout in _Layout.values) {
+    _skinTest('${layout.name}: password theme buttons tolerate rapid switching',
+        (tester) async {
+      final dynamic state = await _pumpShell(tester, AppSkin.retro, layout);
+      state.setState(() => state.unlocked = false);
+      await _pumpFrames(tester);
+      await tester.enterText(
+          find.byKey(const Key('passwordInput')), 'synthetic');
+      for (var round = 0; round < 6; round++) {
+        for (final skin in ['Light', 'Dark', 'Retro']) {
+          await tester.tap(find.byKey(Key('skin${skin}Button')));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 16));
+          expect(tester.takeException(), isNull);
+          expect(tester.state(find.byType(VaultShell)), same(state));
+          expect(state.passwordController.text, 'synthetic');
+        }
+      }
+      await tester.pump(const Duration(seconds: 1));
+      expect(tester.takeException(), isNull);
+    });
+    _skinTest(
+        '${layout.name}: repeated theme changes preserve the active wallet',
+        (tester) async {
+      final dynamic state = await _pumpShell(tester, AppSkin.retro, layout);
+      for (var round = 0; round < 3; round++) {
+        for (final mode in [
+          state.showSpbCardsMode,
+          state.showSpbTemplatesMode,
+          state.showSpbIconsMode
+        ]) {
+          mode();
+          await _pumpFrames(tester);
+          for (final skin in [
+            AppSkin.light,
+            AppSkin.dark,
+            AppSkin.retro,
+            AppSkin.dark,
+            AppSkin.light,
+            AppSkin.retro
+          ]) {
+            appSkin.value = skin;
+            for (final millis in [0, 16, 80, 150]) {
+              await tester.pump(Duration(milliseconds: millis));
+              expect(tester.takeException(), isNull,
+                  reason: '${layout.name} ${skin.name} at $millis ms');
+            }
+            expect(tester.state(find.byType(VaultShell)), same(state));
+            expect(state.unlocked, isTrue);
+            expect((state.items as List).length, 3);
+          }
+        }
+      }
+    });
+  }
+  for (final skin in AppSkin.values) {
+    for (final layout in _Layout.values) {
+      _skinTest(
+          '${skin.name} ${layout.name}: password header versions are readable',
+          (tester) async {
+        final dynamic shell = await _pumpShell(tester, skin, layout);
+        shell.setState(() => shell.unlocked = false);
+        await _pumpFrames(tester);
+        final label = find.byKey(const Key('passwordVersion'));
+        expect(label, findsOneWidget);
+        final tokens = WalletSkinTokens.of(tester.element(label));
+        final expectedColor =
+            skin == AppSkin.retro ? const Color(0xffeeeeee) : tokens.onSurface;
+        Text current() =>
+            tester.widget<Text>(find.text('v. $currentAppVersion'));
+        expect(current().style!.color, expectedColor);
+        final foreground = expectedColor.computeLuminance();
+        final background = tokens.titleBar.computeLuminance();
+        expect(
+            (foreground > background
+                ? (foreground + 0.05) / (background + 0.05)
+                : (background + 0.05) / (foreground + 0.05)),
+            greaterThan(3));
+        final dynamic versionState = tester.state(label);
+        versionState.setState(
+            () => versionState.latestGithubVersion = currentAppVersion);
+        await _pumpFrames(tester);
+        expect(tester.widget<Text>(find.text(currentAppVersion)).style!.color,
+            expectedColor);
+        versionState
+            .setState(() => versionState.latestGithubVersion = '99.0.0');
+        await _pumpFrames(tester);
+        expect(tester.widget<Text>(find.text('99.0.0')).style!.color,
+            const Color(0xffff3b30));
+        await tester.tap(find.byKey(const Key('availableGithubVersion')));
+        await _pumpFrames(tester);
+        expect(find.text('Доступно обновление'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+  for (final layout in [_Layout.narrow, _Layout.tablet, _Layout.wide]) {
+    for (final platform in layout.isNarrow
+        ? [TargetPlatform.android, TargetPlatform.windows]
+        : [layout.platform]) {
+      _skinTest('retro ${layout.name} ${platform.name}: empty workspace menus',
+          (tester) async {
+        final dynamic state = await _pumpShell(tester, AppSkin.retro, layout);
+        debugDefaultTargetPlatformOverride = platform;
+        state.setState(() => state.mobilePane = 1);
+        await _pumpFrames(tester);
+        final enabled = layout.isNarrow || platform == TargetPlatform.android;
+        Future<void> tapBlank(String key, List<String> actions) async {
+          final rect = tester.getRect(find.byKey(Key(key)));
+          await tester.tapAt(rect.bottomLeft + const Offset(18, -18));
+          await _pumpFrames(tester);
+          for (final action in actions) {
+            expect(find.byKey(Key(action)),
+                enabled ? findsOneWidget : findsNothing);
+          }
+          if (enabled) {
+            await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+            await _pumpFrames(tester);
+          }
+        }
+
+        await tapBlank('spbCentralWorkspace', [
+          'createFolderRootContextAction',
+          'createCardRootContextAction',
+          'importRootContextAction',
+        ]);
+        await tester
+            .tap(find.byKey(const ValueKey('spbCentralFolder-Finance')));
+        await _pumpFrames(tester);
+        expect(state.selectedCategoryPath, 'Finance');
+        expect(find.byKey(const Key('createFolderRootContextAction')),
+            findsNothing);
+        state.openSpbFolder('');
+        state.showSpbTemplatesMode();
+        state.setState(() => state.mobilePane = 1);
+        await _pumpFrames(tester);
+        await tapBlank('spbTemplateWorkspace', [
+          'createTemplateContextAction',
+          'importTemplateContextAction',
+        ]);
+        state.showSpbIconsMode();
+        state.setState(() => state.mobilePane = 1);
+        await _pumpFrames(tester);
+        if (enabled) {
+          await tapBlank('spbIconWorkspaceCreationTarget', [
+            'createIconFolderWorkspaceAction',
+            'uploadIconWorkspaceAction',
+          ]);
+          final rect = tester
+              .getRect(find.byKey(const Key('spbIconWorkspaceCreationTarget')));
+          final previousLibraryFuture = managedIconLibraryFuture;
+          managedIconLibraryFuture = Future<void>.value();
+          addTearDown(() {
+            managedIconLibraryFuture = previousLibraryFuture;
+          });
+          await tester.tapAt(rect.bottomLeft + const Offset(18, -18));
+          await _pumpFrames(tester);
+          await tester
+              .tap(find.byKey(const Key('createIconFolderWorkspaceAction')));
+          await _pumpFrames(tester);
+          expect(find.byKey(const Key('categoryNameField')), findsOneWidget);
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await _pumpFrames(tester);
+        } else {
+          expect(find.byKey(const Key('spbIconWorkspaceCreationTarget')),
+              findsOneWidget);
+        }
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+  for (final skin in AppSkin.values) {
+    for (final layout in _Layout.values) {
+      _skinTest(
+          '${skin.name} ${layout.name}: icon workspace has no bottom toolbar',
+          (tester) async {
+        final dynamic state = await _pumpShell(tester, skin, layout);
+        state.showSpbIconsMode();
+        if (skin == AppSkin.retro && layout.isNarrow) {
+          state.setState(() => state.mobilePane = 1);
+        }
+        await _pumpFrames(tester);
+        for (final key in [
+          'createIconFolderButton',
+          'uploadManagedIconButton',
+          'pasteManagedIconButton',
+        ]) {
+          expect(find.byKey(Key(key)), findsNothing);
+        }
+        expect(tester.takeException(), isNull);
+      });
+    }
+  }
+  for (final skin in [AppSkin.light, AppSkin.dark]) {
+    for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+      _skinTest(
+        '${skin.name} narrow ${platform.name}: compact overlay actions',
+        (tester) async {
+          final dynamic state = await _pumpShell(tester, skin, _Layout.narrow);
+          debugDefaultTargetPlatformOverride = platform;
+          await _pumpFrames(tester);
+          Future<void> checkButton(String key, String label) async {
+            final finder = find.byKey(Key(key));
+            final fab = tester.widget<FloatingActionButton>(finder);
+            expect(fab.isExtended, isFalse);
+            expect(fab.tooltip, label);
+            expect(tester.getSize(finder), const Size(56, 56));
+            expect(
+              find.descendant(of: finder, matching: find.byType(Text)),
+              findsNothing,
+            );
+            final navTop = tester.getTopLeft(find.byType(NavigationBar)).dy;
+            final scaffold = tester.widget<Scaffold>(
+              find.ancestor(of: finder, matching: find.byType(Scaffold)).first,
+            );
+            final body = find.byWidget(scaffold.body!);
+            expect(tester.getBottomRight(body).dy, navTop);
+            expect(
+              tester.getRect(body).overlaps(tester.getRect(finder)),
+              isTrue,
+            );
+          }
+
+          await checkButton('modernCreateFab', 'Создать');
+          await tester.tap(find.byKey(const Key('modernCreateFab')));
+          await tester.pumpAndSettle();
+          expect(
+            find.byKey(const Key('createCardRootContextAction')),
+            findsOneWidget,
+          );
+          await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+          await tester.pumpAndSettle();
+          state.showSpbTemplatesMode();
+          await _pumpFrames(tester);
+          await checkButton('modernCreateTemplateFab', 'Создать шаблон');
+          final workspace = find.byKey(const Key('spbTemplateWorkspace'));
+          final navTop = tester.getTopLeft(find.byType(NavigationBar)).dy;
+          expect(tester.getBottomRight(workspace).dy, closeTo(navTop - 8, 2));
+          state.showSpbIconsMode();
+          await _pumpFrames(tester);
+          await checkButton('modernUploadIconFab', 'Загрузить иконку');
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
   for (final skin in AppSkin.values) {
     for (final layout in _Layout.values) {
       _skinTest('${skin.name} ${layout.name}: every mode builds cleanly',
@@ -533,6 +1010,12 @@ void main() {
     for (final skin in [AppSkin.light, AppSkin.dark]) {
       final dynamic state = await _pumpShell(tester, skin, _Layout.wide);
       expect(find.byKey(const Key('modernCreateFab')), findsOneWidget);
+      expect(
+          tester
+              .widget<FloatingActionButton>(
+                  find.byKey(const Key('modernCreateFab')))
+              .isExtended,
+          isTrue);
       await tester.tap(find.byKey(const Key('modernCreateFab')));
       await tester.pumpAndSettle();
       expect(
@@ -542,9 +1025,21 @@ void main() {
       state.showSpbTemplatesMode();
       await _pumpFrames(tester);
       expect(find.byKey(const Key('modernCreateTemplateFab')), findsOneWidget);
+      expect(
+          tester
+              .widget<FloatingActionButton>(
+                  find.byKey(const Key('modernCreateTemplateFab')))
+              .isExtended,
+          isTrue);
       state.showSpbIconsMode();
       await _pumpFrames(tester);
       expect(find.byKey(const Key('modernUploadIconFab')), findsOneWidget);
+      expect(
+          tester
+              .widget<FloatingActionButton>(
+                  find.byKey(const Key('modernUploadIconFab')))
+              .isExtended,
+          isTrue);
       await tester.pumpWidget(const SizedBox.shrink());
     }
     await _pumpShell(tester, AppSkin.retro, _Layout.wide);

@@ -132,8 +132,9 @@ void main() {
       await checkMenu(() async {
         await state.showSpbFolderCreationMenu(const Offset(80, 100));
       });
-      await checkMenu(() => state
-          .showSpbTemplateRightMenu(const Offset(80, 100)) as Future<void>);
+      await checkMenu(() =>
+          state.showSpbTemplateCreationActions(const Offset(80, 100))
+              as Future<void>);
       await checkMenu(() => state.showManagedIconMenu(
           'key', const Offset(80, 100)) as Future<void>);
       final attachmentMenu = showAttachmentContextMenu(

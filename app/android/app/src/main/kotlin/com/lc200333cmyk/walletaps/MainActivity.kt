@@ -33,6 +33,7 @@ class MainActivity : FlutterActivity() {
     private val createRequestCode = 7402
     private var pendingPickResult: MethodChannel.Result? = null
     private var pendingCreateResult: MethodChannel.Result? = null
+    private val newlyCreatedWalletUris = java.util.Collections.synchronizedSet(mutableSetOf<String>())
     private var walletChannel: MethodChannel? = null
     private var attachmentDropChannel: MethodChannel? = null
     private var clipboardImageChannel: MethodChannel? = null
@@ -354,6 +355,7 @@ class MainActivity : FlutterActivity() {
                 return
             }
             val uri = data.data!!
+            newlyCreatedWalletUris.add(uri.toString())
             val flags = data.flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             val persisted = persistUriPermission(uri, flags)
             val name = displayName(uri)
@@ -511,6 +513,14 @@ class MainActivity : FlutterActivity() {
         val expected = digest(source)
         val originalSize = documentSize(uri)
             ?: runCatching { digest(uri).size }.getOrNull()
+        // Back up existing documents before any write. Cloud streams may
+        // truncate on open and cannot provide atomic filesystem replacement.
+        // ACTION_CREATE_DOCUMENT gives us a new document even when its size
+        // is unknown or it cannot yet be reopened for reading.
+        val newDocument = newlyCreatedWalletUris.contains(uriText)
+        if (!newDocument && originalSize != 0L) {
+            backupOriginalWallet(uri, originalSize)
+        }
         val safeWriteError = runCatching {
             val descriptor = contentResolver.openFileDescriptor(uri, "rw")
                 ?: error("Cannot open a seekable SPB Wallet file descriptor")
@@ -523,21 +533,69 @@ class MainActivity : FlutterActivity() {
                 }
             }
         }.exceptionOrNull()
-        if (safeWriteError != null && originalSize == 0L) {
-            // Some providers do not expose a seekable descriptor for a newly
-            // created, still-empty document. Truncation is safe only here.
-            contentResolver.openOutputStream(uri, "wt").use { output ->
-                if (output == null) error("Cannot open selected SPB Wallet file for writing")
-                source.inputStream().use { input -> input.copyTo(output) }
-                output.flush()
+        if (safeWriteError != null) {
+            // Drive and other stream-only providers can reject "rw". Existing
+            // data is now backed up, so a truncating stream is safe to attempt.
+            try {
+                WalletStreamWriter.write(source) { mode ->
+                    contentResolver.openOutputStream(uri, mode)
+                }
+            } catch (streamError: Exception) {
+                streamError.addSuppressed(safeWriteError)
+                throw streamError
             }
-        } else if (safeWriteError != null) {
-            throw safeWriteError
         }
 
-        val actual = digest(uri)
-        if (actual.size != expected.size || !actual.sha256.contentEquals(expected.sha256)) {
-            error("SPB Wallet write verification failed")
+        // Some cloud providers expose the previous version briefly after
+        // closing an upload stream. Never acknowledge a save until read-back
+        // confirms the full new contents.
+        var verificationError: Throwable? = null
+        for (attempt in 0 until 5) {
+            try {
+                val actual = digest(uri)
+                if (actual.size != expected.size || !actual.sha256.contentEquals(expected.sha256)) {
+                    error("SPB Wallet write verification failed")
+                }
+                newlyCreatedWalletUris.remove(uriText)
+                return
+            } catch (error: Exception) {
+                verificationError = error
+                if (attempt < 4) Thread.sleep(150L shl attempt)
+            }
+        }
+        throw verificationError ?: IllegalStateException("SPB Wallet write verification failed")
+    }
+
+    private fun backupOriginalWallet(uri: Uri, originalSize: Long?) {
+        // Keep old cloud bytes separate from current recovery copies: recovery
+        // must prefer the user's latest working copy, not this older version.
+        val directory = File(recoveryDirectory(), "Originals").apply {
+            if (!isDirectory && !mkdirs()) error("Cannot create original wallet backup directory")
+        }
+        val suffix = "_${safeWalletName(displayName(uri))}"
+        val key = recoveryKey(uri)
+        val temporary = File(directory, ".${key}_${System.nanoTime()}.tmp")
+        try {
+            val input = contentResolver.openInputStream(uri)
+                ?: error("Cannot back up original wallet; cloud file was not overwritten")
+            input.use { source ->
+                FileOutputStream(temporary).use { output ->
+                    source.copyTo(output)
+                    output.fd.sync()
+                }
+            }
+            if (originalSize != null && originalSize >= 0L && temporary.length() != originalSize) {
+                error("Original wallet size changed during backup; cloud file was not overwritten")
+            }
+            val backup = File(directory, "${key}_${System.currentTimeMillis()}_${System.nanoTime()}$suffix")
+            if (!temporary.renameTo(backup)) error("Cannot finalize original wallet backup")
+            directory.listFiles()
+                ?.filter { it.isFile && it.name.startsWith("${key}_") && it.name.endsWith(suffix) }
+                ?.sortedByDescending { it.lastModified() }
+                ?.drop(RECOVERY_COPIES_PER_WALLET)
+                ?.forEach { it.delete() }
+        } finally {
+            if (temporary.exists()) temporary.delete()
         }
     }
 

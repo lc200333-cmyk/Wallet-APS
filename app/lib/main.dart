@@ -505,17 +505,18 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
     final updateAvailable = latest != null &&
         isVersionNewer(latest, currentAppVersion) &&
         updatePackageForPlatform(defaultTargetPlatform, latest) != null;
-    const versionStyle = TextStyle(
-      color: Color(0xffeeeeee),
+    final tokens = WalletSkinTokens.of(context);
+    final versionStyle = TextStyle(
+      color: tokens.isRetro ? const Color(0xffeeeeee) : tokens.onSurface,
       fontSize: 14,
       fontWeight: FontWeight.normal,
     );
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('v. $currentAppVersion', style: versionStyle),
+        Text('v. $currentAppVersion', style: versionStyle),
         if (latest != null) ...[
-          const Text(' / ', style: versionStyle),
+          Text(' / ', style: versionStyle),
           Semantics(
             button: updateAvailable,
             label: updateAvailable
@@ -9228,7 +9229,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       }
       measure(selectedVaultTitle, 0);
     }
-    return LayoutBuilder(
+    return wrapSpbLeftContextMenu(LayoutBuilder(
       builder: (context, constraints) => ListTileTheme(
         data: const ListTileThemeData(
           minLeadingWidth: 31,
@@ -9272,7 +9273,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ),
         ),
       ),
-    );
+    ));
   }
 
   Widget buildSpbTreeBody({
@@ -10349,11 +10350,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     spbContextMenuOpen = true;
     final selected = await showSkinMenu<String>(
       context: context,
+      preferPopup: true,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: [
+        ...spbIconCreationMenuItems,
+        const PopupMenuDivider(),
         for (final kind in IconCatalogKind.values)
           if (kind != current)
             PopupMenuItem(
@@ -10371,6 +10375,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
     spbContextMenuOpen = false;
     if (!mounted || selected == null) return;
+    if (selected == 'folder' || selected == 'upload' || selected == 'paste') {
+      await runSpbIconCreationAction(selected);
+      return;
+    }
     if (selected == 'delete') {
       await deleteManagedIconWithConfirmation(iconId);
       return;
@@ -10481,6 +10489,71 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
+  bool get retroWorkspaceTapMenus =>
+      skinTokens.isRetro &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          skinNarrowLayout(context));
+
+  Widget spbIconCreationMenuTarget({required Widget child}) {
+    return GestureDetector(
+      key: const Key('spbIconWorkspaceCreationTarget'),
+      behavior: HitTestBehavior.translucent,
+      onTapUp: (details) => showSpbIconCreationMenu(details.globalPosition),
+      onSecondaryTapDown: (details) =>
+          showSpbIconCreationMenu(details.globalPosition),
+      onLongPressStart: (details) =>
+          showSpbIconCreationMenu(details.globalPosition),
+      child: child,
+    );
+  }
+
+  List<PopupMenuEntry<String>> get spbIconCreationMenuItems => const [
+        PopupMenuItem(
+          key: Key('createIconFolderWorkspaceAction'),
+          value: 'folder',
+          child: ContextMenuLabel('Создать папку',
+              icon: Icons.create_new_folder_outlined),
+        ),
+        PopupMenuItem(
+          key: Key('uploadIconWorkspaceAction'),
+          value: 'upload',
+          child: ContextMenuLabel('Загрузить иконку из файла',
+              icon: Icons.file_upload_outlined),
+        ),
+        PopupMenuItem(
+          key: Key('pasteIconWorkspaceAction'),
+          value: 'paste',
+          child: ContextMenuLabel('Вставить иконку из буфера обмена',
+              icon: Icons.content_paste),
+        ),
+      ];
+
+  Future<void> showSpbIconCreationMenu(Offset globalPosition) async {
+    if (spbObjectMenuPointerActive) return;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final selected = await showSkinMenu<String>(
+      context: context,
+      preferPopup: true,
+      position: RelativeRect.fromRect(
+        overlay.globalToLocal(globalPosition) & const Size(1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: spbIconCreationMenuItems,
+    );
+    if (!mounted) return;
+    await runSpbIconCreationAction(selected);
+  }
+
+  Future<void> runSpbIconCreationAction(String? selected) async {
+    if (selected == 'folder') {
+      await editIconFolder();
+    } else if (selected == 'upload') {
+      await uploadManagedIcon();
+    } else if (selected == 'paste') {
+      await pasteManagedIcon();
+    }
+  }
+
   Widget buildSpbIconWorkspace({
     bool showHeader = true,
     bool showPersistentScrollbar = false,
@@ -10505,107 +10578,64 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       children: [
         if (showHeader) spbSectionHeader(selectedIconCatalog.label),
         Expanded(
-          child: iconLibraryLoading
-              ? const Center(child: CircularProgressIndicator())
-              : error != null
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.error_outline, size: 42),
-                          const SizedBox(height: 8),
-                          const Text('Не удалось загрузить каталог иконок.'),
-                          TextButton(
-                            onPressed: ensureManagedIconLibraryLoaded,
-                            child: const Text('Повторить'),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ExternalImageDropTarget(
-                      key: const Key('managedIconDropTarget'),
-                      onImage: (bytes, fileName) => addManagedIcon(
-                        bytes,
-                        fileName,
-                        selectedIconCatalog,
-                      ),
-                      child: visible.isEmpty
-                          ? const Center(
-                              child: Text(
-                                'В этой папке пока нет иконок.\n'
-                                'Загрузите файл или перетащите его сюда.',
-                                textAlign: TextAlign.center,
-                              ),
-                            )
-                          : Scrollbar(
-                              key: const Key('spbIconGridScrollbar'),
-                              controller: spbIconGridScrollController,
-                              thumbVisibility: showPersistentScrollbar,
-                              trackVisibility: showPersistentScrollbar,
-                              interactive: true,
-                              child: GridView.builder(
-                                controller: spbIconGridScrollController,
-                                padding: const EdgeInsets.only(
-                                    right: WorkspaceGeometry.treeScrollbar),
-                                gridDelegate: pickerGridDelegate,
-                                itemCount: visible.length,
-                                itemBuilder: (context, index) {
-                                  final iconId = visible[index];
-                                  return KeyedSubtree(
-                                    key: ValueKey('managedIcon-$iconId'),
-                                    child: buildManagedIconDraggable(
-                                      iconId,
-                                      buildManagedIconPickerEntry(iconId),
-                                    ),
-                                  );
-                                },
-                              ),
+          child: spbIconCreationMenuTarget(
+            child: iconLibraryLoading
+                ? const Center(child: CircularProgressIndicator())
+                : error != null
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.error_outline, size: 42),
+                            const SizedBox(height: 8),
+                            const Text('Не удалось загрузить каталог иконок.'),
+                            TextButton(
+                              onPressed: ensureManagedIconLibraryLoaded,
+                              child: const Text('Повторить'),
                             ),
-                    ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              buildSpbSearchButton(
-                key: const Key('createIconFolderButton'),
-                icon: Icons.create_new_folder_outlined,
-                tooltip: 'Создать папку иконок',
-                gradient: const [Color(0xff5bc96d), Color(0xff08772f)],
-                onTap: () => editIconFolder(),
-              ),
-              // Retro: the yellow button pastes from the clipboard; uploading
-              // is the central "+" and the "Действие" task.
-              if (skinTokens.isRetro) ...[
-                const SizedBox(width: 4),
-                buildSpbSearchButton(
-                  key: const Key('pasteManagedIconButton'),
-                  icon: Icons.content_paste,
-                  tooltip: 'Вставить иконку из буфера',
-                  gradient: const [Color(0xffffdc58), Color(0xffc58a00)],
-                  onTap: pasteManagedIcon,
-                ),
-              ],
-              const Spacer(),
-              if (!skinTokens.isRetro) ...[
-                buildSpbSearchButton(
-                  key: const Key('uploadManagedIconButton'),
-                  icon: Icons.folder_open,
-                  tooltip: 'Загрузить иконку',
-                  gradient: const [Color(0xffffdc58), Color(0xffc58a00)],
-                  onTap: uploadManagedIcon,
-                ),
-                const SizedBox(width: 4),
-                buildSpbSearchButton(
-                  key: const Key('pasteManagedIconButton'),
-                  icon: Icons.add,
-                  tooltip: 'Вставить иконку из буфера',
-                  gradient: const [Color(0xff42bff5), Color(0xff006fc4)],
-                  onTap: pasteManagedIcon,
-                ),
-              ],
-            ],
+                          ],
+                        ),
+                      )
+                    : ExternalImageDropTarget(
+                        key: const Key('managedIconDropTarget'),
+                        onImage: (bytes, fileName) => addManagedIcon(
+                          bytes,
+                          fileName,
+                          selectedIconCatalog,
+                        ),
+                        child: visible.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  'В этой папке пока нет иконок.\n'
+                                  'Загрузите файл или перетащите его сюда.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              )
+                            : Scrollbar(
+                                key: const Key('spbIconGridScrollbar'),
+                                controller: spbIconGridScrollController,
+                                thumbVisibility: showPersistentScrollbar,
+                                trackVisibility: showPersistentScrollbar,
+                                interactive: true,
+                                child: GridView.builder(
+                                  controller: spbIconGridScrollController,
+                                  padding: const EdgeInsets.only(
+                                      right: WorkspaceGeometry.treeScrollbar),
+                                  gridDelegate: pickerGridDelegate,
+                                  itemCount: visible.length,
+                                  itemBuilder: (context, index) {
+                                    final iconId = visible[index];
+                                    return KeyedSubtree(
+                                      key: ValueKey('managedIcon-$iconId'),
+                                      child: buildManagedIconDraggable(
+                                        iconId,
+                                        buildManagedIconPickerEntry(iconId),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                      ),
           ),
         ),
       ],
@@ -10822,7 +10852,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     await showSpbTemplateImportMenu(position, folder: folder);
   }
 
-  Future<void> editSpbTemplateFolder(String folder) async {
+  Future<void> editSpbTemplateFolder(String? folder) async {
     final wallet = spbWallet;
     if (wallet == null) {
       showTemplateActionMessage(
@@ -10837,10 +10867,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         await showDialog<({String name, String iconId, String colorId})>(
       context: context,
       builder: (_) => CategoryEditorDialog(
-        editing: true,
+        editing: folder != null,
         allowDelete: false,
-        initialName: folder,
-        initialIconId: appearance?.iconId ?? defaultIconForCategoryPath(folder),
+        initialName: folder ?? '',
+        initialIconId:
+            appearance?.iconId ?? defaultIconForCategoryPath(folder ?? ''),
         initialColorId: appearance?.colorId ?? 'template_white',
       ),
     );
@@ -10848,9 +10879,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     SessionUndoEntry? undoEntry;
     try {
       undoEntry = await captureSessionUndo(
-          'Изменение папки шаблонов: $folder', saved.iconId);
-      wallet.editTemplateFolder(folder, saved.name,
-          iconId: saved.iconId, colorId: saved.colorId);
+          folder == null
+              ? 'Создание категории шаблонов: ${saved.name}'
+              : 'Изменение папки шаблонов: $folder',
+          saved.iconId);
+      if (folder == null) {
+        wallet.createTemplateFolder(saved.name,
+            iconId: saved.iconId, colorId: saved.colorId);
+      } else {
+        wallet.editTemplateFolder(folder, saved.name,
+            iconId: saved.iconId, colorId: saved.colorId);
+      }
       markVaultDirty();
       final written = await writeBackSpbWallet();
       setState(() {
@@ -11238,6 +11277,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           child: GestureDetector(
             key: const Key('spbTemplateWorkspace'),
             behavior: HitTestBehavior.translucent,
+            onTapUp: retroWorkspaceTapMenus
+                ? (details) => showSpbTemplateImportMenu(details.globalPosition)
+                : null,
             onSecondaryTapDown: (details) =>
                 showSpbTemplateImportMenu(details.globalPosition),
             onLongPressStart: (details) =>
@@ -11797,6 +11839,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               child: GestureDetector(
                 key: const Key('spbCentralWorkspace'),
                 behavior: HitTestBehavior.translucent,
+                onTapUp: retroWorkspaceTapMenus
+                    ? (details) => showSpbCreationMenu(details.globalPosition)
+                    : null,
                 onSecondaryTapDown: (details) =>
                     showSpbCreationMenu(details.globalPosition),
                 onLongPressStart: (details) =>
@@ -11951,12 +11996,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Future<void> showSpbCreationMenu(
     Offset globalPosition, {
     String? destinationCategoryPath,
+    bool preferPopup = false,
   }) async {
     if (spbObjectMenuPointerActive) return;
     final targetCategoryPath = destinationCategoryPath ?? selectedCategoryPath;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final selected = await showSkinMenu<String>(
       context: context,
+      preferPopup: preferPopup,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
@@ -14067,7 +14114,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ],
         );
     if (desktop) {
-      return wrapSpbTemplateRightContextMenu(
+      return spbRightPanel(
         Material(
           color: Colors.white,
           child: withHeading(Scrollbar(
@@ -14152,7 +14199,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ),
       );
     }
-    return wrapSpbTemplateRightContextMenu(
+    return spbRightPanel(
       withHeading(Scrollbar(
         key: const Key('spbMobileActionsScrollbar'),
         controller: spbMobileActionsScrollController,
@@ -14242,29 +14289,48 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
-  Widget wrapSpbTemplateRightContextMenu(Widget child) {
-    if (!mobileTemplatesOpen) return child;
-    return GestureDetector(
-      key: const Key('spbTemplateRightWorkspace'),
+  Widget spbRightPanel(Widget child) =>
+      KeyedSubtree(key: const Key('spbRightWorkspace'), child: child);
+
+  Widget wrapSpbLeftContextMenu(Widget child) {
+    void openMenu(Offset position) {
+      if (iconLibraryOpen) {
+        unawaited(showSpbIconCreationMenu(position));
+      } else if (mobileTemplatesOpen) {
+        unawaited(showSpbTemplateCreationActions(position));
+      } else {
+        unawaited(showSpbCreationMenu(position, preferPopup: true));
+      }
+    }
+
+    final target = GestureDetector(
+      key: const Key('spbLeftWorkspace'),
       behavior: HitTestBehavior.translucent,
-      onSecondaryTapDown: (details) =>
-          showSpbTemplateRightMenu(details.globalPosition),
-      onLongPressStart: (details) =>
-          showSpbTemplateRightMenu(details.globalPosition),
+      onTapUp: (details) => openMenu(details.globalPosition),
+      onSecondaryTapDown: (details) => openMenu(details.globalPosition),
+      onLongPressStart: (details) => openMenu(details.globalPosition),
       child: child,
     );
+    return target;
   }
 
-  Future<void> showSpbTemplateRightMenu(Offset globalPosition) async {
+  Future<void> showSpbTemplateCreationActions(Offset globalPosition) async {
     if (spbObjectMenuPointerActive) return;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final selected = await showSkinMenu<String>(
       context: context,
+      preferPopup: true,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: [
+        const PopupMenuItem(
+          key: Key('createTemplateCategoryRightContextAction'),
+          value: 'category',
+          child: ContextMenuLabel('Создать категорию',
+              icon: Icons.create_new_folder_outlined),
+        ),
         const PopupMenuItem(
           key: Key('createTemplateRightContextAction'),
           value: 'create',
@@ -14280,7 +14346,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       ],
     );
     if (!mounted) return;
-    if (selected == 'create') {
+    if (selected == 'category') {
+      await editSpbTemplateFolder(null);
+    } else if (selected == 'create') {
       await openTemplateDialog();
     } else if (selected == 'import') {
       await importSpbTemplate();
