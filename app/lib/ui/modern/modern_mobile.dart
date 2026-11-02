@@ -13,18 +13,20 @@ bool skinNarrowLayout(BuildContext context) {
 /// as before. The narrow Light and Dark layouts show the same entries, keys,
 /// order and return values in a bottom sheet: an entry's tap pops the sheet
 /// with its value just as it pops a popup menu.
+/// [preferPopup] keeps a pointer-anchored menu in every layout when requested.
 Future<T?> showSkinMenu<T>({
   required BuildContext context,
   required RelativeRect position,
   required List<PopupMenuEntry<T>> items,
   WidgetBuilder? sheetHeader,
+  bool preferPopup = false,
 }) {
   final t = WalletSkinTokens.of(context);
   if (t.isRetro) {
     return showMenu<T>(context: context, position: position, items: items);
   }
   final styled = _skinMenuEntries(context, t, items);
-  if (!skinNarrowLayout(context)) {
+  if (preferPopup || !skinNarrowLayout(context)) {
     return showMenu<T>(context: context, position: position, items: styled);
   }
   return showModalBottomSheet<T>(
@@ -244,9 +246,22 @@ extension _ModernMobileShell on _VaultShellState {
 
   /// Create button of the Light and Dark skins for a tab (0 cards,
   /// 1 templates, 2 icons). The narrow shell and the wide centre use the same
-  /// button, keys and callbacks; the creation menu opens at the button.
-  Widget? buildModernCreateFab(int tab) {
+  /// keys and callbacks; the narrow shell uses an icon-only overlay.
+  Widget? buildModernCreateFab(int tab, {bool compact = false}) {
     final t = skinTokens;
+    Widget button(Key key, String label, VoidCallback onPressed) => compact
+        ? FloatingActionButton(
+            key: key,
+            tooltip: label,
+            onPressed: onPressed,
+            child: const Icon(Icons.add),
+          )
+        : FloatingActionButton.extended(
+            key: key,
+            onPressed: onPressed,
+            icon: const Icon(Icons.add),
+            label: Text(label),
+          );
     Offset anchor(BuildContext context) {
       final box = context.findRenderObject() as RenderBox?;
       return box == null || !box.hasSize
@@ -256,27 +271,24 @@ extension _ModernMobileShell on _VaultShellState {
 
     final Widget? fab = switch (tab) {
       0 => Builder(
-          builder: (context) => FloatingActionButton.extended(
-            key: const Key('modernCreateFab'),
-            onPressed: () => showSpbCreationMenu(
+          builder: (context) => button(
+            const Key('modernCreateFab'),
+            'Создать',
+            () => showSpbCreationMenu(
               anchor(context),
               destinationCategoryPath: selectedCategoryPath,
             ),
-            icon: const Icon(Icons.add),
-            label: const Text('Создать'),
           ),
         ),
-      1 => FloatingActionButton.extended(
-          key: const Key('modernCreateTemplateFab'),
-          onPressed: () => openTemplateDialog(),
-          icon: const Icon(Icons.add),
-          label: const Text('Создать шаблон'),
+      1 => button(
+          const Key('modernCreateTemplateFab'),
+          'Создать шаблон',
+          () => openTemplateDialog(),
         ),
-      2 => FloatingActionButton.extended(
-          key: const Key('modernUploadIconFab'),
-          onPressed: uploadManagedIcon,
-          icon: const Icon(Icons.add),
-          label: const Text('Загрузить иконку'),
+      2 => button(
+          const Key('modernUploadIconFab'),
+          'Загрузить иконку',
+          uploadManagedIcon,
         ),
       _ => null,
     };
@@ -308,7 +320,7 @@ extension _ModernMobileShell on _VaultShellState {
       3 => buildModernVaultTab(),
       _ => buildModernCardsTab(),
     };
-    final fab = buildModernCreateFab(tab);
+    final fab = buildModernCreateFab(tab, compact: true);
     Widget destinationIcon(Widget icon) =>
         SizedBox.square(dimension: 24, child: FittedBox(child: icon));
     return PopScope(
@@ -621,12 +633,12 @@ extension _ModernMobileShell on _VaultShellState {
         Expanded(
           child: Scrollbar(
             controller: spbMobileActionsScrollController,
-            child: ListView(
+            child: wrapSpbLeftContextMenu(ListView(
               key: const Key('modernCardsList'),
               controller: spbMobileActionsScrollController,
               padding: EdgeInsets.zero,
               children: children,
-            ),
+            )),
           ),
         ),
       ],
@@ -939,7 +951,7 @@ extension _ModernMobileShell on _VaultShellState {
         Expanded(
           flex: 3,
           child: buildModernMaterialGroup(
-            margin: const EdgeInsets.fromLTRB(16, 0, 16, 88),
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             color: t.work,
             child: spbWorkspaceScrollbarTheme(bottom),
           ),
@@ -971,7 +983,7 @@ extension _ModernMobileShell on _VaultShellState {
   Widget buildModernVaultTab() {
     final t = skinTokens;
     final history = sessionUndoHistory;
-    return ListView(
+    return spbRightPanel(ListView(
       key: const Key('modernVaultTab'),
       padding: const EdgeInsets.only(bottom: 24),
       children: [
@@ -1065,6 +1077,6 @@ extension _ModernMobileShell on _VaultShellState {
               ),
         ]),
       ],
-    );
+    ));
   }
 }

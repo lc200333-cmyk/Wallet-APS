@@ -19,6 +19,7 @@ import 'package:pdfrx/pdfrx.dart';
 
 import 'app_version.dart';
 import 'data/spb_wallet_repository.dart';
+import 'data/legacy_swl/legacy_swl_codec.dart';
 import 'controllers/entity_index.dart';
 import 'features/cards/field_projection.dart';
 import 'features/categories/category_path_index.dart';
@@ -505,17 +506,18 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
     final updateAvailable = latest != null &&
         isVersionNewer(latest, currentAppVersion) &&
         updatePackageForPlatform(defaultTargetPlatform, latest) != null;
-    const versionStyle = TextStyle(
-      color: Color(0xffeeeeee),
+    final tokens = WalletSkinTokens.of(context);
+    final versionStyle = TextStyle(
+      color: tokens.isRetro ? const Color(0xffeeeeee) : tokens.onSurface,
       fontSize: 14,
       fontWeight: FontWeight.normal,
     );
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        const Text('v. $currentAppVersion', style: versionStyle),
+        Text('v. $currentAppVersion', style: versionStyle),
         if (latest != null) ...[
-          const Text(' / ', style: versionStyle),
+          Text(' / ', style: versionStyle),
           Semantics(
             button: updateAvailable,
             label: updateAvailable
@@ -9228,7 +9230,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       }
       measure(selectedVaultTitle, 0);
     }
-    return LayoutBuilder(
+    return wrapSpbLeftContextMenu(LayoutBuilder(
       builder: (context, constraints) => ListTileTheme(
         data: const ListTileThemeData(
           minLeadingWidth: 31,
@@ -9272,7 +9274,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ),
         ),
       ),
-    );
+    ));
   }
 
   Widget buildSpbTreeBody({
@@ -10349,11 +10351,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     spbContextMenuOpen = true;
     final selected = await showSkinMenu<String>(
       context: context,
+      preferPopup: true,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: [
+        ...spbIconCreationMenuItems,
+        const PopupMenuDivider(),
         for (final kind in IconCatalogKind.values)
           if (kind != current)
             PopupMenuItem(
@@ -10371,6 +10376,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
     spbContextMenuOpen = false;
     if (!mounted || selected == null) return;
+    if (selected == 'folder' || selected == 'upload' || selected == 'paste') {
+      await runSpbIconCreationAction(selected);
+      return;
+    }
     if (selected == 'delete') {
       await deleteManagedIconWithConfirmation(iconId);
       return;
@@ -10481,6 +10490,71 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
+  bool get retroWorkspaceTapMenus =>
+      skinTokens.isRetro &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          skinNarrowLayout(context));
+
+  Widget spbIconCreationMenuTarget({required Widget child}) {
+    return GestureDetector(
+      key: const Key('spbIconWorkspaceCreationTarget'),
+      behavior: HitTestBehavior.translucent,
+      onTapUp: (details) => showSpbIconCreationMenu(details.globalPosition),
+      onSecondaryTapDown: (details) =>
+          showSpbIconCreationMenu(details.globalPosition),
+      onLongPressStart: (details) =>
+          showSpbIconCreationMenu(details.globalPosition),
+      child: child,
+    );
+  }
+
+  List<PopupMenuEntry<String>> get spbIconCreationMenuItems => const [
+        PopupMenuItem(
+          key: Key('createIconFolderWorkspaceAction'),
+          value: 'folder',
+          child: ContextMenuLabel('Создать папку',
+              icon: Icons.create_new_folder_outlined),
+        ),
+        PopupMenuItem(
+          key: Key('uploadIconWorkspaceAction'),
+          value: 'upload',
+          child: ContextMenuLabel('Загрузить иконку из файла',
+              icon: Icons.file_upload_outlined),
+        ),
+        PopupMenuItem(
+          key: Key('pasteIconWorkspaceAction'),
+          value: 'paste',
+          child: ContextMenuLabel('Вставить иконку из буфера обмена',
+              icon: Icons.content_paste),
+        ),
+      ];
+
+  Future<void> showSpbIconCreationMenu(Offset globalPosition) async {
+    if (spbObjectMenuPointerActive) return;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final selected = await showSkinMenu<String>(
+      context: context,
+      preferPopup: true,
+      position: RelativeRect.fromRect(
+        overlay.globalToLocal(globalPosition) & const Size(1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: spbIconCreationMenuItems,
+    );
+    if (!mounted) return;
+    await runSpbIconCreationAction(selected);
+  }
+
+  Future<void> runSpbIconCreationAction(String? selected) async {
+    if (selected == 'folder') {
+      await editIconFolder();
+    } else if (selected == 'upload') {
+      await uploadManagedIcon();
+    } else if (selected == 'paste') {
+      await pasteManagedIcon();
+    }
+  }
+
   Widget buildSpbIconWorkspace({
     bool showHeader = true,
     bool showPersistentScrollbar = false,
@@ -10505,107 +10579,64 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       children: [
         if (showHeader) spbSectionHeader(selectedIconCatalog.label),
         Expanded(
-          child: iconLibraryLoading
-              ? const Center(child: CircularProgressIndicator())
-              : error != null
-                  ? Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.error_outline, size: 42),
-                          const SizedBox(height: 8),
-                          const Text('Не удалось загрузить каталог иконок.'),
-                          TextButton(
-                            onPressed: ensureManagedIconLibraryLoaded,
-                            child: const Text('Повторить'),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ExternalImageDropTarget(
-                      key: const Key('managedIconDropTarget'),
-                      onImage: (bytes, fileName) => addManagedIcon(
-                        bytes,
-                        fileName,
-                        selectedIconCatalog,
-                      ),
-                      child: visible.isEmpty
-                          ? const Center(
-                              child: Text(
-                                'В этой папке пока нет иконок.\n'
-                                'Загрузите файл или перетащите его сюда.',
-                                textAlign: TextAlign.center,
-                              ),
-                            )
-                          : Scrollbar(
-                              key: const Key('spbIconGridScrollbar'),
-                              controller: spbIconGridScrollController,
-                              thumbVisibility: showPersistentScrollbar,
-                              trackVisibility: showPersistentScrollbar,
-                              interactive: true,
-                              child: GridView.builder(
-                                controller: spbIconGridScrollController,
-                                padding: const EdgeInsets.only(
-                                    right: WorkspaceGeometry.treeScrollbar),
-                                gridDelegate: pickerGridDelegate,
-                                itemCount: visible.length,
-                                itemBuilder: (context, index) {
-                                  final iconId = visible[index];
-                                  return KeyedSubtree(
-                                    key: ValueKey('managedIcon-$iconId'),
-                                    child: buildManagedIconDraggable(
-                                      iconId,
-                                      buildManagedIconPickerEntry(iconId),
-                                    ),
-                                  );
-                                },
-                              ),
+          child: spbIconCreationMenuTarget(
+            child: iconLibraryLoading
+                ? const Center(child: CircularProgressIndicator())
+                : error != null
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.error_outline, size: 42),
+                            const SizedBox(height: 8),
+                            const Text('Не удалось загрузить каталог иконок.'),
+                            TextButton(
+                              onPressed: ensureManagedIconLibraryLoaded,
+                              child: const Text('Повторить'),
                             ),
-                    ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              buildSpbSearchButton(
-                key: const Key('createIconFolderButton'),
-                icon: Icons.create_new_folder_outlined,
-                tooltip: 'Создать папку иконок',
-                gradient: const [Color(0xff5bc96d), Color(0xff08772f)],
-                onTap: () => editIconFolder(),
-              ),
-              // Retro: the yellow button pastes from the clipboard; uploading
-              // is the central "+" and the "Действие" task.
-              if (skinTokens.isRetro) ...[
-                const SizedBox(width: 4),
-                buildSpbSearchButton(
-                  key: const Key('pasteManagedIconButton'),
-                  icon: Icons.content_paste,
-                  tooltip: 'Вставить иконку из буфера',
-                  gradient: const [Color(0xffffdc58), Color(0xffc58a00)],
-                  onTap: pasteManagedIcon,
-                ),
-              ],
-              const Spacer(),
-              if (!skinTokens.isRetro) ...[
-                buildSpbSearchButton(
-                  key: const Key('uploadManagedIconButton'),
-                  icon: Icons.folder_open,
-                  tooltip: 'Загрузить иконку',
-                  gradient: const [Color(0xffffdc58), Color(0xffc58a00)],
-                  onTap: uploadManagedIcon,
-                ),
-                const SizedBox(width: 4),
-                buildSpbSearchButton(
-                  key: const Key('pasteManagedIconButton'),
-                  icon: Icons.add,
-                  tooltip: 'Вставить иконку из буфера',
-                  gradient: const [Color(0xff42bff5), Color(0xff006fc4)],
-                  onTap: pasteManagedIcon,
-                ),
-              ],
-            ],
+                          ],
+                        ),
+                      )
+                    : ExternalImageDropTarget(
+                        key: const Key('managedIconDropTarget'),
+                        onImage: (bytes, fileName) => addManagedIcon(
+                          bytes,
+                          fileName,
+                          selectedIconCatalog,
+                        ),
+                        child: visible.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  'В этой папке пока нет иконок.\n'
+                                  'Загрузите файл или перетащите его сюда.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              )
+                            : Scrollbar(
+                                key: const Key('spbIconGridScrollbar'),
+                                controller: spbIconGridScrollController,
+                                thumbVisibility: showPersistentScrollbar,
+                                trackVisibility: showPersistentScrollbar,
+                                interactive: true,
+                                child: GridView.builder(
+                                  controller: spbIconGridScrollController,
+                                  padding: const EdgeInsets.only(
+                                      right: WorkspaceGeometry.treeScrollbar),
+                                  gridDelegate: pickerGridDelegate,
+                                  itemCount: visible.length,
+                                  itemBuilder: (context, index) {
+                                    final iconId = visible[index];
+                                    return KeyedSubtree(
+                                      key: ValueKey('managedIcon-$iconId'),
+                                      child: buildManagedIconDraggable(
+                                        iconId,
+                                        buildManagedIconPickerEntry(iconId),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                      ),
           ),
         ),
       ],
@@ -10822,7 +10853,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     await showSpbTemplateImportMenu(position, folder: folder);
   }
 
-  Future<void> editSpbTemplateFolder(String folder) async {
+  Future<void> editSpbTemplateFolder(String? folder) async {
     final wallet = spbWallet;
     if (wallet == null) {
       showTemplateActionMessage(
@@ -10837,10 +10868,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         await showDialog<({String name, String iconId, String colorId})>(
       context: context,
       builder: (_) => CategoryEditorDialog(
-        editing: true,
+        editing: folder != null,
         allowDelete: false,
-        initialName: folder,
-        initialIconId: appearance?.iconId ?? defaultIconForCategoryPath(folder),
+        initialName: folder ?? '',
+        initialIconId:
+            appearance?.iconId ?? defaultIconForCategoryPath(folder ?? ''),
         initialColorId: appearance?.colorId ?? 'template_white',
       ),
     );
@@ -10848,9 +10880,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     SessionUndoEntry? undoEntry;
     try {
       undoEntry = await captureSessionUndo(
-          'Изменение папки шаблонов: $folder', saved.iconId);
-      wallet.editTemplateFolder(folder, saved.name,
-          iconId: saved.iconId, colorId: saved.colorId);
+          folder == null
+              ? 'Создание категории шаблонов: ${saved.name}'
+              : 'Изменение папки шаблонов: $folder',
+          saved.iconId);
+      if (folder == null) {
+        wallet.createTemplateFolder(saved.name,
+            iconId: saved.iconId, colorId: saved.colorId);
+      } else {
+        wallet.editTemplateFolder(folder, saved.name,
+            iconId: saved.iconId, colorId: saved.colorId);
+      }
       markVaultDirty();
       final written = await writeBackSpbWallet();
       setState(() {
@@ -11238,6 +11278,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           child: GestureDetector(
             key: const Key('spbTemplateWorkspace'),
             behavior: HitTestBehavior.translucent,
+            onTapUp: retroWorkspaceTapMenus
+                ? (details) => showSpbTemplateImportMenu(details.globalPosition)
+                : null,
             onSecondaryTapDown: (details) =>
                 showSpbTemplateImportMenu(details.globalPosition),
             onLongPressStart: (details) =>
@@ -11797,6 +11840,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               child: GestureDetector(
                 key: const Key('spbCentralWorkspace'),
                 behavior: HitTestBehavior.translucent,
+                onTapUp: retroWorkspaceTapMenus
+                    ? (details) => showSpbCreationMenu(details.globalPosition)
+                    : null,
                 onSecondaryTapDown: (details) =>
                     showSpbCreationMenu(details.globalPosition),
                 onLongPressStart: (details) =>
@@ -11951,12 +11997,14 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Future<void> showSpbCreationMenu(
     Offset globalPosition, {
     String? destinationCategoryPath,
+    bool preferPopup = false,
   }) async {
     if (spbObjectMenuPointerActive) return;
     final targetCategoryPath = destinationCategoryPath ?? selectedCategoryPath;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final selected = await showSkinMenu<String>(
       context: context,
+      preferPopup: preferPopup,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
@@ -12969,12 +13017,27 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     SpbWalletTemplateRecord source,
     List<SpbWalletTemplateRecord> destinationTemplates,
   ) {
+    bool compatible(SpbWalletTemplateRecord candidate) {
+      if (candidate.fields.length != source.fields.length) return false;
+      final remaining = candidate.fields.toList();
+      for (final field in source.fields) {
+        final index = remaining.indexWhere((other) =>
+            other.name.trim().toLowerCase() ==
+                field.name.trim().toLowerCase() &&
+            other.fieldTypeId == field.fieldTypeId);
+        if (index < 0) return false;
+        remaining.removeAt(index);
+      }
+      return true;
+    }
+
     for (final candidate in destinationTemplates) {
-      if (candidate.id == source.id) return candidate;
+      if (candidate.id == source.id && compatible(candidate)) return candidate;
     }
     final sourceName = normalizedSpbTemplateName(source.name);
     for (final candidate in destinationTemplates) {
-      if (normalizedSpbTemplateName(candidate.name) == sourceName) {
+      if (normalizedSpbTemplateName(candidate.name) == sourceName &&
+          compatible(candidate)) {
         return candidate;
       }
     }
@@ -12993,7 +13056,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       SpbWalletTemplateFieldRecord? match;
       for (final candidate in destination.fields) {
         if (!usedDestinationIds.contains(candidate.id) &&
-            candidate.id == sourceField.id) {
+            candidate.id == sourceField.id &&
+            candidate.name.trim().toLowerCase() == normalizedName &&
+            candidate.fieldTypeId == sourceField.fieldTypeId) {
           match = candidate;
           break;
         }
@@ -13096,6 +13161,74 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return availableIconIds[generator.nextInt(availableIconIds.length)];
   }
 
+  Future<String> transferSpbIcon(
+    SpbWalletDatabase destination,
+    String uiIconId, {
+    SpbWalletDatabase? source,
+    Set<String> occupiedIds = const {},
+    bool useDisplayedIcons = true,
+  }) async {
+    final sourceId = spbIconIdForUi(uiIconId, uiIconId) ??
+        SpbWalletDatabase.defaultCardIconId;
+    final original = source?.readEmbeddedIconBytes(sourceId);
+    Uint8List? bytes = original ??
+        (useDisplayedIcons
+            ? spbEmbeddedIconPngs[sourceId] ??
+                spbEmbeddedIconPngs[uiIconId.toUpperCase()] ??
+                brandIconPngs[uiIconId] ??
+                thirdPartyIconPngs[uiIconId]
+            : null);
+    if (bytes == null) {
+      await loadSpb64PngIconAssets();
+      final asset = spbPngIconAsset(uiIconId) ?? spbPngIconAsset(sourceId);
+      if (asset != null) bytes = spbPackedIconBytes(asset);
+    }
+    if (bytes == null && !isSpbHexId(uiIconId)) {
+      final glyph = templateIconGlyph(uiIconId);
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      final painter = TextPainter(
+        text: TextSpan(
+            text: String.fromCharCode(glyph.codePoint),
+            style: TextStyle(
+                fontFamily: glyph.fontFamily,
+                package: glyph.fontPackage,
+                fontSize: 56,
+                color: const Color(0xff33434f))),
+        textDirection: TextDirection.ltr,
+      )..layout();
+      painter.paint(
+          canvas, Offset((64 - painter.width) / 2, (64 - painter.height) / 2));
+      final picture = recorder.endRecording();
+      final raster = await picture.toImage(64, 64);
+      final data = await raster.toByteData(format: ui.ImageByteFormat.png);
+      bytes = data?.buffer.asUint8List();
+      raster.dispose();
+      picture.dispose();
+      painter.dispose();
+    }
+    // A legacy file can reference an unavailable image. Keep its ID rather
+    // than silently assigning a random unrelated icon.
+    if (bytes == null) return sourceId;
+    var targetId = sourceId;
+    if (occupiedIds.contains(sourceId)) {
+      final existing = destination.readEmbeddedIconBytes(sourceId);
+      final incoming = original ?? LegacySwlCodec.embeddedIconIco(bytes);
+      if (existing == null || !listEquals(existing, incoming)) {
+        targetId = SpbWalletDatabase.makeId();
+      } else {
+        return sourceId;
+      }
+    }
+    if (original != null) {
+      destination.copyEmbeddedIconFrom(source!, sourceId,
+          destinationIconId: targetId);
+    } else {
+      destination.saveIcon(targetId, bytes);
+    }
+    return targetId;
+  }
+
   Future<File> createSpbItemsExportFile(
     List<SecretItem> exportItems, {
     required String password,
@@ -13110,9 +13243,34 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         : File(targetPath);
     final exportWallet = SpbWalletDatabase.create(file.path, password);
     try {
+      final iconIds = <String, String>{};
+      Future<String> exportIcon(String iconId) async => iconIds[iconId] ??=
+          await transferSpbIcon(exportWallet, iconId, source: spbWallet);
       if (categoryPath != null && categoryPath.trim().isNotEmpty) {
         exportWallet.saveExportedFolderPath(categoryPath);
         exportWallet.ensureCategoryPath(categoryPath);
+      }
+      final paths = <String>{
+        for (final item in exportItems) item.category,
+        for (final item in exportItems)
+          templateFor(item.templateId).categoryPath,
+        if (categoryPath != null) categoryPath,
+        if (categoryPath != null)
+          ...categoryPaths.where((path) => path.startsWith('$categoryPath / ')),
+      };
+      final ancestors = <String>{
+        for (final path in paths)
+          for (var count = 1; count <= categoryParts(path).length; count++)
+            categoryParts(path).take(count).join(' / '),
+      }.toList()
+        ..sort((a, b) =>
+            categoryParts(a).length.compareTo(categoryParts(b).length));
+      for (final path in ancestors) {
+        exportWallet.createCategory(
+            path,
+            await exportIcon(
+                categoryIconsByPath[path] ?? defaultIconForCategoryPath(path)),
+            colorId: categoryColorsByPath[path]);
       }
       final templateIds = <String, String>{};
       final fieldIds = <String, Map<String, String>>{};
@@ -13131,7 +13289,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           SpbWalletTemplateDraft(
             id: exportedTemplateId,
             name: template.name,
-            iconId: spbIconIdForUi(template.iconId, template.iconId),
+            iconId: await exportIcon(template.iconId),
+            cardColor: template.spbColor ?? paletteColorToSpb(template.colorId),
+            categoryPath: template.categoryPath,
             fields: [
               for (final field in template.fields)
                 if (field.id != spbDescriptionFieldId)
@@ -13166,9 +13326,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     (item.values[field.id]?.isNotEmpty ?? false))
                   exportedFieldIds[field.id]!: item.values[field.id]!,
             },
-            iconId: spbIconIdForUi(itemIconId(item, template), template.iconId),
+            iconId: await exportIcon(itemIconId(item, template)),
             cardColor: item.spbColor ?? paletteColorToSpb(item.colorId),
             backgroundImageBase64: item.backgroundImageBase64,
+            fieldOrder: [
+              for (final id in item.fieldOrder) exportedFieldIds[id] ?? id
+            ],
+            hiddenFieldIds: {
+              for (final id in item.hiddenFieldIds) exportedFieldIds[id] ?? id
+            },
+            modifiedAt: item.modifiedAt,
           ),
         );
         for (final attachment in item.attachments) {
@@ -13489,7 +13656,42 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       final fieldIds = <String, Map<String, String>>{};
       final destinationSnapshot = destination.loadSnapshot();
       final destinationTemplates = destinationSnapshot.templates.toList();
+      final existingCategoryPaths = buildCategoryPathsById(
+        destinationSnapshot.categories,
+        idOf: (entry) => entry.id,
+        parentIdOf: (entry) => entry.parentId,
+        nameOf: (entry) => entry.name,
+      ).values.toSet();
+      bool inExportedFolder(String path) =>
+          importingFolder &&
+          (path == exportedFolderPath ||
+              path.startsWith('$exportedFolderPath / '));
+      String templateDestinationPath(String path) => inExportedFolder(path)
+          ? importedFolderCategoryPath(
+              path, exportedFolderPath, destinationCategoryPath)
+          : path;
+      final importedTemplateCategoryPaths = <String>{};
       final sourceTemplates = requiredSpbTemplatesForImport(snapshot);
+      final importedIconIds = <String, String>{};
+      final occupiedIconIds = <String>{
+        ...spbOriginalIconAssets.keys,
+        ...destinationSnapshot.embeddedIconPngs.keys,
+        ...destinationSnapshot.templates.map((entry) => entry.iconId),
+        ...destinationSnapshot.cards.map((entry) => entry.iconId),
+        ...destinationSnapshot.categories.map((entry) => entry.iconId),
+      };
+      for (final iconId in <String>{
+        ...sourceTemplates.map((entry) => entry.iconId),
+        ...snapshot.cards.map((entry) => entry.iconId),
+        ...snapshot.categories.map((entry) => entry.iconId),
+      }.where((id) => id.isNotEmpty)) {
+        importedIconIds[iconId] = await transferSpbIcon(destination, iconId,
+            source: source,
+            occupiedIds: occupiedIconIds,
+            useDisplayedIcons: false);
+        occupiedIconIds.add(importedIconIds[iconId]!);
+      }
+      final templatesToOffer = <String>[];
       for (final template in sourceTemplates) {
         final existing = existingSpbTemplateForImport(
           template,
@@ -13504,6 +13706,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           continue;
         }
         final importedTemplateId = SpbWalletDatabase.makeId();
+        if (template.categoryPath.isNotEmpty) {
+          importedTemplateCategoryPaths.add(template.categoryPath);
+        }
         final importedFieldIds = <String, String>{
           for (final field in template.fields)
             field.id: SpbWalletDatabase.makeId(),
@@ -13524,11 +13729,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             SpbWalletTemplateDraft(
               id: importedTemplateId,
               name: template.name,
-              iconId: template.iconId,
+              iconId: importedIconIds[template.iconId] ?? template.iconId,
               cardColor: template.cardColor,
-              categoryPath: template.categoryPath,
-              iconBytes: snapshot.embeddedIconPngs[template.iconId],
-              iconFileName: 'imported-template-icon.png',
+              categoryPath: templateDestinationPath(template.categoryPath),
               fields: importedFields,
             ),
           );
@@ -13539,7 +13742,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               name: template.name,
               iconId: SpbWalletDatabase.defaultCardIconId,
               cardColor: template.cardColor,
-              categoryPath: template.categoryPath,
+              categoryPath: templateDestinationPath(template.categoryPath),
               fields: importedFields,
             ),
           );
@@ -13550,12 +13753,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             name: template.name,
             iconId: template.iconId,
             cardColor: template.cardColor,
-            categoryPath: template.categoryPath,
+            categoryPath: templateDestinationPath(template.categoryPath),
             fields: importedFields,
           ),
         );
+        if (snapshot.cards.any((card) => card.templateId == template.id)) {
+          templatesToOffer.add(importedTemplateId);
+        }
       }
-      if (importingFolder) {
+      if (importingFolder || importedTemplateCategoryPaths.isNotEmpty) {
         final sourcePaths = buildCategoryPathsById(
           snapshot.categories,
           idOf: (entry) => entry.id,
@@ -13564,24 +13770,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         );
         final sourceCategories = snapshot.categories.where((category) {
           final path = sourcePaths[category.id] ?? '';
-          return path == exportedFolderPath ||
-              path.startsWith('$exportedFolderPath / ');
+          return inExportedFolder(path) ||
+              importedTemplateCategoryPaths.any((templatePath) =>
+                  templatePath == path || templatePath.startsWith('$path / '));
         }).toList()
           ..sort((first, second) => categoryParts(sourcePaths[first.id] ?? '')
               .length
               .compareTo(categoryParts(sourcePaths[second.id] ?? '').length));
         for (final category in sourceCategories) {
-          final path = importedFolderCategoryPath(
-            sourcePaths[category.id] ?? '',
-            exportedFolderPath,
-            destinationCategoryPath,
-          );
+          final sourcePath = sourcePaths[category.id] ?? '';
+          final path = templateDestinationPath(sourcePath);
+          if (!inExportedFolder(sourcePath) &&
+              existingCategoryPaths.contains(path)) {
+            continue;
+          }
           try {
             destination.createCategory(
               path,
-              category.iconId,
-              iconBytes: snapshot.embeddedIconPngs[category.iconId],
-              iconFileName: 'imported-folder-icon.png',
+              importedIconIds[category.iconId] ?? category.iconId,
               colorId: category.colorId,
             );
           } catch (_) {
@@ -13603,11 +13809,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             'не удалось восстановить.',
           );
         }
-        final importedCardIconId = cardIconIdForImport(
-          sourceIconId: card.iconId,
-          sourceSnapshot: snapshot,
-          destinationSnapshot: destinationSnapshot,
-        );
+        final importedCardIconId = importedIconIds[card.iconId] ?? card.iconId;
         final cardId = SpbWalletDatabase.makeId();
         final importedValues = {
           for (final entry in card.fieldValues.entries)
@@ -13633,8 +13835,6 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               customFields: card.customFields,
               fieldValues: importedValues,
               iconId: importedCardIconId,
-              iconBytes: snapshot.embeddedIconPngs[importedCardIconId],
-              iconFileName: 'imported-card-icon.png',
               cardColor: card.cardColor,
               backgroundImageBase64: card.backgroundImageBase64,
               fieldOrder: [
@@ -13718,6 +13918,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             : 'Карточки импортированы в рабочую копию, но исходный файл '
                 'записать не удалось.',
       );
+      if (templatesToOffer.isNotEmpty && mounted && unlocked) {
+        unawaited(offerImportedTemplates(templatesToOffer, destination));
+      }
     } catch (error) {
       if (undoEntry != null) {
         try {
@@ -13731,6 +13934,42 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       if (temporary != null && temporary.existsSync()) {
         temporary.deleteSync();
       }
+    }
+  }
+
+  Future<void> offerImportedTemplates(
+      List<String> templateIds, SpbWalletDatabase destination) async {
+    try {
+      for (final id in templateIds) {
+        if (!mounted || !unlocked || !identical(spbWallet, destination)) return;
+        final template = templatesById[id];
+        if (template == null) continue;
+        final create = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            key: const Key('importedTemplateProposal'),
+            title: const Text('Создать шаблон?'),
+            content: Text('В базе не было шаблона «${template.displayName}». '
+                'Карточки уже импортированы со всеми полями. '
+                'Настроить и сохранить этот шаблон?'),
+            actions: [
+              TextButton(
+                  key: const Key('skipImportedTemplate'),
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Не сейчас')),
+              FilledButton(
+                  key: const Key('createImportedTemplate'),
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  child: const Text('Создать шаблон')),
+            ],
+          ),
+        );
+        if (!mounted || !unlocked || !identical(spbWallet, destination)) return;
+        if (create == true) await openTemplateDialog(template: template);
+      }
+    } catch (error) {
+      showSpbOperationMessage(
+          'Карточки импортированы. Не удалось открыть шаблон: $error');
     }
   }
 
@@ -14067,7 +14306,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ],
         );
     if (desktop) {
-      return wrapSpbTemplateRightContextMenu(
+      return spbRightPanel(
         Material(
           color: Colors.white,
           child: withHeading(Scrollbar(
@@ -14152,7 +14391,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         ),
       );
     }
-    return wrapSpbTemplateRightContextMenu(
+    return spbRightPanel(
       withHeading(Scrollbar(
         key: const Key('spbMobileActionsScrollbar'),
         controller: spbMobileActionsScrollController,
@@ -14242,29 +14481,48 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
-  Widget wrapSpbTemplateRightContextMenu(Widget child) {
-    if (!mobileTemplatesOpen) return child;
-    return GestureDetector(
-      key: const Key('spbTemplateRightWorkspace'),
+  Widget spbRightPanel(Widget child) =>
+      KeyedSubtree(key: const Key('spbRightWorkspace'), child: child);
+
+  Widget wrapSpbLeftContextMenu(Widget child) {
+    void openMenu(Offset position) {
+      if (iconLibraryOpen) {
+        unawaited(showSpbIconCreationMenu(position));
+      } else if (mobileTemplatesOpen) {
+        unawaited(showSpbTemplateCreationActions(position));
+      } else {
+        unawaited(showSpbCreationMenu(position, preferPopup: true));
+      }
+    }
+
+    final target = GestureDetector(
+      key: const Key('spbLeftWorkspace'),
       behavior: HitTestBehavior.translucent,
-      onSecondaryTapDown: (details) =>
-          showSpbTemplateRightMenu(details.globalPosition),
-      onLongPressStart: (details) =>
-          showSpbTemplateRightMenu(details.globalPosition),
+      onTapUp: (details) => openMenu(details.globalPosition),
+      onSecondaryTapDown: (details) => openMenu(details.globalPosition),
+      onLongPressStart: (details) => openMenu(details.globalPosition),
       child: child,
     );
+    return target;
   }
 
-  Future<void> showSpbTemplateRightMenu(Offset globalPosition) async {
+  Future<void> showSpbTemplateCreationActions(Offset globalPosition) async {
     if (spbObjectMenuPointerActive) return;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
     final selected = await showSkinMenu<String>(
       context: context,
+      preferPopup: true,
       position: RelativeRect.fromRect(
         overlay.globalToLocal(globalPosition) & const Size(1, 1),
         Offset.zero & overlay.size,
       ),
       items: [
+        const PopupMenuItem(
+          key: Key('createTemplateCategoryRightContextAction'),
+          value: 'category',
+          child: ContextMenuLabel('Создать категорию',
+              icon: Icons.create_new_folder_outlined),
+        ),
         const PopupMenuItem(
           key: Key('createTemplateRightContextAction'),
           value: 'create',
@@ -14280,7 +14538,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       ],
     );
     if (!mounted) return;
-    if (selected == 'create') {
+    if (selected == 'category') {
+      await editSpbTemplateFolder(null);
+    } else if (selected == 'create') {
       await openTemplateDialog();
     } else if (selected == 'import') {
       await importSpbTemplate();

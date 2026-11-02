@@ -307,7 +307,7 @@ void main() {
     expect(find.byKey(const Key('templateCloseButton')), findsOneWidget);
   });
 
-  testWidgets('template right workspace has create context action',
+  testWidgets('template left workspace has create context action',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -318,9 +318,9 @@ void main() {
 
     await tester.tap(find.text('Шаблоны'));
     await tester.pumpAndSettle();
-    final rightWorkspace = find.byKey(const Key('spbTemplateRightWorkspace'));
-    expect(rightWorkspace, findsOneWidget);
-    final point = tester.getBottomRight(rightWorkspace) - const Offset(12, 12);
+    final leftWorkspace = find.byKey(const Key('spbLeftWorkspace'));
+    expect(leftWorkspace, findsOneWidget);
+    final point = tester.getTopLeft(leftWorkspace) + const Offset(30, 2);
     await tester.tapAt(point, buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
 
@@ -412,17 +412,26 @@ void main() {
     addTearDown(() => directory.deleteSync(recursive: true));
 
     final protectedPath = '${directory.path}${Platform.pathSeparator}card.swl';
-    await state.createSpbItemsExportFile(
-      [item],
-      password: 'export-password',
-      targetPath: protectedPath,
-    );
+    await tester.runAsync(() async {
+      await state.createSpbItemsExportFile(
+        [item],
+        password: 'export-password',
+        targetPath: protectedPath,
+      );
+    });
     expect(
       () => SpbWalletDatabase.open(protectedPath, ''),
       throwsA(isA<SpbWalletOpenException>()),
     );
     final protected = SpbWalletDatabase.open(protectedPath, 'export-password');
     final protectedSnapshot = protected.loadSnapshot();
+    for (final iconId in {
+      ...protectedSnapshot.cards.map((entry) => entry.iconId),
+      ...protectedSnapshot.templates.map((entry) => entry.iconId),
+      ...protectedSnapshot.categories.map((entry) => entry.iconId),
+    }) {
+      expect(protectedSnapshot.embeddedIconPngs, contains(iconId));
+    }
     protected.close();
     expect(protectedSnapshot.cards.single.title, item.title);
     expect(
@@ -431,11 +440,13 @@ void main() {
     );
 
     final openPath = '${directory.path}${Platform.pathSeparator}open.swl';
-    await state.createSpbItemsExportFile(
-      [item],
-      password: '',
-      targetPath: openPath,
-    );
+    await tester.runAsync(() async {
+      await state.createSpbItemsExportFile(
+        [item],
+        password: '',
+        targetPath: openPath,
+      );
+    });
     final passwordless = SpbWalletDatabase.open(openPath, '');
     expect(passwordless.loadSnapshot().cards.single.title, item.title);
     passwordless.close();

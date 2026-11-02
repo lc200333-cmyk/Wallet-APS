@@ -2671,25 +2671,10 @@ void main() {
       );
     }
     expect(find.text('Базовые'), findsWidgets);
-    // Retro: no bottom upload button; the yellow paste button sits next to
-    // the folder button.
+    // Icon actions remain in the left panel menu, without a bottom toolbar.
     expect(find.byKey(const Key('uploadManagedIconButton')), findsNothing);
-    expect(
-      find.descendant(
-        of: find.byKey(const Key('pasteManagedIconButton')),
-        matching: find.byIcon(Icons.content_paste),
-      ),
-      findsOneWidget,
-    );
-    expect(
-      tester.getTopLeft(find.byKey(const Key('pasteManagedIconButton'))).dx,
-      closeTo(
-        tester.getTopRight(find.byKey(const Key('createIconFolderButton'))).dx +
-            4,
-        0.1,
-      ),
-    );
-    expect(find.byKey(const Key('pasteManagedIconButton')), findsOneWidget);
+    expect(find.byKey(const Key('createIconFolderButton')), findsNothing);
+    expect(find.byKey(const Key('pasteManagedIconButton')), findsNothing);
     expect(find.byKey(const Key('managedIconUploadTaskIcon')), findsOneWidget);
     expect(find.byKey(const Key('managedIconMoveTaskIcon')), findsOneWidget);
     expect(find.byKey(const Key('managedIconExitTaskIcon')), findsOneWidget);
@@ -2819,6 +2804,13 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('deleteManagedIconContextAction')),
         findsOneWidget);
+    for (final key in [
+      'createIconFolderWorkspaceAction',
+      'uploadIconWorkspaceAction',
+      'pasteIconWorkspaceAction'
+    ]) {
+      expect(find.byKey(Key(key)), findsOneWidget);
+    }
     await tester.tapAt(const Offset(2, 2));
     await tester.pumpAndSettle();
 
@@ -5327,9 +5319,11 @@ void main() {
     state.applySpbSnapshot(destination.loadSnapshot());
     state.setState(() {});
 
-    await state.importSpbWalletCards(
-      destinationCategoryPath: 'Назначение',
-    );
+    await tester.runAsync(() async {
+      await state.importSpbWalletCards(
+        destinationCategoryPath: 'Назначение',
+      );
+    });
     await tester.pumpAndSettle();
 
     final imported = destination.loadSnapshot();
@@ -5341,8 +5335,8 @@ void main() {
       'Назначение / Импорт / Вложенная',
     );
     expect(imported.cards.single.attachments, hasLength(1));
-    expect(imported.cards.single.iconId, isNot('FFFFFFFFFFFFFFFF'));
-    expect(spbOriginalIconAssets, contains(imported.cards.single.iconId));
+    // Missing legacy image data must not assign an unrelated random icon.
+    expect(imported.cards.single.iconId, 'FFFFFFFFFFFFFFFF');
     expect(
       imported.cards.single.fieldValues.values,
       contains('user@example.test'),
@@ -5352,6 +5346,10 @@ void main() {
       containsAll(<String>['Назначение', 'Импорт', 'Вложенная']),
     );
     expect(find.textContaining('Импортировано карточек: 1'), findsOneWidget);
+    expect(find.byKey(const Key('importedTemplateProposal')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('skipImportedTemplate')));
+    await tester.runAsync(() async => Future<void>.delayed(Duration.zero));
+    await tester.pumpAndSettle();
 
     destination.deleteCard(imported.cards.single.id);
     state.setState(() {
@@ -5360,12 +5358,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(state.items, isEmpty);
 
-    await state.importSpbWalletCards(
-      destinationCategoryPath: 'Назначение',
-    );
+    await tester.runAsync(() async {
+      await state.importSpbWalletCards(
+        destinationCategoryPath: 'Назначение',
+      );
+    });
     await tester.pumpAndSettle();
 
     final reimported = destination.loadSnapshot();
+    expect(find.byKey(const Key('importedTemplateProposal')), findsNothing);
     expect(reimported.cards, hasLength(1));
     expect(state.items, hasLength(1));
     expect(state.items.single.title, 'Карточка из папки');
@@ -5374,6 +5375,9 @@ void main() {
       'Назначение / Импорт / Вложенная',
     );
     state.spbWallet = null;
+    await tester.pumpAndSettle();
+    await tester.runAsync(
+        () async => Future<void>.delayed(const Duration(milliseconds: 30)));
     expect(tester.takeException(), isNull);
   });
 

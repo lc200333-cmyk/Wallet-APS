@@ -1077,6 +1077,16 @@ Hidden INTEGER NOT NULL DEFAULT 0
 
   void editTemplateFolder(String oldName, String newName,
       {required String iconId, required String colorId}) {
+    _saveTemplateFolder(oldName, newName, iconId: iconId, colorId: colorId);
+  }
+
+  void createTemplateFolder(String name,
+      {required String iconId, required String colorId}) {
+    _saveTemplateFolder(null, name, iconId: iconId, colorId: colorId);
+  }
+
+  void _saveTemplateFolder(String? oldName, String newName,
+      {required String iconId, required String colorId}) {
     final name = canonicalTemplateFolder(newName);
     if (name.isEmpty || name.contains('/') || name.contains(':')) {
       throw const SpbWalletOpenException('Некорректное имя папки шаблонов.');
@@ -1091,7 +1101,7 @@ Hidden INTEGER NOT NULL DEFAULT 0
         ...settings.where((folder) => !folder.hidden).map((f) => f.name),
         ...templates.map((t) => templateFolderFor(t.name, t.categoryPath)),
       };
-      if (!names.contains(oldName)) {
+      if (oldName != null && !names.contains(oldName)) {
         throw const SpbWalletOpenException('Папка шаблонов не найдена.');
       }
       if (names.any((folder) =>
@@ -1128,7 +1138,7 @@ Hidden INTEGER NOT NULL DEFAULT 0
         }
       }
 
-      if (name != oldName) {
+      if (oldName != null && name != oldName) {
         // Only template names change: card folders, fields and links stay intact.
         for (final template in templates) {
           if (templateFolderFor(template.name, template.categoryPath) !=
@@ -2036,6 +2046,43 @@ CREATE INDEX IF NOT EXISTS idx_CardViewField_View ON spbwlt_CardViewField (CardV
       'UPDATE spbwlt_CardView SET CardColor = ?, FillCardWithColor = 1 WHERE hex(ID) = ?',
       [LegacySwlCodec.cardColor(cardColor), cardViewId],
     );
+  }
+
+  Uint8List? readEmbeddedIconBytes(String iconId) {
+    final rows = _db.select('SELECT Data FROM spbwlt_Icon WHERE hex(ID) = ?',
+        [iconId.toUpperCase()]);
+    if (rows.isEmpty || rows.first['Data'] == null) return null;
+    return attachmentCodec.decode(rows.first['Data']).bytes;
+  }
+
+  bool copyEmbeddedIconFrom(SpbWalletDatabase source, String iconId,
+      {required String destinationIconId}) {
+    final rows = source._db.select(
+        'SELECT Name, Data FROM spbwlt_Icon WHERE hex(ID) = ?',
+        [iconId.toUpperCase()]);
+    if (rows.isEmpty || rows.first['Data'] == null) return false;
+    final row = rows.first;
+    final bytes = source.attachmentCodec.decode(row['Data']).bytes;
+    final name = source.crypto.decryptText(row['Name']);
+    _transaction(() {
+      final id = _idFromHex(destinationIconId);
+      final encryptedName = crypto.encryptText(name);
+      final encryptedData = attachmentCodec.encode(bytes);
+      if (_db.select('SELECT 1 FROM spbwlt_Icon WHERE ID = ?', [id]).isEmpty) {
+        _db.execute('INSERT INTO spbwlt_Icon (ID, Name, Data) VALUES (?, ?, ?)',
+            [id, encryptedName, encryptedData]);
+      } else {
+        _db.execute('UPDATE spbwlt_Icon SET Name = ?, Data = ? WHERE ID = ?',
+            [encryptedName, encryptedData, id]);
+      }
+      _embeddedIconCache = null;
+    });
+    return true;
+  }
+
+  void saveIcon(String iconId, List<int> bytes,
+      {String fileName = 'icon.png'}) {
+    _transaction(() => _saveEmbeddedIconData(iconId, bytes, fileName));
   }
 
   void _saveEmbeddedIcon(SpbWalletTemplateDraft draft) {
