@@ -185,10 +185,7 @@ void main() {
     await tester.tap(find.byKey(const Key('spbIconsModeButton')));
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pumpAndSettle();
-    final leftPanel = tester.getRect(find.byKey(const Key('spbLeftWorkspace')));
-    await tester.tapAt(leftPanel.topCenter + const Offset(0, 2));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('createIconFolderWorkspaceAction')));
+    await tester.tap(find.byKey(const Key('createIconFolderButton')));
     await tester.runAsync(() => Future<void>.delayed(Duration.zero));
     await tester.pumpAndSettle();
     await tester.enterText(

@@ -729,7 +729,7 @@ extension _ModernWideShell on _VaultShellState {
         ),
       ),
     );
-    return spbRightPanel(
+    return wrapSpbTemplateRightContextMenu(
       Material(
         color: t.side,
         child: Column(

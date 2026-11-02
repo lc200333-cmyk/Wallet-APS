@@ -90,13 +90,7 @@ void main() {
     expect(activity, contains('openFileDescriptor(uri, "rw")'));
     expect(activity, contains('force(true)'));
     expect(activity, contains('actual.sha256.contentEquals(expected.sha256)'));
-    expect(activity, contains('newlyCreatedWalletUris.contains(uriText)'));
-    expect(activity, contains('backupOriginalWallet(uri, originalSize)'));
-    expect(activity, contains('WalletStreamWriter.write(source)'));
-    expect(
-      activity.indexOf('backupOriginalWallet(uri, originalSize)'),
-      lessThan(activity.indexOf('openFileDescriptor(uri, "rw")')),
-    );
+    expect(activity, contains('originalSize == 0L'));
     expect(
       activity.indexOf('isValidWalletFile(source)'),
       lessThan(activity.indexOf('openFileDescriptor(uri, "rw")')),

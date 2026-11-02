@@ -307,7 +307,7 @@ void main() {
     expect(find.byKey(const Key('templateCloseButton')), findsOneWidget);
   });
 
-  testWidgets('template left workspace has create context action',
+  testWidgets('template right workspace has create context action',
       (tester) async {
     await tester.binding.setSurfaceSize(const Size(1280, 900));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -318,9 +318,9 @@ void main() {
 
     await tester.tap(find.text('Шаблоны'));
     await tester.pumpAndSettle();
-    final leftWorkspace = find.byKey(const Key('spbLeftWorkspace'));
-    expect(leftWorkspace, findsOneWidget);
-    final point = tester.getTopLeft(leftWorkspace) + const Offset(30, 2);
+    final rightWorkspace = find.byKey(const Key('spbTemplateRightWorkspace'));
+    expect(rightWorkspace, findsOneWidget);
+    final point = tester.getBottomRight(rightWorkspace) - const Offset(12, 12);
     await tester.tapAt(point, buttons: kSecondaryMouseButton);
     await tester.pumpAndSettle();
 

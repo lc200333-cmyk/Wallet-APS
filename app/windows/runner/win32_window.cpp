@@ -231,10 +231,7 @@ Win32Window::MessageHandler(HWND hwnd,
     }
 
     case WM_ACTIVATE:
-      // Deactivation must not reactivate the Flutter child: doing so re-enters
-      // focus handling while Windows is still transferring focus elsewhere.
-      if (LOWORD(wparam) != WA_INACTIVE && child_content_ != nullptr &&
-          IsWindow(child_content_)) {
+      if (child_content_ != nullptr) {
         SetFocus(child_content_);
       }
       return 0;

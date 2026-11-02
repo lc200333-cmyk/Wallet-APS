@@ -2671,10 +2671,25 @@ void main() {
       );
     }
     expect(find.text('Базовые'), findsWidgets);
-    // Icon actions remain in the left panel menu, without a bottom toolbar.
+    // Retro: no bottom upload button; the yellow paste button sits next to
+    // the folder button.
     expect(find.byKey(const Key('uploadManagedIconButton')), findsNothing);
-    expect(find.byKey(const Key('createIconFolderButton')), findsNothing);
-    expect(find.byKey(const Key('pasteManagedIconButton')), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('pasteManagedIconButton')),
+        matching: find.byIcon(Icons.content_paste),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      tester.getTopLeft(find.byKey(const Key('pasteManagedIconButton'))).dx,
+      closeTo(
+        tester.getTopRight(find.byKey(const Key('createIconFolderButton'))).dx +
+            4,
+        0.1,
+      ),
+    );
+    expect(find.byKey(const Key('pasteManagedIconButton')), findsOneWidget);
     expect(find.byKey(const Key('managedIconUploadTaskIcon')), findsOneWidget);
     expect(find.byKey(const Key('managedIconMoveTaskIcon')), findsOneWidget);
     expect(find.byKey(const Key('managedIconExitTaskIcon')), findsOneWidget);
@@ -2804,13 +2819,6 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('deleteManagedIconContextAction')),
         findsOneWidget);
-    for (final key in [
-      'createIconFolderWorkspaceAction',
-      'uploadIconWorkspaceAction',
-      'pasteIconWorkspaceAction'
-    ]) {
-      expect(find.byKey(Key(key)), findsOneWidget);
-    }
     await tester.tapAt(const Offset(2, 2));
     await tester.pumpAndSettle();
 

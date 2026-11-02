@@ -10,43 +10,6 @@ import 'package:wallet_aps/services/wallet_rekey_service.dart';
 import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
 
 void main() {
-  test('new template categories persist and reject duplicate or invalid names',
-      () {
-    final directory = Directory.systemTemp.createTempSync('template-category-');
-    addTearDown(() => directory.deleteSync(recursive: true));
-    final path = '${directory.path}/synthetic.swl';
-    var wallet = SpbWalletDatabase.create(path, 'synthetic-password');
-    wallet.createTemplateFolder('Новая категория',
-        iconId: 'key', colorId: 'template_green');
-    for (final name in [
-      'Новая категория',
-      'новая категория',
-      'Интернет',
-      '',
-      'Папка/Вложенная',
-      'Папка: Имя'
-    ]) {
-      expect(
-          () => wallet.createTemplateFolder(name,
-              iconId: 'folder', colorId: 'template_white'),
-          throwsA(isA<SpbWalletOpenException>()));
-    }
-    wallet.close(flush: true);
-    WalletRekeyService.rekeyFile(path,
-        oldPassword: 'synthetic-password', newPassword: 'new-password');
-    wallet = SpbWalletDatabase.open(path, 'new-password');
-    try {
-      final folder = wallet.loadTemplateFolders().single;
-      expect(folder.name, 'Новая категория');
-      expect(folder.iconId, 'key');
-      expect(folder.colorId, 'template_green');
-      expect(folder.hidden, isFalse);
-      expect(wallet.loadSnapshot().cards, isEmpty);
-      expect(wallet.loadSnapshot().templates, isEmpty);
-    } finally {
-      wallet.close();
-    }
-  });
   test('template folder edits persist, preserve cards and survive rekey', () {
     final directory =
         Directory.systemTemp.createTempSync('template-folder-edit-');
@@ -113,59 +76,6 @@ void main() {
   });
 
   for (final platform in [TargetPlatform.windows, TargetPlatform.android]) {
-    testWidgets(
-        'left template menu creates a persistent category on ${platform.name}',
-        (tester) async {
-      debugDefaultTargetPlatformOverride = platform;
-      await tester.binding.setSurfaceSize(platform == TargetPlatform.windows
-          ? const Size(1280, 900)
-          : const Size(360, 800));
-      final directory =
-          Directory.systemTemp.createTempSync('template-category-ui-');
-      addTearDown(() async {
-        await tester.pumpWidget(const SizedBox.shrink());
-        debugDefaultTargetPlatformOverride = null;
-        await tester.binding.setSurfaceSize(null);
-        directory.deleteSync(recursive: true);
-      });
-      final path = '${directory.path}/synthetic.swl';
-      final wallet = SpbWalletDatabase.create(path, '');
-      await tester.pumpWidget(
-          const MaterialApp(home: VaultShell(initiallyUnlocked: true)));
-      await tester.pumpAndSettle();
-      final dynamic state = tester.state(find.byType(VaultShell));
-      state.setState(() {
-        state.spbWallet = wallet;
-        state.applySpbSnapshot(wallet.loadSnapshot());
-      });
-      state.showSpbTemplatesMode();
-      state.setState(() => state.mobilePane = 0);
-      await tester.pumpAndSettle();
-      final rect = tester.getRect(find.byKey(const Key('spbLeftWorkspace')));
-      await tester.tapAt(rect.topCenter + const Offset(0, 2));
-      await tester.pumpAndSettle();
-      await tester.tap(
-          find.byKey(const Key('createTemplateCategoryRightContextAction')));
-      await tester.pumpAndSettle();
-      await tester.enterText(
-          find.byKey(const Key('categoryNameField')), 'Новая категория');
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('categorySaveButton')));
-      await tester.runAsync(() async {
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-      });
-      await tester.pumpAndSettle();
-      expect(state.spbTemplateFolderNames, contains('Новая категория'));
-      expect(state.selectedTemplateFolder, 'Новая категория');
-      expect(wallet.loadTemplateFolders().single.name, 'Новая категория');
-      expect((state.sessionUndoHistory as List).length, 1);
-      await state.restoreSessionUndoAt(0, allChanges: true);
-      await tester.pumpAndSettle();
-      expect(wallet.loadTemplateFolders(), isEmpty);
-      expect(state.spbTemplateFolderNames, isNot(contains('Новая категория')));
-      debugDefaultTargetPlatformOverride = null;
-    });
-
     testWidgets('folder context opens shared editor on ${platform.name}',
         (tester) async {
       debugDefaultTargetPlatformOverride = platform;

@@ -1077,16 +1077,6 @@ Hidden INTEGER NOT NULL DEFAULT 0
 
   void editTemplateFolder(String oldName, String newName,
       {required String iconId, required String colorId}) {
-    _saveTemplateFolder(oldName, newName, iconId: iconId, colorId: colorId);
-  }
-
-  void createTemplateFolder(String name,
-      {required String iconId, required String colorId}) {
-    _saveTemplateFolder(null, name, iconId: iconId, colorId: colorId);
-  }
-
-  void _saveTemplateFolder(String? oldName, String newName,
-      {required String iconId, required String colorId}) {
     final name = canonicalTemplateFolder(newName);
     if (name.isEmpty || name.contains('/') || name.contains(':')) {
       throw const SpbWalletOpenException('Некорректное имя папки шаблонов.');
@@ -1101,7 +1091,7 @@ Hidden INTEGER NOT NULL DEFAULT 0
         ...settings.where((folder) => !folder.hidden).map((f) => f.name),
         ...templates.map((t) => templateFolderFor(t.name, t.categoryPath)),
       };
-      if (oldName != null && !names.contains(oldName)) {
+      if (!names.contains(oldName)) {
         throw const SpbWalletOpenException('Папка шаблонов не найдена.');
       }
       if (names.any((folder) =>
@@ -1138,7 +1128,7 @@ Hidden INTEGER NOT NULL DEFAULT 0
         }
       }
 
-      if (oldName != null && name != oldName) {
+      if (name != oldName) {
         // Only template names change: card folders, fields and links stay intact.
         for (final template in templates) {
           if (templateFolderFor(template.name, template.categoryPath) !=
