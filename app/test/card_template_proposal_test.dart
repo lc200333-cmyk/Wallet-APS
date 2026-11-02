@@ -7,10 +7,17 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:wallet_aps/main.dart';
 import 'package:wallet_aps/spb_wallet/spb_wallet_database.dart';
 
-Future<void> settleStorage(WidgetTester tester) async {
-  await tester
-      .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 80)));
-  await tester.pumpAndSettle();
+Future<void> settleStorage(
+    WidgetTester tester, bool Function() completed) async {
+  final elapsed = Stopwatch()..start();
+  while (!completed()) {
+    if (elapsed.elapsed > const Duration(seconds: 30)) {
+      fail('Timed out waiting for the card/template storage operation');
+    }
+    await tester
+        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 10)));
+    await tester.pumpAndSettle();
+  }
 }
 
 void main() {
@@ -80,12 +87,30 @@ void main() {
         await tester.pumpAndSettle();
         final card = (state.items as List<SecretItem>)
             .firstWhere((card) => card.id == cardId);
-        unawaited(state.openItemDialog(item: card) as Future<SecretItem?>);
+        var flowCompleted = false;
+        Object? flowError;
+        StackTrace? flowStack;
+        final flow = state.openItemDialog(item: card) as Future<SecretItem?>;
+        unawaited(flow.then<void>((_) => flowCompleted = true,
+            onError: (Object error, StackTrace stack) {
+          flowError = error;
+          flowStack = stack;
+          flowCompleted = true;
+        }));
         await tester.pumpAndSettle();
         final dynamic editor = tester.state(find.byType(ItemEditorDialog));
         editor.values[originalField].text = 'new-login';
         editor.saveCard();
-        await settleStorage(tester);
+        await settleStorage(
+            tester,
+            () =>
+                flowCompleted ||
+                find
+                    .byKey(const Key('cardTemplateProposalText'))
+                    .evaluate()
+                    .isNotEmpty);
+        if (flowError != null)
+          Error.throwWithStackTrace(flowError!, flowStack!);
         expect(
             find.byKey(const Key('cardTemplateProposalText')), findsOneWidget);
         expect(
@@ -129,7 +154,9 @@ void main() {
             : accept
                 ? 'cardTemplateConfirm'
                 : 'cardTemplateDecline')));
-        await settleStorage(tester);
+        await settleStorage(tester, () => flowCompleted);
+        if (flowError != null)
+          Error.throwWithStackTrace(flowError!, flowStack!);
         final snapshot = wallet.loadSnapshot();
         final stored = snapshot.cards.firstWhere((card) => card.id == cardId);
         final other =
@@ -181,6 +208,7 @@ void main() {
         }
         state.spbWallet = null;
         state.clearSessionUndoHistory();
+        await tester.pumpWidget(const SizedBox.shrink());
         expect(tester.takeException(), isNull);
       });
     }
