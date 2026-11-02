@@ -83,3 +83,13 @@ target/
 # Local Codex/agent state
 .agents/
 .codex/
+
+# Apple signing and App Store Connect credentials / build output
+*.p8
+AuthKey_*
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.ipa
+*.pkg
+*.xcarchive/

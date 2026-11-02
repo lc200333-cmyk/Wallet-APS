@@ -404,7 +404,10 @@ class _PasswordVersionLabelState extends State<PasswordVersionLabel> {
     final runningFlutterTest =
         Platform.environment.containsKey('FLUTTER_TEST') &&
             Platform.environment['FLUTTER_TEST'] != 'false';
-    if (!runningFlutterTest || widget.latestVersionLoader != null) {
+    // App Store and TestFlight builds are updated by Apple, not GitHub.
+    final appleDistributed = Platform.isIOS || Platform.isMacOS;
+    if ((!runningFlutterTest && !appleDistributed) ||
+        widget.latestVersionLoader != null) {
       unawaited(loadLatestGithubVersion());
     }
   }
