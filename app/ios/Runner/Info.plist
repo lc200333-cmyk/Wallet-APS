@@ -28,6 +28,12 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Wallet APS использует камеру только чтобы сфотографировать документ и приложить снимок к карточке.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Wallet APS не использует ваше местоположение.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Wallet APS использует фото только для вложений и изображений карточек, которые вы выбираете сами.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
