@@ -1,7 +1,7 @@
 # Wallet APS
 
 Wallet APS is a local, offline password and private data manager for
-Windows, Android, and Linux. It works with password-protected `.swl` vaults
+Windows, Android, Linux, iPhone, and Mac. It works with password-protected `.swl` vaults
 and is compatible with SPB Wallet data, so your vault remains a file that you
 control.
 
@@ -16,6 +16,11 @@ The latest builds are available from GitHub Releases:
 - [Linux deb amd64](../../releases/latest/download/Wallet-APS-linux-amd64.deb)
 
 If a direct link does not work, open the [latest release](../../releases/latest).
+
+iPhone, iPad, and Mac builds are available through TestFlight:
+
+- [Join the Wallet APS beta in TestFlight](https://testflight.apple.com/join/FQXQU3QZ)
+  — the same link works on iPhone, iPad, and Macs with Apple silicon.
 
 ## Features
 
@@ -49,6 +54,11 @@ vault stays on your device and can be used without an internet connection.
      ```bash
      sudo apt install ./Wallet-APS-linux-amd64.deb
      ```
+
+   - On iPhone, iPad, or Mac, install [TestFlight](https://apps.apple.com/app/testflight/id899247664),
+     open the [beta link](https://testflight.apple.com/join/FQXQU3QZ), and
+     select **Accept** and **Install**. TestFlight installs new versions
+     automatically.
 
 2. Start Wallet APS.
 3. To create a vault, select **+**, choose its location and name, then enter and
