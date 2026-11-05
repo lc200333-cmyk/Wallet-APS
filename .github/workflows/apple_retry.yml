@@ -1,0 +1,49 @@
+name: Retry Apple release
+
+# Apple's services go down for hours at a time, longer than the retries inside
+# the release job can wait. Windows, Android and Linux are published without
+# waiting for the apple job, so this only re-runs that one job.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 * * * *"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  retry:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Re-run the apple job of the latest release if it failed
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Give up after 12 hours: a failure that long is not an Apple outage.
+          cutoff="$(date -u -d '12 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+          for run in $(gh run list --workflow release.yml --branch master --limit 20 --json databaseId -q '.[].databaseId'); do
+            info="$(gh run view "$run" --json status,createdAt,jobs)"
+            if [ "$(jq -r .status <<<"$info")" != completed ]; then
+              echo "Release run $run is still in progress."
+              exit 0
+            fi
+            conclusion="$(jq -r '.jobs[] | select(.name == "apple") | .conclusion' <<<"$info")"
+            # Runs marked [skip release] build nothing for Apple.
+            if [ -z "$conclusion" ] || [ "$conclusion" = skipped ]; then
+              continue
+            fi
+            created="$(jq -r .createdAt <<<"$info")"
+            if { [ "$conclusion" = failure ] || [ "$conclusion" = timed_out ]; } && [[ "$created" > "$cutoff" ]]; then
+              job="$(jq -r '.jobs[] | select(.name == "apple") | .databaseId' <<<"$info")"
+              echo "Re-running the apple job of release run $run."
+              gh run rerun --job "$job"
+            else
+              echo "Latest Apple build is in run $run: $conclusion, created $created. Nothing to do."
+            fi
+            exit 0
+          done
+          echo "No recent Apple build found."

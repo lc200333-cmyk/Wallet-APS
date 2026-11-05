@@ -112,6 +112,8 @@ npm run docker:apk:release
 3. собирает Windows setup, Android APK и Linux deb;
 4. публикует файлы в GitHub Release.
 
+Сборки для iPhone и Mac уходят в TestFlight отдельной задачей `apple`. Публикация файлов её не ждёт, поэтому сбой Apple не мешает выходу Windows, Android и Linux. Если задача упала, workflow `.github/workflows/apple_retry.yml` раз в час перезапускает её в течение 12 часов после релиза.
+
 Стабильные имена артефактов последнего релиза:
 
 ```text
