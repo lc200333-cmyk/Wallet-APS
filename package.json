@@ -1,6 +1,6 @@
 {
   "name": "wallet-aps",
-  "version": "0.7.19",
+  "version": "0.7.20",
   "private": true,
   "description": "Локальный менеджер секретов с зашифрованными базами",
   "scripts": {
