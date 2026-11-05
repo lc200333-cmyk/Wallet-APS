@@ -279,12 +279,7 @@ jobs:
             -configuration Release -destination 'generic/platform=iOS' \
             -archivePath "$RUNNER_TEMP/ios.xcarchive" \
             CODE_SIGNING_ALLOWED=NO archive
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/ios.xcarchive" \
-            -exportOptionsPlist ../tools/apple/ExportOptions-upload.plist \
-            -exportPath "$RUNNER_TEMP/ios-export" -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          ../tools/apple/upload_archive.sh "$RUNNER_TEMP/ios.xcarchive" "$RUNNER_TEMP/ios-export"
 
       # arm64 only: Flutter 3.44.7 fails to verify universal engine binaries
       # with the lipo shipped in newer Xcode releases.
@@ -298,12 +293,7 @@ jobs:
             ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGN_STYLE=Manual \
             CODE_SIGN_IDENTITY=- DEVELOPMENT_TEAM= PROVISIONING_PROFILE_SPECIFIER= \
             archive
-          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/macos.xcarchive" \
-            -exportOptionsPlist ../tools/apple/ExportOptions-upload.plist \
-            -exportPath "$RUNNER_TEMP/macos-export" -allowProvisioningUpdates \
-            -authenticationKeyPath "$ASC_KEY_PATH" \
-            -authenticationKeyID "$ASC_KEY_ID" \
-            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          ../tools/apple/upload_archive.sh "$RUNNER_TEMP/macos.xcarchive" "$RUNNER_TEMP/macos-export"
 
       - name: Distribute to TestFlight testers
         shell: bash

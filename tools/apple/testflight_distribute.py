@@ -21,6 +21,7 @@ import urllib.parse
 import urllib.request
 
 API = "https://api.appstoreconnect.apple.com"
+RETRY_PAUSES = (30, 60, 120, 240, 300)
 
 
 def b64url(data):
@@ -61,25 +62,39 @@ def make_token():
 
 
 def call(method, path, body=None, allow=()):
-    request = urllib.request.Request(
-        API + path,
-        method=method,
-        data=json.dumps(body).encode() if body is not None else None,
-        headers={
-            "Authorization": "Bearer " + make_token(),
-            "Content-Type": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request) as response:
-            raw = response.read()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode(errors="replace")
-        if error.code in allow:
-            print(f"App Store Connect answered {error.code}: {detail[:500]}")
-            return None
-        raise SystemExit(f"{method} {path} failed with {error.code}: {detail[:1000]}")
+    # Every request here is safe to repeat: re-adding a build to a group changes
+    # nothing and a repeated review submission is answered with an allowed 409/422.
+    attempt = 0
+    while True:
+        request = urllib.request.Request(
+            API + path,
+            method=method,
+            data=json.dumps(body).encode() if body is not None else None,
+            headers={
+                "Authorization": "Bearer " + make_token(),
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else {}
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode(errors="replace")
+            if error.code in allow:
+                print(f"App Store Connect answered {error.code}: {detail[:500]}")
+                return None
+            if error.code != 429 and error.code < 500 or attempt >= len(RETRY_PAUSES):
+                raise SystemExit(f"{method} {path} failed with {error.code}: {detail[:1000]}")
+            problem = f"answered {error.code}"
+        except (urllib.error.URLError, TimeoutError) as error:
+            if attempt >= len(RETRY_PAUSES):
+                raise SystemExit(f"{method} {path} failed: {error}")
+            problem = f"failed: {error}"
+        pause = RETRY_PAUSES[attempt]
+        attempt += 1
+        print(f"{method} {path} {problem}; retrying in {pause} seconds.")
+        time.sleep(pause)
 
 
 def query(params):
