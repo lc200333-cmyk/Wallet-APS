@@ -37,6 +37,7 @@ import 'widgets/pointer_draggable.dart';
 import 'widgets/workspace_section_bar.dart';
 import 'widgets/android_screen_scale.dart';
 import 'widgets/backspace_glyph.dart';
+import 'widgets/mobile_fixed_text_scale.dart';
 import 'widgets/workspace_geometry.dart';
 
 part 'ui/modern/modern_password.dart';
@@ -1662,7 +1663,9 @@ class WalletApsApp extends StatelessWidget {
           builder: (context, child) {
             final content = AppUserActivityRegion(
               child: AndroidScreenScale(
-                child: child ?? const SizedBox.shrink(),
+                child: MobileFixedTextScale(
+                  child: child ?? const SizedBox.shrink(),
+                ),
               ),
             );
             if (!modern) return content;
@@ -10423,14 +10426,18 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     return iconId.split('/').last;
   }
 
-  Widget managedIconPickerFrame(String iconId,
-          {required bool selected, Key? key}) =>
+  Widget managedIconPickerFrame(
+    String iconId, {
+    required bool selected,
+    Key? key,
+    double? contentSize,
+  }) =>
       managedCatalogIconFrame(context, iconId,
           selected: selected,
           key: key,
           contentKey: ValueKey('managedIconContent-$iconId'),
           skinFrames: true,
-          contentSize: managedIconPickerContentSize,
+          contentSize: contentSize ?? managedIconPickerContentSize,
           baseColor: selectedIconCatalog == IconCatalogKind.brands ||
                   selectedIconCatalog == IconCatalogKind.thirdParty
               ? Colors.white
@@ -10438,7 +10445,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   ? Theme.of(context).colorScheme.surface
                   : retroIconFrameTheme.colorScheme.surface);
 
-  Widget buildManagedIconPickerEntry(String iconId) {
+  Widget buildManagedIconPickerEntry(
+    String iconId, {
+    double? contentSize,
+  }) {
     final radius = BorderRadius.circular(
       managedIconUsesCompactPickerFrame ? managedIconFrameRadius : 7,
     );
@@ -10466,6 +10476,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               iconId,
               key: ValueKey('managedIconFrame-$iconId'),
               selected: selectedManagedIconId == iconId,
+              contentSize: contentSize,
             ),
           ),
         ),
@@ -10575,7 +10586,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool showHeader = true,
     bool showPersistentScrollbar = false,
   }) {
-    const pickerGridDelegate = WorkspaceGridDelegate.iconWorkspace();
+    final narrowFiveColumnGrid = skinNarrowLayout(context);
+    final SliverGridDelegate pickerGridDelegate = narrowFiveColumnGrid
+        ? const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 5)
+        : const WorkspaceGridDelegate.iconWorkspace();
     final query = searchController.text.trim().toLowerCase();
     final visible = managedIconIdsFor(selectedIconCatalog)
         .where(
@@ -10646,7 +10660,24 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                       key: ValueKey('managedIcon-$iconId'),
                                       child: buildManagedIconDraggable(
                                         iconId,
-                                        buildManagedIconPickerEntry(iconId),
+                                        LayoutBuilder(
+                                          builder: (context, constraints) {
+                                            final contentSize =
+                                                narrowFiveColumnGrid
+                                                    ? min(
+                                                        managedIconPickerContentSize,
+                                                        constraints.maxWidth *
+                                                            managedIconPickerContentSize /
+                                                            WorkspaceGeometry
+                                                                .iconWorkspaceCell,
+                                                      )
+                                                    : null;
+                                            return buildManagedIconPickerEntry(
+                                              iconId,
+                                              contentSize: contentSize,
+                                            );
+                                          },
+                                        ),
                                       ),
                                     );
                                   },

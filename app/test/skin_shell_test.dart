@@ -29,9 +29,10 @@ enum _Layout {
 Future<dynamic> _pumpShell(
   WidgetTester tester,
   AppSkin skin,
-  _Layout layout,
-) async {
-  debugDefaultTargetPlatformOverride = layout.platform;
+  _Layout layout, {
+  TargetPlatform? platform,
+}) async {
+  debugDefaultTargetPlatformOverride = platform ?? layout.platform;
   appSkin.value = skin;
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = layout.size;
@@ -518,6 +519,86 @@ void main() {
       });
     }
   }
+  for (final skin in AppSkin.values) {
+    for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
+      _skinTest(
+        '${skin.name} narrow ${platform.name}: icon workspace keeps five scaling columns',
+        (tester) async {
+          final dynamic state = await _pumpShell(
+            tester,
+            skin,
+            _Layout.narrow,
+            platform: platform,
+          );
+          state.showSpbIconsMode();
+          state.setState(() {
+            if (skin == AppSkin.retro) state.mobilePane = 1;
+            state.selectedIconCatalog = IconCatalogKind.pictograms;
+            state.iconLibraryLoading = false;
+            state.iconLibraryLoadError = null;
+          });
+          await _pumpFrames(tester);
+
+          double? previousEntryWidth;
+          double? scaledContentRatio;
+          for (final width in [412.0, 320.0, 260.0]) {
+            tester.view.physicalSize = Size(width, 915);
+            await _pumpFrames(tester);
+
+            final grid = find.descendant(
+              of: find.byKey(const Key('spbIconGridScrollbar')),
+              matching: find.byType(GridView),
+            );
+            final delegate = tester.widget<GridView>(grid).gridDelegate;
+            expect(delegate, isA<SliverGridDelegateWithFixedCrossAxisCount>());
+            expect(
+              (delegate as SliverGridDelegateWithFixedCrossAxisCount)
+                  .crossAxisCount,
+              5,
+            );
+
+            final entries = find.byWidgetPredicate(
+              (widget) =>
+                  widget is KeyedSubtree &&
+                  widget.key is ValueKey<String> &&
+                  ((widget.key! as ValueKey<String>).value)
+                      .startsWith('managedIcon-'),
+            );
+            expect(entries.evaluate().length, greaterThanOrEqualTo(6));
+            final firstRect = tester.getRect(entries.at(0));
+            for (var index = 1; index < 5; index++) {
+              final rect = tester.getRect(entries.at(index));
+              expect(rect.top, closeTo(firstRect.top, 0.01));
+              expect(rect.left, greaterThan(firstRect.left));
+            }
+            final sixthRect = tester.getRect(entries.at(5));
+            expect(sixthRect.left, closeTo(firstRect.left, 0.01));
+            expect(sixthRect.top, greaterThan(firstRect.top));
+
+            final firstEntry = tester.widget<KeyedSubtree>(entries.at(0));
+            final iconId =
+                (firstEntry.key! as ValueKey<String>).value.substring(
+                      'managedIcon-'.length,
+                    );
+            final contentWidth = tester
+                .getRect(find.byKey(ValueKey('managedIconContent-$iconId')))
+                .width;
+            expect(contentWidth, lessThanOrEqualTo(firstRect.width));
+            if (previousEntryWidth != null) {
+              expect(firstRect.width, lessThan(previousEntryWidth));
+            }
+            previousEntryWidth = firstRect.width;
+            if (width < 400) {
+              final ratio = contentWidth / firstRect.width;
+              scaledContentRatio ??= ratio;
+              expect(ratio, closeTo(scaledContentRatio, 0.01));
+            }
+            expect(tester.takeException(), isNull);
+          }
+        },
+      );
+    }
+  }
   for (final skin in [AppSkin.light, AppSkin.dark]) {
     for (final platform in [TargetPlatform.android, TargetPlatform.windows]) {
       _skinTest(
@@ -759,6 +840,78 @@ void main() {
     });
 
     if (skin != AppSkin.retro) {
+      _skinTest(
+          '${skin.name} narrow: search, recent and folder spacing is compact',
+          (tester) async {
+        final dynamic state = await _pumpShell(tester, skin, _Layout.narrow);
+
+        final frequentTitle = tester.widget<Padding>(
+          find.byKey(const Key('modernFrequentSectionTitle')),
+        );
+        final foldersTitle = tester.widget<Padding>(
+          find.byKey(const Key('modernFoldersSectionTitle')),
+        );
+        final frequentPadding = frequentTitle.padding as EdgeInsets;
+        final foldersPadding = foldersTitle.padding as EdgeInsets;
+
+        expect(frequentPadding.top, 0);
+        expect(foldersPadding.top, closeTo(5.44, 0.001));
+        expect(
+          tester.getTopLeft(find.text('ПОСЛЕДНИЕ')).dy,
+          lessThan(tester.getTopLeft(find.text('ПАПКИ')).dy),
+        );
+        expect(
+          tester.getTopLeft(find.text('ПОСЛЕДНИЕ')).dy -
+              tester.getBottomLeft(find.byKey(const Key('spbSearchInput'))).dy,
+          closeTo(11.75 * 0.30 * 412 / 360, 0.05),
+        );
+
+        final frequentCard =
+            find.byKey(const ValueKey('modernFrequentCard-s-root'));
+        final frequentIcon =
+            find.byKey(const ValueKey('modernFrequentIcon-s-root'));
+        final frequentLabel =
+            find.byKey(const ValueKey('modernFrequentLabel-s-root'));
+        expect(tester.getSize(frequentCard).width, closeTo(104 * 2 / 3, 0.01));
+        expect(tester.getSize(frequentCard).height, closeTo(92 * 2 / 3, 0.01));
+        expect(tester.getSize(frequentIcon), const Size.square(32));
+        expect(
+          tester.getTopLeft(frequentLabel).dy -
+              tester.getBottomLeft(frequentIcon).dy,
+          closeTo(10.2 * 412 / 360, 0.01),
+        );
+        final label = tester.widget<Text>(frequentLabel);
+        expect(label.maxLines, 1);
+        expect(label.style?.fontWeight, FontWeight.normal);
+
+        state.openSpbFolder('Finance');
+        await tester.pumpAndSettle();
+        final nestedFoldersTitle = tester.widget<Padding>(
+          find.byKey(const Key('modernFoldersSectionTitle')),
+        );
+        expect((nestedFoldersTitle.padding as EdgeInsets).top, 16);
+        expect(
+            find.byKey(const Key('modernFrequentSectionTitle')), findsNothing);
+        expect(tester.takeException(), isNull);
+      });
+
+      _skinTest(
+          '${skin.name} narrow Windows: search-to-recent gap is reduced by 70%',
+          (tester) async {
+        await _pumpShell(
+          tester,
+          skin,
+          _Layout.narrow,
+          platform: TargetPlatform.windows,
+        );
+        expect(
+          tester.getTopLeft(find.text('ПОСЛЕДНИЕ')).dy -
+              tester.getBottomLeft(find.byKey(const Key('spbSearchInput'))).dy,
+          closeTo(11.75 * 0.30, 0.05),
+        );
+        expect(tester.takeException(), isNull);
+      });
+
       _skinTest('${skin.name} narrow: search stays on top while results scroll',
           (tester) async {
         final dynamic state = await _pumpShell(tester, skin, _Layout.narrow);

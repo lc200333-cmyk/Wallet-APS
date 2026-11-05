@@ -1,5 +1,29 @@
 part of '../../main.dart';
 
+const _modernMobileSectionTopPadding = 16.0;
+const _modernMobileSearchToFrequentTopPadding = 0.0;
+const _modernMobileFrequentToFoldersTopPadding =
+    _modernMobileSectionTopPadding * 0.34;
+const _modernFrequentCardScale = 2 / 3;
+const _modernFrequentCardWidth = 104.0 * _modernFrequentCardScale;
+const _modernFrequentCardHeight = 92.0 * _modernFrequentCardScale;
+const _modernFrequentIconSize = 32.0;
+const _modernFrequentLabelFontSize = 13.0;
+const _modernFrequentLabelLineHeight = 1.2;
+const _modernFrequentOriginalIconLabelGap = 92.0 -
+    24.0 -
+    _modernFrequentIconSize -
+    (_modernFrequentLabelFontSize * _modernFrequentLabelLineHeight);
+const _modernFrequentIconLabelGap = _modernFrequentOriginalIconLabelGap * 0.5;
+// Flutter rounds the 13 px label line slightly above its nominal 15.6 px.
+const _modernFrequentTextRoundingReserve = 0.5;
+const _modernFrequentVerticalPadding = (_modernFrequentCardHeight -
+        _modernFrequentIconSize -
+        _modernFrequentIconLabelGap -
+        (_modernFrequentLabelFontSize * _modernFrequentLabelLineHeight) -
+        _modernFrequentTextRoundingReserve) /
+    2;
+
 /// Same rule as the shell: narrow when width < 700, height < 500 or a
 /// tablet is held upright.
 bool skinNarrowLayout(BuildContext context) {
@@ -379,10 +403,16 @@ extension _ModernMobileShell on _VaultShellState {
     );
   }
 
-  Widget buildModernSectionTitle(String title, {Widget? trailing}) {
+  Widget buildModernSectionTitle(
+    String title, {
+    Widget? trailing,
+    Key? key,
+    double topPadding = _modernMobileSectionTopPadding,
+  }) {
     final t = skinTokens;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 16, 16, 8),
+      key: key,
+      padding: EdgeInsets.fromLTRB(20, topPadding, 16, 8),
       child: SizedBox(
         height: 24,
         child: Row(
@@ -515,6 +545,7 @@ extension _ModernMobileShell on _VaultShellState {
     final root = buildCategoryTree(filteredItems(), includeAllCategories: true);
     final node = categoryNodeAt(root, selectedCategoryPath);
     final parts = categoryParts(selectedCategoryPath);
+    var showsFrequentSection = false;
     final header = atRoot
         ? buildModernScreenHeader(
             title: GestureDetector(
@@ -575,7 +606,10 @@ extension _ModernMobileShell on _VaultShellState {
           buildModernSearchResults(folders, cards, narrow: true),
         ]));
     } else {
-      if (atRoot) children.addAll(buildModernFrequentSection());
+      final frequentSection =
+          atRoot ? buildModernFrequentSection() : const <Widget>[];
+      showsFrequentSection = frequentSection.isNotEmpty;
+      children.addAll(frequentSection);
       final folders = node.children.values.toList()
         ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
       final cards = [
@@ -585,6 +619,10 @@ extension _ModernMobileShell on _VaultShellState {
         children
           ..add(buildModernSectionTitle(
             'Папки',
+            key: const Key('modernFoldersSectionTitle'),
+            topPadding: frequentSection.isEmpty
+                ? _modernMobileSectionTopPadding
+                : _modernMobileFrequentToFoldersTopPadding,
             trailing: Text(
               '${folders.length} ${russianPlural(folders.length, 'папка', 'папки', 'папок')}',
               style: TextStyle(fontSize: 12, color: t.onSurfaceVariant),
@@ -627,7 +665,12 @@ extension _ModernMobileShell on _VaultShellState {
         // The path and the search field stay above the scrolling list.
         if (!atRoot) buildModernPathRow(parts),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+          padding: EdgeInsets.fromLTRB(
+            16,
+            4,
+            16,
+            showsFrequentSection ? 0 : 4,
+          ),
           child: buildModernSearchField(height: 48),
         ),
         Expanded(
@@ -694,6 +737,8 @@ extension _ModernMobileShell on _VaultShellState {
     return [
       buildModernSectionTitle(
         'Последние',
+        key: const Key('modernFrequentSectionTitle'),
+        topPadding: _modernMobileSearchToFrequentTopPadding,
         trailing: SizedBox.square(
           dimension: 40,
           child: Tooltip(
@@ -717,7 +762,7 @@ extension _ModernMobileShell on _VaultShellState {
       ),
       if (spbFrequentExpanded)
         SizedBox(
-          height: 92,
+          height: _modernFrequentCardHeight,
           child: SingleChildScrollView(
             key: const Key('frequentCardsScroll'),
             scrollDirection: Axis.horizontal,
@@ -751,29 +796,34 @@ extension _ModernMobileShell on _VaultShellState {
           borderRadius: BorderRadius.circular(16),
           onTap: () => openFrequentCard(item),
           child: Container(
-            width: 104,
-            height: 92,
-            padding: const EdgeInsets.all(12),
+            width: _modernFrequentCardWidth,
+            height: _modernFrequentCardHeight,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 6,
+              vertical: _modernFrequentVerticalPadding,
+            ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 skinIconTile(
+                  key: ValueKey('modernFrequentIcon-${item.id}'),
                   icon: spbSizedDataIcon(
                     itemIconId(item, templateFor(item.templateId)),
-                    32,
+                    _modernFrequentIconSize,
                     fallbackColor: pair.icon,
                   ),
-                  size: 32,
+                  size: _modernFrequentIconSize,
                 ),
-                const Spacer(),
+                const SizedBox(height: _modernFrequentIconLabelGap),
                 Text(
                   item.title,
-                  maxLines: 2,
+                  key: ValueKey('modernFrequentLabel-${item.id}'),
+                  maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 13,
-                    height: 1.2,
-                    fontWeight: FontWeight.w600,
+                    fontSize: _modernFrequentLabelFontSize,
+                    height: _modernFrequentLabelLineHeight,
+                    fontWeight: FontWeight.normal,
                     color: t.onSurface,
                   ),
                 ),
