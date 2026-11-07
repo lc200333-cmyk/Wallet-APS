@@ -261,6 +261,7 @@ jobs:
         run: |
           set -euo pipefail
           flutter pub get --enforce-lockfile
+          dart run tool/generate_apple_icons.dart
           flutter build ios --release --config-only --no-pub
           flutter build macos --release --config-only --no-pub
           BUILD_NUMBER="$(sed -n 's/^version: [^+]*+\([0-9]*\)$/\1/p' pubspec.yaml)"

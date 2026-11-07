@@ -5552,7 +5552,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
     if (state == AppLifecycleState.resumed) {
       final idleFor = DateTime.now().difference(lastUserActivityAt);
-      if (unlocked && idleFor >= const Duration(minutes: 3)) {
+      if (unlocked && idleFor >= const Duration(minutes: 8)) {
+        // Android may suspend Dart timers while an external attachment viewer
+        // is in front. Include both the lock and locked-exit intervals.
+        unawaited(exitApplication());
+      } else if (unlocked && idleFor >= const Duration(minutes: 3)) {
         unawaited(closeAfterInactivity());
       } else if (unlocked &&
           idleFor >= const Duration(minutes: 2, seconds: 45)) {
@@ -6411,6 +6415,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     const SizedBox(height: 8),
                     PasswordField(
                       key: const Key('newVaultPassword'),
+                      onTap: () => editNewPassword(newPasswordController,
+                          'Новый пароль', () => setDialogState(() {})),
                       controller: newPasswordController,
                       label: 'Новый пароль',
                       visible: showNewPassword,
@@ -6429,6 +6435,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     const SizedBox(height: 8),
                     PasswordField(
                       key: const Key('newVaultPasswordRepeat'),
+                      onTap: () => editNewPassword(
+                          repeatPasswordController,
+                          'Повторите новый пароль',
+                          () => setDialogState(() {})),
                       controller: repeatPasswordController,
                       label: 'Повторите новый пароль',
                       visible: showRepeatedPassword,
@@ -6845,6 +6855,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   const SizedBox(height: 8),
                   PasswordField(
                     key: const Key('changePasswordNew'),
+                    onTap: () => editNewPassword(newController, 'Новый пароль',
+                        () => setDialogState(() {})),
                     controller: newController,
                     label: 'Новый пароль',
                     visible: showNew,
@@ -6861,6 +6873,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   const SizedBox(height: 8),
                   PasswordField(
                     key: const Key('changePasswordRepeat'),
+                    onTap: () => editNewPassword(repeatController,
+                        'Повторите новый пароль', () => setDialogState(() {})),
                     controller: repeatController,
                     label: 'Повторите новый пароль',
                     visible: showRepeat,
@@ -15108,8 +15122,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   void ensureLockedExitTimer() {
+    final remaining = const Duration(minutes: 5) -
+        DateTime.now().difference(lastUserActivityAt);
     lockedExitTimer ??= Timer(
-      const Duration(minutes: 5),
+      remaining.isNegative ? Duration.zero : remaining,
       () => unawaited(exitApplication()),
     );
   }
@@ -15262,6 +15278,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Future<void> closeAfterInactivity() async {
     if (closingForInactivity) return;
     closingForInactivity = true;
+    final lockDeadline = lastUserActivityAt.add(const Duration(minutes: 3));
+    final lockedAt =
+        lockDeadline.isBefore(DateTime.now()) ? lockDeadline : DateTime.now();
     inactivityTimer?.cancel();
     inactivityTimer = null;
     purgeSessionTrashFromDatabase();
@@ -15298,7 +15317,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       message = null;
       closingForInactivity = false;
     });
-    lastUserActivityAt = DateTime.now();
+    lastUserActivityAt = lockedAt;
+    // A background app may not build the password screen until it resumes.
+    // Start the exit timer here rather than depending on that next frame.
+    ensureLockedExitTimer();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) passwordFocusNode.requestFocus();
     });
@@ -15423,18 +15445,97 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     passwordFocusNode.requestFocus();
   }
 
+  Future<void> editNewPassword(
+      TextEditingController target, String title, VoidCallback changed) async {
+    final value = await showDialog<String>(
+      context: context,
+      builder: (_) => _PasswordKeypadDialog(
+        initialValue: target.text,
+        title: title,
+        buildKeyboard: (entry) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: skinTokens.isRetro ? null : skinTokens.keyboardBase,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: buildPasswordKeyboard(
+                redTop: const Color(0xffd32b31),
+                redBottom: const Color(0xff7f0609),
+                mode: entry.mode,
+                insert: entry.insert,
+                backspace: entry.backspace,
+                clear: entry.clear,
+                focus: entry.focusNode.requestFocus,
+              ),
+            ),
+            const SizedBox(height: 6),
+            keypadRow([
+              for (final (mode, label, key) in [
+                (VirtualKeyboardMode.uppercase, 'ABC', 'keypadModeUppercase'),
+                (VirtualKeyboardMode.lowercase, 'abc', 'keypadModeLowercase'),
+                (VirtualKeyboardMode.numeric, '123', 'keypadModeNumeric'),
+                (VirtualKeyboardMode.symbols, '#!?', 'keypadModeSymbols'),
+              ])
+                passwordKey(
+                  key: Key(key),
+                  role: SkinKeyRole.mode,
+                  label: label,
+                  selected: entry.mode == mode,
+                  fontSize: 23,
+                  top: const Color(0xffb96b25),
+                  bottom: const Color(0xff6d3107),
+                  onPressed: () => entry.selectMode(mode),
+                ),
+            ]),
+          ],
+        ),
+        buildConfirm: (confirm) => passwordKey(
+          key: const Key('passwordKeypadConfirm'),
+          label: 'Подтвердить пароль',
+          tooltip: 'Подтвердить пароль',
+          height: 48,
+          minimumHeight: 48,
+          top: const Color(0xffffdc58),
+          bottom: const Color(0xffc58a00),
+          role: SkinKeyRole.hint,
+          onPressed: confirm,
+          child: const Icon(Icons.check, color: Color(0xff43a047), size: 30),
+        ),
+      ),
+    );
+    if (value == null || !mounted) return;
+    target.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
+    );
+    changed();
+  }
+
   Widget buildPasswordKeyboard({
     required Color redTop,
     required Color redBottom,
+    VirtualKeyboardMode? mode,
+    ValueChanged<String>? insert,
+    VoidCallback? backspace,
+    VoidCallback? clear,
+    VoidCallback? focus,
   }) {
-    if (virtualKeyboardMode == VirtualKeyboardMode.symbols) {
+    mode ??= virtualKeyboardMode;
+    insert ??= insertPasswordText;
+    backspace ??= backspacePassword;
+    clear ??= clearPassword;
+    focus ??= passwordFocusNode.requestFocus;
+    if (mode == VirtualKeyboardMode.symbols) {
       Widget symbolKey(String symbol) => passwordKey(
             key: Key('keypadSymbol$symbol'),
             label: symbol,
             height: 42,
             minimumHeight: 42,
             fontSize: 25,
-            onPressed: () => insertPasswordText(symbol),
+            onPressed: () => insert!(symbol),
           );
 
       return Column(
@@ -15479,7 +15580,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               height: 42,
               minimumHeight: 42,
               fontSize: 18,
-              onPressed: passwordFocusNode.requestFocus,
+              onPressed: focus,
             ),
             for (final symbol in ['-', "'", '"', ':', ';', ',', '?'])
               symbolKey(symbol),
@@ -15493,15 +15594,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               top: redTop,
               role: SkinKeyRole.service,
               bottom: redBottom,
-              onPressed: backspacePassword,
+              onPressed: backspace,
             ),
           ]),
         ],
       );
     }
 
-    if (virtualKeyboardMode != VirtualKeyboardMode.numeric) {
-      final uppercase = virtualKeyboardMode == VirtualKeyboardMode.uppercase;
+    if (mode != VirtualKeyboardMode.numeric) {
+      final uppercase = mode == VirtualKeyboardMode.uppercase;
       Widget letterKey(String baseLetter) {
         final letter = uppercase ? baseLetter : baseLetter.toLowerCase();
         return passwordKey(
@@ -15510,7 +15611,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           height: 42,
           minimumHeight: 42,
           fontSize: 24,
-          onPressed: () => insertPasswordText(letter),
+          onPressed: () => insert!(letter),
         );
       }
 
@@ -15561,7 +15662,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               top: redTop,
               role: SkinKeyRole.service,
               bottom: redBottom,
-              onPressed: clearPassword,
+              onPressed: clear,
             ),
             for (final letter in ['Z', 'X', 'C', 'V', 'B', 'N', 'M'])
               letterKey(letter),
@@ -15575,7 +15676,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               top: redTop,
               role: SkinKeyRole.service,
               bottom: redBottom,
-              onPressed: backspacePassword,
+              onPressed: backspace,
             ),
           ]),
         ],
@@ -15589,7 +15690,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             passwordKey(
               key: Key('keypad$digit'),
               label: digit,
-              onPressed: () => insertPasswordText(digit),
+              onPressed: () => insert!(digit),
             ),
         ]),
         const SizedBox(height: 5),
@@ -15598,7 +15699,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             passwordKey(
               key: Key('keypad$digit'),
               label: digit,
-              onPressed: () => insertPasswordText(digit),
+              onPressed: () => insert!(digit),
             ),
         ]),
         const SizedBox(height: 5),
@@ -15607,7 +15708,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             passwordKey(
               key: Key('keypad$digit'),
               label: digit,
-              onPressed: () => insertPasswordText(digit),
+              onPressed: () => insert!(digit),
             ),
         ]),
         const SizedBox(height: 5),
@@ -15620,12 +15721,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             top: redTop,
             role: SkinKeyRole.service,
             bottom: redBottom,
-            onPressed: clearPassword,
+            onPressed: clear,
           ),
           passwordKey(
             key: const Key('keypad0'),
             label: '0',
-            onPressed: () => insertPasswordText('0'),
+            onPressed: () => insert!('0'),
           ),
           passwordKey(
             key: const Key('keypadBackspace'),
@@ -15635,7 +15736,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             top: redTop,
             role: SkinKeyRole.service,
             bottom: redBottom,
-            onPressed: backspacePassword,
+            onPressed: backspace,
           ),
         ]),
       ],
@@ -15809,8 +15910,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                                                 obscureText: !showPassword,
                                                 enableSuggestions: false,
                                                 autocorrect: false,
-                                                keyboardType: TextInputType
-                                                    .visiblePassword,
+                                                // Use the app keypad or a physical keyboard.
+                                                keyboardType:
+                                                    TextInputType.none,
                                                 textInputAction:
                                                     TextInputAction.done,
                                                 onSubmitted: (_) => unlock(),
@@ -17537,6 +17639,147 @@ class PasswordStrengthBar extends StatelessWidget {
   }
 }
 
+class _PasswordKeypadDialog extends StatefulWidget {
+  const _PasswordKeypadDialog({
+    required this.initialValue,
+    required this.title,
+    required this.buildKeyboard,
+    required this.buildConfirm,
+  });
+
+  final String initialValue;
+  final String title;
+  final Widget Function(_PasswordKeypadDialogState) buildKeyboard;
+  final Widget Function(VoidCallback) buildConfirm;
+
+  @override
+  State<_PasswordKeypadDialog> createState() => _PasswordKeypadDialogState();
+}
+
+class _PasswordKeypadDialogState extends State<_PasswordKeypadDialog> {
+  late final controller = TextEditingController(text: widget.initialValue);
+  final focusNode = FocusNode();
+  VirtualKeyboardMode mode = VirtualKeyboardMode.numeric;
+  bool visible = false;
+
+  @override
+  void dispose() {
+    controller.clear();
+    controller.dispose();
+    focusNode.dispose();
+    super.dispose();
+  }
+
+  void insert(String text) {
+    final selection = controller.selection;
+    final start = selection.isValid ? selection.start : controller.text.length;
+    final end = selection.isValid ? selection.end : controller.text.length;
+    controller.value = TextEditingValue(
+      text: controller.text.replaceRange(start, end, text),
+      selection: TextSelection.collapsed(offset: start + text.length),
+    );
+    focusNode.requestFocus();
+  }
+
+  void backspace() {
+    final selection = controller.selection;
+    if (selection.isValid && !selection.isCollapsed) {
+      insert('');
+    } else {
+      final end = selection.isValid ? selection.end : controller.text.length;
+      if (end > 0) {
+        final preceding = controller.text.substring(0, end).characters.last;
+        controller.selection = TextSelection(
+          baseOffset: end - preceding.length,
+          extentOffset: end,
+        );
+        insert('');
+      }
+    }
+    focusNode.requestFocus();
+  }
+
+  void clear() {
+    controller.clear();
+    focusNode.requestFocus();
+  }
+
+  void selectMode(VirtualKeyboardMode value) {
+    setState(() => mode = value);
+    focusNode.requestFocus();
+  }
+
+  void confirm() => Navigator.of(context).pop(controller.text);
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = WalletSkinTokens.of(context);
+    return Dialog(
+      key: const Key('passwordKeypadDialog'),
+      backgroundColor: skinDialogBackground(context),
+      shape: skinDialogShape(context),
+      insetPadding: const EdgeInsets.all(12),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 562,
+          maxHeight: max(0, MediaQuery.sizeOf(context).height - 48),
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const Key('passwordKeypadInput'),
+                      selectAllOnFocus: false,
+                      controller: controller,
+                      focusNode: focusNode,
+                      autofocus: true,
+                      keyboardType: TextInputType.none,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      smartDashesType: SmartDashesType.disabled,
+                      smartQuotesType: SmartQuotesType.disabled,
+                      obscureText: !visible,
+                      onSubmitted: (_) => confirm(),
+                      decoration: InputDecoration(
+                        labelText: widget.title,
+                        filled: true,
+                        fillColor:
+                            tokens.isRetro ? Colors.white : tokens.surface,
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          key: const Key('passwordKeypadVisibility'),
+                          tooltip:
+                              visible ? 'Скрыть пароль' : 'Показать пароль',
+                          icon: Icon(visible
+                              ? Icons.visibility_off
+                              : Icons.visibility),
+                          onPressed: () => setState(() => visible = !visible),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  SizedBox.square(
+                    dimension: 48,
+                    child: widget.buildConfirm(confirm),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              widget.buildKeyboard(this),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class PasswordField extends StatelessWidget {
   const PasswordField({
     required this.controller,
@@ -17545,6 +17788,7 @@ class PasswordField extends StatelessWidget {
     required this.onToggle,
     this.onChanged,
     this.onSubmitted,
+    this.onTap,
     this.compact = false,
     this.allowCopy = false,
     super.key,
@@ -17556,8 +17800,25 @@ class PasswordField extends StatelessWidget {
   final VoidCallback onToggle;
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
+  final VoidCallback? onTap;
   final bool compact;
   final bool allowCopy;
+
+  Future<void> showCopyMenu(BuildContext context, Offset position) async {
+    if (controller.text.isEmpty) return;
+    final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
+    final copy = await showSkinMenu<bool>(
+      context: context,
+      position: RelativeRect.fromRect(
+        overlay.globalToLocal(position) & const Size(1, 1),
+        Offset.zero & overlay.size,
+      ),
+      items: const [
+        PopupMenuItem(value: true, child: Text('Copy')),
+      ],
+    );
+    if (copy == true) await copyCardFieldValue(controller.text);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -17566,7 +17827,11 @@ class PasswordField extends StatelessWidget {
       obscureText: !visible,
       autocorrect: false,
       enableSuggestions: false,
-      keyboardType: TextInputType.visiblePassword,
+      readOnly: onTap != null,
+      onTap: onTap,
+      enableInteractiveSelection: onTap == null,
+      keyboardType:
+          onTap == null ? TextInputType.visiblePassword : TextInputType.none,
       textCapitalization: TextCapitalization.none,
       smartDashesType: SmartDashesType.disabled,
       smartQuotesType: SmartQuotesType.disabled,
@@ -17613,7 +17878,21 @@ class PasswordField extends StatelessWidget {
         ),
       ),
     );
-    return compact ? SizedBox(height: 42, child: field) : field;
+    final content = onTap != null && allowCopy
+        ? Listener(
+            onPointerDown: (event) {
+              if (event.buttons & kSecondaryMouseButton != 0) {
+                unawaited(showCopyMenu(context, event.position));
+              }
+            },
+            child: GestureDetector(
+              onLongPressStart: (details) =>
+                  showCopyMenu(context, details.globalPosition),
+              child: field,
+            ),
+          )
+        : field;
+    return compact ? SizedBox(height: 42, child: content) : content;
   }
 }
 

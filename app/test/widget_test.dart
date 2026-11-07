@@ -4219,7 +4219,7 @@ void main() {
     );
     expect(newPasswordField.autocorrect, isFalse);
     expect(newPasswordField.enableSuggestions, isFalse);
-    expect(newPasswordField.keyboardType, TextInputType.visiblePassword);
+    expect(newPasswordField.keyboardType, TextInputType.none);
     expect(tester.getSize(cancel), const Size(48, 48));
     expect(tester.getSize(save), const Size(48, 48));
     expect(
@@ -4257,13 +4257,23 @@ void main() {
       },
     );
     await tester.pumpAndSettle();
-    Future<void> enterPassword(Key key, String value) => tester.enterText(
-          find.descendant(
-            of: find.byKey(key),
-            matching: find.byType(TextField),
-          ),
-          value,
-        );
+    Future<void> enterPassword(Key key, String value) async {
+      final field = find.descendant(
+        of: find.byKey(key),
+        matching: find.byType(TextField),
+      );
+      if (key == const Key('changePasswordOld')) {
+        await tester.enterText(field, value);
+      } else {
+        await tester.tap(field);
+        await tester.pumpAndSettle();
+        await tester.enterText(
+            find.byKey(const Key('passwordKeypadInput')), value);
+        await tester.tap(find.byKey(const Key('passwordKeypadConfirm')));
+        await tester.pumpAndSettle();
+      }
+    }
+
     await enterPassword(const Key('changePasswordOld'), 'old-password');
     await enterPassword(const Key('changePasswordNew'), 'new-password');
     await enterPassword(const Key('changePasswordRepeat'), 'new-password');
