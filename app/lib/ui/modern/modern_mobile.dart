@@ -856,6 +856,7 @@ extension _ModernMobileShell on _VaultShellState {
         size: 40,
       ),
       title: folder.name,
+      titleFontSize: 17,
       subtitle: parts.join(' · '),
       chevron: true,
       onTap: () => openSpbFolder(folder.path),

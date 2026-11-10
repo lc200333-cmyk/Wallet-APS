@@ -1596,9 +1596,14 @@ bool get usesTouchTextSelection =>
     defaultTargetPlatform == TargetPlatform.iOS;
 
 class WalletApsApp extends StatelessWidget {
-  const WalletApsApp({this.initialVaultPath, super.key});
+  const WalletApsApp({
+    this.initialVaultPath,
+    this.onExitRequested,
+    super.key,
+  });
 
   final String? initialVaultPath;
+  final Future<void> Function()? onExitRequested;
 
   @override
   Widget build(BuildContext context) {
@@ -1686,7 +1691,10 @@ class WalletApsApp extends StatelessWidget {
             AppSkin.light => buildModernTheme(Brightness.light),
             AppSkin.dark => buildModernTheme(Brightness.dark),
           },
-          home: VaultShell(initialVaultPath: initialVaultPath),
+          home: VaultShell(
+            initialVaultPath: initialVaultPath,
+            onExitRequested: onExitRequested,
+          ),
         );
       },
     );
@@ -15087,37 +15095,75 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Future<void> exitApplication() async {
     if (exitInProgress) return;
     exitInProgress = true;
-    lockedExitTimer?.cancel();
-    lockedExitTimer = null;
-    lockedExitCountdownTimer?.cancel();
-    lockedExitCountdownTimer = null;
-    purgeSessionTrashFromDatabase();
-    persistVaultState();
-    final saved = await writeBackSpbWallet();
-    if (!saved) {
-      exitInProgress = false;
-      showSpbOperationMessage(
-        'Программа не закрыта: не удалось сохранить изменения базы.',
-      );
-      return;
-    }
-    await clearClipboardSilently();
-    passwordController.clear();
-    confirmController.clear();
-    clearSessionUndoHistory();
-    spbWallet?.close(flush: vaultDirty);
-    spbWallet = null;
-    if (isDesktopFilePlatform) activeDesktopVaultPath = null;
-    vaultDirty = false;
-    spbWalletPath = null;
-    spbWalletUri = null;
-    spbWalletDisplayPath = null;
-    if (widget.onExitRequested != null) {
-      await widget.onExitRequested!();
-    } else if (Platform.isAndroid || Platform.isIOS) {
-      await SystemNavigator.pop();
-    } else {
+    try {
+      lockedExitTimer?.cancel();
+      lockedExitTimer = null;
+      lockedExitCountdownTimer?.cancel();
+      lockedExitCountdownTimer = null;
+      purgeSessionTrashFromDatabase();
+      persistVaultState();
+      final saved = await writeBackSpbWallet(force: true);
+      if (!saved) {
+        showSpbOperationMessage(
+          'Программа не закрыта: не удалось сохранить изменения базы.',
+        );
+        return;
+      }
+      await clearClipboardSilently();
+      passwordController.clear();
+      confirmController.clear();
+      clearSessionUndoHistory();
+      spbWallet?.close(flush: false);
+      spbWallet = null;
+      if (isDesktopFilePlatform) activeDesktopVaultPath = null;
+      vaultDirty = false;
+      spbWritePending = false;
+      spbWalletPath = null;
+      spbWalletUri = null;
+      spbWalletDisplayPath = null;
+
+      if (widget.onExitRequested != null) {
+        await widget.onExitRequested!();
+        return;
+      }
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        await SystemNavigator.pop();
+        return;
+      }
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        // iOS does not allow an application to terminate itself. Dismiss the
+        // Flutter controller when the host permits it; otherwise leave no open
+        // vault/session visible after the completed save.
+        if (mounted) {
+          Navigator.of(
+            context,
+            rootNavigator: true,
+          ).popUntil((route) => route.isFirst);
+          setState(() {
+            unlocked = false;
+            entryMode = EntryMode.openSwl;
+            mobileTemplatesOpen = false;
+            iconLibraryOpen = false;
+            mobilePane = 0;
+            selectedItemId = null;
+            selectedItemIds.clear();
+            revealed.clear();
+          });
+        }
+        await SystemNavigator.pop(animated: true);
+        return;
+      }
       exit(0);
+    } catch (error) {
+      if (mounted) {
+        showSpbOperationMessage(
+          'Программа не закрыта: не удалось завершить сохранение базы: $error',
+        );
+      }
+    } finally {
+      // Desktop/Android normally terminate immediately. Resetting the guard is
+      // important for failed exits and for iOS hosts that keep the root view.
+      exitInProgress = false;
     }
   }
 
@@ -23741,14 +23787,24 @@ class _ManagedIconSelectionDialogState
                                       );
                                     }))),
                     Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                      SpbGradientActionButton(
+                      Opacity(
+                        opacity: selected == null ? 0.55 : 1,
+                        child: SpbGradientActionButton(
                           key: const Key('confirmIconSelection'),
                           icon: Icons.check,
                           tooltip: 'Выбрать',
-                          colors: const [Color(0xff5bc96d), Color(0xff08772f)],
-                          onTap: selected == null
-                              ? null
-                              : () => Navigator.pop(context, selected)),
+                          colors: const [
+                            Color(0xff5bc96d),
+                            Color(0xff08772f),
+                          ],
+                          onTap: () {
+                            final selectedIcon = selected;
+                            if (selectedIcon != null) {
+                              Navigator.pop(context, selectedIcon);
+                            }
+                          },
+                        ),
+                      ),
                       SpbGradientActionButton(
                           key: const Key('cancelIconSelection'),
                           icon: Icons.close,

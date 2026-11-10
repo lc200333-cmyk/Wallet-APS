@@ -898,6 +898,7 @@ extension _ModernWideShell on _VaultShellState {
     Widget? trailing,
     Key? key,
     Key? iconKey,
+    double titleFontSize = 16,
   }) {
     final t = skinTokens;
     return Material(
@@ -935,7 +936,7 @@ extension _ModernWideShell on _VaultShellState {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
-                            fontSize: 16,
+                            fontSize: titleFontSize,
                             fontWeight:
                                 selected ? FontWeight.w600 : FontWeight.w500,
                             color: selected ? t.onSelection : t.onSurface,

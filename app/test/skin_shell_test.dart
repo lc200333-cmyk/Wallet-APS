@@ -31,6 +31,7 @@ Future<dynamic> _pumpShell(
   AppSkin skin,
   _Layout layout, {
   TargetPlatform? platform,
+  Future<void> Function()? onExitRequested,
 }) async {
   debugDefaultTargetPlatformOverride = platform ?? layout.platform;
   appSkin.value = skin;
@@ -40,7 +41,9 @@ Future<dynamic> _pumpShell(
     tester.view.resetDevicePixelRatio();
     tester.view.resetPhysicalSize();
   });
-  await tester.pumpWidget(const WalletApsApp());
+  await tester.pumpWidget(
+    WalletApsApp(onExitRequested: onExitRequested),
+  );
   await tester.pumpAndSettle();
   final dynamic state = tester.state(find.byType(VaultShell));
   final CardTemplate template = (state.templates as List).first as CardTemplate;
@@ -96,6 +99,80 @@ List<String> _taskLabels(dynamic state) => [
     ];
 
 void main() {
+  for (final platform in [
+    TargetPlatform.windows,
+    TargetPlatform.android,
+    TargetPlatform.linux,
+    TargetPlatform.macOS,
+    TargetPlatform.iOS,
+  ]) {
+    for (final skin in [AppSkin.light, AppSkin.dark]) {
+      _skinTest(
+        '${platform.name} ${skin.name} narrow cards keep 0.7.21 layout with larger folder names',
+        (tester) async {
+          await _pumpShell(
+            tester,
+            skin,
+            _Layout.narrow,
+            platform: platform,
+          );
+
+          expect(find.byKey(const Key('modernCardsList')), findsOneWidget);
+          expect(find.byKey(const Key('modernCardsSplit')), findsNothing);
+          expect(find.byKey(const Key('modernCardsGridPane')), findsNothing);
+
+          final folder = find.byKey(
+            const ValueKey('spbCentralFolder-Finance'),
+          );
+          final folderName = tester.widget<Text>(
+            find.descendant(of: folder, matching: find.text('Finance')),
+          );
+          final cardName = tester.widget<Text>(
+            find.descendant(
+              of: find.byKey(const ValueKey('spbCentralCard-s-root')),
+              matching: find.text('Root card'),
+            ),
+          );
+          expect(folderName.style?.fontSize, 17);
+          expect(cardName.style?.fontSize, 16);
+          expect(tester.takeException(), isNull);
+        },
+      );
+    }
+  }
+  for (final platform in [
+    TargetPlatform.windows,
+    TargetPlatform.android,
+    TargetPlatform.linux,
+    TargetPlatform.macOS,
+    TargetPlatform.iOS,
+  ]) {
+    for (final skin in AppSkin.values) {
+      for (final layout in _Layout.values) {
+        _skinTest(
+          '${platform.name} ${skin.name} ${layout.name}: power button exits',
+          (tester) async {
+            var exitRequests = 0;
+            await _pumpShell(
+              tester,
+              skin,
+              layout,
+              platform: platform,
+              onExitRequested: () async => exitRequests++,
+            );
+
+            final button = find.byKey(const Key('spbForceCloseButton'));
+            expect(button, findsOneWidget);
+            await tester.tap(button);
+            await tester.pumpAndSettle();
+
+            expect(exitRequests, 1);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      }
+    }
+  }
   for (final skin in AppSkin.values) {
     for (final layout in _Layout.values) {
       _skinTest('${skin.name} ${layout.name}: central icon creation menus',

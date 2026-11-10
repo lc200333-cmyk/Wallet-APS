@@ -5056,6 +5056,90 @@ void main() {
     expect(find.text('Сохранить буфер обмена?'), findsNothing);
   });
 
+  testWidgets('power button saves and closes the database before exit',
+      (tester) async {
+    final directory = Directory.systemTemp.createTempSync('power_exit_');
+    final path = '${directory.path}${Platform.pathSeparator}wallet.swl';
+    final wallet = SpbWalletDatabase.create(path, '');
+    List<String>? persistedRecentIds;
+    addTearDown(() {
+      if (directory.existsSync()) directory.deleteSync(recursive: true);
+    });
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: VaultShell(
+          initiallyUnlocked: true,
+          onExitRequested: () async {
+            final reopened = SpbWalletDatabase.open(path, '');
+            try {
+              persistedRecentIds = reopened.loadRecentlyOpenedCardIds();
+            } finally {
+              reopened.close(flush: false);
+            }
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final dynamic state = tester.state(find.byType(VaultShell));
+    state.setState(() {
+      state.spbWallet = wallet;
+      state.spbWalletDisplayPath = path;
+      state.recentlyOpenedItemIds
+        ..clear()
+        ..add('saved-before-exit');
+      state.markVaultDirty();
+    });
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('spbForceCloseButton')));
+    await tester.pump();
+
+    expect(persistedRecentIds, contains('saved-before-exit'));
+    expect(state.spbWallet, isNull);
+    expect(state.spbWalletPath, isNull);
+    expect(state.vaultDirty, isFalse);
+    expect(state.spbWritePending, isFalse);
+  });
+
+  for (final platform in [TargetPlatform.android, TargetPlatform.iOS]) {
+    testWidgets('power button requests ${platform.name} system exit',
+        (tester) async {
+      debugDefaultTargetPlatformOverride = platform;
+      final calls = <MethodCall>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, (call) async {
+        calls.add(call);
+        return null;
+      });
+      try {
+        await tester.pumpWidget(
+          const MaterialApp(home: VaultShell(initiallyUnlocked: true)),
+        );
+        await tester.pumpAndSettle();
+        final dynamic state = tester.state(find.byType(VaultShell));
+
+        await tester.tap(find.byKey(const Key('spbForceCloseButton')));
+        await tester.pump();
+
+        final popCalls = calls
+            .where((call) => call.method == 'SystemNavigator.pop')
+            .toList();
+        expect(popCalls, hasLength(1));
+        expect(popCalls.single.arguments,
+            platform == TargetPlatform.iOS ? isTrue : isNull);
+        if (platform == TargetPlatform.iOS) {
+          expect(state.unlocked, isFalse);
+        }
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(SystemChannels.platform, null);
+      }
+    });
+  }
+
   testWidgets('exit preserves clipboard replaced by another application',
       (tester) async {
     String? clipboardText;
