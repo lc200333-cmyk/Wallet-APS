@@ -2225,6 +2225,17 @@ class ExistingVault {
   }
 }
 
+String? preferredNewCardTemplateId(
+  List<CardTemplate> templates,
+  String? lastCreatedTemplateId,
+) {
+  if (lastCreatedTemplateId != null &&
+      templates.any((template) => template.id == lastCreatedTemplateId)) {
+    return lastCreatedTemplateId;
+  }
+  return templates.firstOrNull?.id;
+}
+
 String _vaultTitleFromPath(String path) {
   if (path.startsWith('content://')) return 'База';
   final normalized = path.replaceAll('\\', '/');
@@ -4875,6 +4886,28 @@ String? normalizeNewVaultDirectorySelection(
 /// local working copy and the native side writes it back to the picked file.
 bool get usesDocumentProviderVaults => Platform.isAndroid || Platform.isIOS;
 
+/// Platforms that keep user-selected vaults behind a persistent native file
+/// reference and edit a local working copy. macOS needs this in addition to
+/// iOS/Android because sandbox access granted by the picker does not survive an
+/// application restart when only the plain path is stored.
+bool platformUsesPersistentVaultReferences(TargetPlatform platform) =>
+    platform == TargetPlatform.android ||
+    platform == TargetPlatform.iOS ||
+    platform == TargetPlatform.macOS;
+
+bool get usesPersistentVaultReferences =>
+    platformUsesPersistentVaultReferences(defaultTargetPlatform);
+
+bool shouldResumeAppleVaultUnlock(
+  TargetPlatform platform, {
+  required String? vaultUri,
+  required String password,
+}) =>
+    (platform == TargetPlatform.iOS || platform == TargetPlatform.macOS) &&
+    vaultUri != null &&
+    vaultUri.isNotEmpty &&
+    password.isNotEmpty;
+
 String get documentProviderStorageLabel =>
     Platform.isIOS ? 'Файлы iPhone' : 'Android-хранилище';
 
@@ -5258,6 +5291,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   IconCatalogKind selectedIconCatalog = IconCatalogKind.spb;
   String? selectedManagedIconId;
   String? selectedTemplateId;
+  String? lastCreatedCardTemplateId;
   final Set<String> selectedTemplateIds = {};
   String? selectedTemplateFolder;
   final Set<String> expandedTemplateFolders = {};
@@ -5769,7 +5803,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         }
         clearSessionUndoHistory();
         spbWallet?.close(flush: vaultDirty);
-        final opened = isDesktopFilePlatform
+        final directDesktopVault =
+            isDesktopFilePlatform && spbWalletUri == null;
+        final opened = directDesktopVault
             ? await openDesktopWalletWithRecovery(spbWalletPath!, password)
             : (
                 wallet: SpbWalletDatabase.open(spbWalletPath!, password),
@@ -5779,7 +5815,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         final snapshot = wallet.loadSnapshot();
         final integrityReport = wallet.inspectIntegrity();
         spbWallet = wallet;
-        if (isDesktopFilePlatform) activeDesktopVaultPath = spbWalletPath;
+        if (directDesktopVault) activeDesktopVaultPath = spbWalletPath;
         desktopWalletRecovered = opened.recovered;
         vaultDirty = false;
         spbIconIdByUiIcon.clear();
@@ -5795,7 +5831,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         passwordUnlockDebounce?.cancel();
         passwordController.clear();
         confirmController.clear();
-        if (!usesDocumentProviderVaults || spbWalletUri == null) {
+        if (!usesPersistentVaultReferences || spbWalletUri == null) {
           await rememberRecentVault(spbWalletPath!);
         }
         if (spbRecoveredWorkingCopy) {
@@ -5807,7 +5843,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             );
           }
         }
-        if (isDesktopFilePlatform) {
+        if (directDesktopVault) {
           final backedUp = await writeBackSpbWallet(force: true);
           if (desktopWalletRecovered && backedUp) {
             desktopWalletRecovered = false;
@@ -5872,6 +5908,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     spbWritePending = false;
     spbRecoveredWorkingCopy = false;
     desktopWalletRecovered = false;
+    lastCreatedCardTemplateId = null;
     passwordController.clear();
     confirmController.clear();
     revealed.clear();
@@ -5891,7 +5928,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   }
 
   Future<void> pickSpbWalletFile() async {
-    if (usesDocumentProviderVaults) {
+    if (usesPersistentVaultReferences) {
       try {
         final picked = await spbWalletChannel.invokeMapMethod<String, Object?>(
           'pickSpbWallet',
@@ -7056,7 +7093,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Future<void> chooseExistingVault(ExistingVault vault) async {
     try {
-      if (usesDocumentProviderVaults && vault.uri != null) {
+      if (usesPersistentVaultReferences && vault.uri != null) {
         final copied = await spbWalletChannel.invokeMapMethod<String, Object?>(
           'copySpbWallet',
           {'uri': vault.uri, 'displayName': vault.title},
@@ -7095,17 +7132,28 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           vaultNameController.text = vault.title;
         });
       }
+      if (shouldResumeAppleVaultUnlock(
+        defaultTargetPlatform,
+        vaultUri: vault.uri,
+        password: passwordController.text,
+      )) {
+        // The user can finish typing while the native side is restoring the
+        // security-scoped file reference. No text-change event follows that
+        // restore, so explicitly resume the pending automatic unlock before
+        // waiting for the recent-file list to be persisted.
+        scheduleAutomaticUnlock();
+      }
       await rememberRecentVaultEntry(
         ExistingVault(
           title: vaultNameController.text,
-          path: usesDocumentProviderVaults && spbWalletUri != null
+          path: usesPersistentVaultReferences && spbWalletUri != null
               ? null
               : spbWalletPath,
           uri: spbWalletUri,
           displayPath: spbWalletDisplayPath,
         ),
       );
-      if (usesDocumentProviderVaults && spbRecoveredWorkingCopy) {
+      if (usesPersistentVaultReferences && spbRecoveredWorkingCopy) {
         showSpbOperationMessage(
           'Исходный файл пуст или повреждён. Открыта последняя внутренняя резервная копия.',
         );
@@ -7165,7 +7213,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     try {
       spbWallet?.saveRecentlyOpenedCardIds(recentlyOpenedItemIds);
       spbWallet?.flushToDisk();
-      if (usesDocumentProviderVaults &&
+      if (usesPersistentVaultReferences &&
           spbWalletUri != null &&
           spbWalletPath != null) {
         if (!spbWalletWritable) {
@@ -7193,7 +7241,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           {'uri': spbWalletUri, 'localPath': androidWriteSnapshot.path},
         );
         if (written != true) {
-          throw StateError('Android не подтвердил запись файла.');
+          throw StateError('Система не подтвердила запись файла.');
         }
       } else if (isDesktopFilePlatform) {
         await createDesktopRecoveryCopy();
@@ -7214,13 +7262,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           androidWriteSnapshot!.deleteSync();
         }
       } on FileSystemException {
-        // The Android cache directory will eventually discard stale snapshots.
+        // The system cache directory will eventually discard stale snapshots.
       }
     }
   }
 
   bool ensureSpbWalletWritable() {
-    if (!usesDocumentProviderVaults ||
+    if (!usesPersistentVaultReferences ||
         spbWalletUri == null ||
         spbWalletWritable) {
       return true;
@@ -9615,6 +9663,32 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       defaultTargetPlatform == TargetPlatform.windows ||
       defaultTargetPlatform == TargetPlatform.linux;
 
+  bool get spbAppleWorkspaceSizing =>
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.macOS;
+
+  double get spbAppleTopScale => spbAppleWorkspaceSizing ? 1.25 : 1;
+
+  double get spbAppleTemplateBottomFontScale =>
+      spbAppleWorkspaceSizing ? 1.20 : 1;
+
+  TextStyle scaleSpbTextStyle(TextStyle style, double scale) =>
+      scale == 1 || style.fontSize == null
+          ? style
+          : style.copyWith(fontSize: style.fontSize! * scale);
+
+  StrutStyle scaleSpbStrutStyle(StrutStyle style, double scale) =>
+      scale == 1 || style.fontSize == null
+          ? style
+          : StrutStyle(
+              fontSize: style.fontSize! * scale,
+              height: style.height,
+              leading: style.leading,
+              fontWeight: style.fontWeight,
+              fontStyle: style.fontStyle,
+              forceStrutHeight: style.forceStrutHeight,
+            );
+
   TextStyle get spbTreeDesktopFolderStyle =>
       WorkspaceGeometry.desktopFolderStyle.copyWith(
           fontSize: WorkspaceGeometry.desktopFolderStyle.fontSize! * 1.15);
@@ -9645,6 +9719,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         forceStrutHeight: true,
       );
 
+  double get spbIconCatalogIconSize =>
+      spbEntryTreeIconSize * 1.2 * spbAppleTopScale;
+
+  TextStyle get spbIconCatalogLabelStyle =>
+      scaleSpbTextStyle(spbIconCatalogStyle, spbAppleTopScale);
+
+  StrutStyle get spbIconCatalogLabelStrut =>
+      scaleSpbStrutStyle(spbIconCatalogStrut, spbAppleTopScale);
+
   StrutStyle get spbTreeDesktopFolderStrut => StrutStyle(
         fontSize: spbTreeDesktopFolderStyle.fontSize,
         height: WorkspaceGeometry.desktopFolderStrut.height,
@@ -9660,6 +9743,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         height: spbEntryTreeStrut.height,
         forceStrutHeight: true,
       );
+
+  double get spbTemplateTreeIconSize => spbEntryTreeIconSize * spbAppleTopScale;
+
+  TextStyle get spbTemplateTreeLabelStyle =>
+      scaleSpbTextStyle(spbTemplateTreeStyle, spbAppleTopScale);
+
+  StrutStyle get spbTemplateTreeLabelStrut =>
+      scaleSpbStrutStyle(spbTemplateTreeStrut, spbAppleTopScale);
+
+  TextStyle get spbTemplateFolderLabelStyle =>
+      scaleSpbTextStyle(spbTreeFolderStyle, spbAppleTopScale);
+
+  StrutStyle get spbTemplateFolderLabelStrut =>
+      scaleSpbStrutStyle(spbTreeFolderStrut, spbAppleTopScale);
 
   double get spbEntryRowHeight => spbNarrowAndroid || spbWideAndroid
       ? WorkspaceGeometry.androidListRowHeight
@@ -9708,6 +9805,17 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       : spbWideAndroid
           ? WorkspaceGeometry.wideAndroidLabelHeight
           : WorkspaceGeometry.labelHeight;
+
+  double get spbTemplateGridIconSize => spbEntryGridIconSize * spbAppleTopScale;
+
+  double get spbTemplateGridCellSize => spbEntryGridHeight * spbAppleTopScale;
+
+  double get spbTemplateGridLabelHeight =>
+      spbEntryGridLabelHeight * spbAppleTemplateBottomFontScale;
+
+  SliverGridDelegate get spbTemplateGridDelegate => spbAppleWorkspaceSizing
+      ? WorkspaceGridDelegate(cell: spbTemplateGridCellSize)
+      : spbEntryGridDelegate;
 
   double spbEntryGridLabelWidth(double availableWidth) => spbNarrowAndroid
       ? max(1, availableWidth - 8)
@@ -10003,7 +10111,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool compactRows = false,
     ScrollController? scrollController,
   }) {
-    final iconSize = spbEntryTreeIconSize * 1.2;
+    final iconSize = spbIconCatalogIconSize;
+    final labelStyle = spbIconCatalogLabelStyle;
+    final labelStrut = spbIconCatalogLabelStrut;
+    final rowHeight = max(spbTreeFolderRowHeight * 1.25 * 1.2, iconSize);
     final tree = ListView(
       controller: scrollController,
       padding: const EdgeInsets.only(top: WorkspaceGeometry.treeTop, bottom: 8),
@@ -10043,21 +10154,21 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       : null,
                   child: ListTile(
                     dense: true,
-                    minTileHeight: spbTreeFolderRowHeight * 1.25 * 1.2,
+                    minTileHeight: rowHeight,
                     minLeadingWidth: iconSize,
                     horizontalTitleGap: 5,
                     contentPadding: const EdgeInsets.only(left: 25),
                     visualDensity: VisualDensity.standard,
                     leading: SizedBox(
                       width: iconSize,
-                      height: spbTreeFolderRowHeight * 1.25 * 1.2,
+                      height: rowHeight,
                       child: Center(
                           child: buildSpbIconCatalogIcon(kind, iconSize)),
                     ),
                     title: Text(
                       kind.label,
-                      style: spbIconCatalogStyle,
-                      strutStyle: spbIconCatalogStrut,
+                      style: labelStyle,
+                      strutStyle: labelStrut,
                       maxLines: 1,
                       softWrap: false,
                       overflow: TextOverflow.visible,
@@ -10067,8 +10178,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             dimension: 16,
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
-                        : Text('${managedIconIdsFor(kind).length}',
-                            style: WorkspaceGeometry.bodyStyle),
+                        : Text(
+                            '${managedIconIdsFor(kind).length}',
+                            style: scaleSpbTextStyle(
+                              WorkspaceGeometry.bodyStyle,
+                              spbAppleTopScale,
+                            ),
+                          ),
                     onTap: () => selectManagedIconCatalog(kind),
                   )),
             ),
@@ -10716,10 +10832,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool compactRows = false,
     ScrollController? scrollController,
   }) {
-    final rowHeight = spbEntryRowHeight * 1.2;
-    final iconSize = spbEntryTreeIconSize;
-    final labelStyle = spbTemplateTreeStyle;
-    final labelStrut = spbTemplateTreeStrut;
+    final iconSize = spbTemplateTreeIconSize;
+    final rowHeight = max(spbEntryRowHeight * 1.2, iconSize);
+    final labelStyle = spbTemplateTreeLabelStyle;
+    final labelStrut = spbTemplateTreeLabelStrut;
+    final folderStyle = spbTemplateFolderLabelStyle;
+    final folderStrut = spbTemplateFolderLabelStrut;
     final query = searchController.text.trim().toLowerCase();
     final tree = ListView(
       controller: scrollController,
@@ -10787,7 +10905,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       ],
                     ),
                     title: Text(folder,
-                        style: spbTreeFolderStyle,
+                        style: folderStyle,
+                        strutStyle: folderStrut,
                         maxLines: 1,
                         softWrap: false,
                         overflow: TextOverflow.visible),
@@ -11318,6 +11437,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool showHeader = true,
     bool showPersistentScrollbar = false,
   }) {
+    final gridIconSize = spbTemplateGridIconSize;
+    final gridCellSize = spbTemplateGridCellSize;
+    final gridLabelHeight = spbTemplateGridLabelHeight;
+    final gridLabelFontScale = spbAppleTemplateBottomFontScale;
     final query = searchController.text.trim().toLowerCase();
     final visible = templates
         .where(
@@ -11363,7 +11486,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     controller: spbTemplateGridScrollController,
                     padding: const EdgeInsets.only(
                         right: WorkspaceGeometry.treeScrollbar),
-                    gridDelegate: spbEntryGridDelegate,
+                    gridDelegate: spbTemplateGridDelegate,
                     itemCount: visible.length,
                     itemBuilder: (context, index) {
                       final template = visible[index];
@@ -11375,17 +11498,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                             builder: (context, constraints) =>
                                 buildSpbGridEntry(
                               label: template.displayName,
-                              labelWidth:
-                                  spbEntryGridLabelWidth(constraints.maxWidth),
-                              iconSize: spbEntryGridIconSize,
-                              entryHeight: spbEntryGridHeight,
-                              labelHeight: spbEntryGridLabelHeight,
+                              labelWidth: spbAppleWorkspaceSizing
+                                  ? max(1, constraints.maxWidth - 8)
+                                  : spbEntryGridLabelWidth(
+                                      constraints.maxWidth),
+                              iconSize: gridIconSize,
+                              entryHeight: gridCellSize,
+                              labelHeight: gridLabelHeight,
+                              labelFontScale: gridLabelFontScale,
                               narrowAndroidLabel: spbNarrowAndroid,
                               wideAndroidLabel: spbWideAndroid,
                               desktopCardLabel: spbDesktopLayout,
                               icon: spbSizedDataIcon(
                                 template.iconId,
-                                spbEntryGridIconSize,
+                                gridIconSize,
                                 fallbackColor: skinTokens.isRetro
                                     ? templateDisplayPictogramColor(template)
                                     : skinTileForTemplate(template).icon,
@@ -12826,6 +12952,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     bool wideAndroidLabel = false,
     bool desktopCardLabel = false,
     bool cardModeFrame = false,
+    double labelFontScale = 1,
   }) {
     final t = skinTokens;
     final modern = !t.isRetro;
@@ -12845,6 +12972,32 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         colors: [Color(0xffb9dcf5), Color(0xffedf7fe)],
       ),
     );
+    final baseLabelStrut = narrowAndroidLabel
+        ? WorkspaceGeometry.narrowCenterItemNameStrut
+        : wideAndroidLabel
+            ? WorkspaceGeometry.wideAndroidCenterItemNameStrut
+            : desktopCardLabel
+                ? WorkspaceGeometry.desktopCardNameStrut
+                : WorkspaceGeometry.itemNameStrut;
+    final baseLabelStyle = narrowAndroidLabel
+        ? (boldLabel
+            ? WorkspaceGeometry.narrowCenterFolderStyle
+            : WorkspaceGeometry.narrowCenterItemNameStyle)
+        : wideAndroidLabel
+            ? (boldLabel
+                ? WorkspaceGeometry.wideAndroidCenterFolderStyle
+                : WorkspaceGeometry.wideAndroidCenterItemNameStyle)
+            : (boldLabel
+                    ? WorkspaceGeometry.folderStyle
+                    : desktopCardLabel
+                        ? WorkspaceGeometry.desktopCardNameStyle
+                        : WorkspaceGeometry.itemNameStyle)
+                .copyWith(
+                color: modern ? (selected ? t.onSelection : t.onSurface) : null,
+                fontWeight: modern && selected ? FontWeight.w600 : null,
+              );
+    final labelStrut = scaleSpbStrutStyle(baseLabelStrut, labelFontScale);
+    final labelStyle = scaleSpbTextStyle(baseLabelStyle, labelFontScale);
     Widget interactiveRegion(Widget child) => GestureDetector(
           behavior: HitTestBehavior.opaque,
           onSecondaryTapDown: (details) => openSpbObjectContextMenu(
@@ -12939,37 +13092,8 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       textAlign: TextAlign.center,
                       textScaler:
                           stabilizeAndroidLabel ? TextScaler.noScaling : null,
-                      strutStyle: narrowAndroidLabel
-                          ? WorkspaceGeometry.narrowCenterItemNameStrut
-                          : wideAndroidLabel
-                              ? WorkspaceGeometry.wideAndroidCenterItemNameStrut
-                              : desktopCardLabel
-                                  ? WorkspaceGeometry.desktopCardNameStrut
-                                  : WorkspaceGeometry.itemNameStrut,
-                      style: narrowAndroidLabel
-                          ? (boldLabel
-                              ? WorkspaceGeometry.narrowCenterFolderStyle
-                              : WorkspaceGeometry.narrowCenterItemNameStyle)
-                          : wideAndroidLabel
-                              ? (boldLabel
-                                  ? WorkspaceGeometry
-                                      .wideAndroidCenterFolderStyle
-                                  : WorkspaceGeometry
-                                      .wideAndroidCenterItemNameStyle)
-                              : (boldLabel
-                                      ? WorkspaceGeometry.folderStyle
-                                      : desktopCardLabel
-                                          ? WorkspaceGeometry
-                                              .desktopCardNameStyle
-                                          : WorkspaceGeometry.itemNameStyle)
-                                  .copyWith(
-                                  color: modern
-                                      ? (selected ? t.onSelection : t.onSurface)
-                                      : null,
-                                  fontWeight: modern && selected
-                                      ? FontWeight.w600
-                                      : null,
-                                ),
+                      strutStyle: labelStrut,
+                      style: labelStyle,
                     ),
                   ),
                 ),
@@ -16886,6 +17010,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   defaultIconForCategoryPath(category),
           },
           initial: item,
+          initialTemplateId: item == null
+              ? preferredNewCardTemplateId(
+                  templates,
+                  lastCreatedCardTemplateId,
+                )
+              : null,
           initialCategory: initialCategory,
           supportsAttachments: spbWallet != null,
           loadAttachmentBytes: spbWallet == null
@@ -16902,9 +17032,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     if (saved == null) return null;
     final savedId = await persistItem(saved);
     if (savedId == null) return null;
-    final persisted = itemById(savedId) ?? saved;
+    var persisted = itemById(savedId) ?? saved;
     if (persisted.customFields.isNotEmpty && mounted && unlocked) {
-      return offerTemplateForCard(persisted);
+      persisted = await offerTemplateForCard(persisted);
+    }
+    if (item == null && templatesById.containsKey(persisted.templateId)) {
+      lastCreatedCardTemplateId = persisted.templateId;
     }
     return persisted;
   }
@@ -20115,6 +20248,7 @@ class ItemEditorDialog extends StatefulWidget {
     required this.categories,
     this.categoryIcons = const {},
     this.initial,
+    this.initialTemplateId,
     this.initialCategory,
     this.supportsAttachments = false,
     this.loadAttachmentBytes,
@@ -20125,6 +20259,7 @@ class ItemEditorDialog extends StatefulWidget {
   final List<String> categories;
   final Map<String, String> categoryIcons;
   final SecretItem? initial;
+  final String? initialTemplateId;
   final String? initialCategory;
   final bool supportsAttachments;
   final Future<List<int>> Function(String attachmentId)? loadAttachmentBytes;
@@ -20231,7 +20366,10 @@ class _ItemEditorDialogState extends State<ItemEditorDialog> {
     super.initState();
     editorOpenedAt = DateTime.now();
     customFields.addAll(widget.initial?.customFields ?? const []);
-    templateId = widget.initial?.templateId ?? widget.templates.first.id;
+    templateId = preferredNewCardTemplateId(
+      widget.templates,
+      widget.initial?.templateId ?? widget.initialTemplateId,
+    )!;
     colorId = widget.initial?.colorId ?? template.colorId;
     iconId = widget.initial?.iconId ?? template.iconId;
     title = TextEditingController(text: widget.initial?.title ?? '');
