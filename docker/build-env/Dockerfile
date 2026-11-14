@@ -2,6 +2,7 @@ FROM mirror.gcr.io/library/ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708
+ARG FLUTTER_VERSION=3.44.7
 
 ENV ANDROID_HOME=/opt/android-sdk \
     ANDROID_SDK_ROOT=/opt/android-sdk \
@@ -32,7 +33,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zip \
   && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch stable https://github.com/flutter/flutter.git "$FLUTTER_HOME" \
+RUN git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$FLUTTER_HOME" \
   && git config --global --add safe.directory "$FLUTTER_HOME" \
   && flutter config --no-analytics
 

@@ -118,6 +118,7 @@ assert.match(read('app/lib/app_version.dart'), /currentAppVersion = '\d+\.\d+\.\
 const dockerfile = read('docker/build-env/Dockerfile');
 [
   'FROM mirror.gcr.io/library/ubuntu:24.04',
+  'ARG FLUTTER_VERSION=3.44.7',
   'ANDROID_HOME=/opt/android-sdk',
   'FLUTTER_HOME=/opt/flutter',
   'libgtk-3-dev',
@@ -129,6 +130,7 @@ const dockerfile = read('docker/build-env/Dockerfile');
   'sdkmanager',
   'platforms;android-36',
   'ndk;28.2.13676358',
+  '--branch "$FLUTTER_VERSION"',
   'flutter precache --linux --android',
 ].forEach((needle) => assert.ok(dockerfile.includes(needle), `Dockerfile missing ${needle}`));
 
@@ -151,9 +153,11 @@ const compose = read('docker-compose.yml');
 const linuxDebDockerfile = read('docker/linux-deb/Dockerfile');
 [
   'FROM mirror.gcr.io/library/ubuntu:20.04',
+  'ARG FLUTTER_VERSION=3.44.7',
   'FLUTTER_HOME=/opt/flutter',
   'libgtk-3-dev',
   'libwebp-dev',
+  '--branch "$FLUTTER_VERSION"',
   'flutter precache --linux',
 ].forEach((needle) => assert.ok(linuxDebDockerfile.includes(needle), `Linux deb Dockerfile missing ${needle}`));
 

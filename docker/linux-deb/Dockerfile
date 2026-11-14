@@ -1,6 +1,7 @@
 FROM mirror.gcr.io/library/ubuntu:20.04
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG FLUTTER_VERSION=3.44.7
 
 ENV FLUTTER_HOME=/opt/flutter \
     PUB_CACHE=/root/.pub-cache \
@@ -26,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zip \
   && rm -rf /var/lib/apt/lists/*
 
-RUN git clone --depth 1 --branch stable https://github.com/flutter/flutter.git "$FLUTTER_HOME" \
+RUN git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$FLUTTER_HOME" \
   && git config --global --add safe.directory "$FLUTTER_HOME" \
   && flutter config --no-analytics \
   && flutter config --enable-linux-desktop \
