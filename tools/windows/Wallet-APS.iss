@@ -1,5 +1,5 @@
 #define MyAppName "Wallet APS"
-#define MyAppVersion "0.7.24"
+#define MyAppVersion "0.7.25"
 #define MyAppPublisher "Wallet APS"
 #define MyAppExeName "wallet_aps.exe"
 
