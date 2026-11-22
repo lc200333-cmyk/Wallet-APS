@@ -291,6 +291,7 @@ extension _ModernWideShell on _VaultShellState {
     required String label,
     required Widget leading,
     required bool selected,
+    Widget? trailing,
   }) {
     final t = skinTokens;
     return Padding(
@@ -321,6 +322,7 @@ extension _ModernWideShell on _VaultShellState {
                 ),
               ),
             ),
+            if (trailing != null) trailing,
           ],
         ),
       ),
@@ -899,6 +901,7 @@ extension _ModernWideShell on _VaultShellState {
     Key? key,
     Key? iconKey,
     double titleFontSize = 16,
+    double? minHeight,
   }) {
     final t = skinTokens;
     return Material(
@@ -919,7 +922,8 @@ extension _ModernWideShell on _VaultShellState {
             t.onSurface.withValues(alpha: 0.08),
           ),
           child: ConstrainedBox(
-            constraints: BoxConstraints(minHeight: subtitle == null ? 56 : 64),
+            constraints: BoxConstraints(
+                minHeight: minHeight ?? (subtitle == null ? 56 : 64)),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               child: Row(

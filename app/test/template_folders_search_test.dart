@@ -48,6 +48,73 @@ Future<dynamic> pumpShell(WidgetTester tester, TargetPlatform platform) async {
 
 void main() {
   for (final platform in [TargetPlatform.windows, TargetPlatform.android]) {
+    testWidgets('Retro template folder count position on ${platform.name}',
+        (tester) async {
+      final dynamic state = await pumpShell(tester, platform);
+      final templates = [
+        for (var i = 0; i < 12; i++)
+          fixture('template-$i', 'Template $i', category: 'Интернет'),
+        fixture(
+          'long-template',
+          List.filled(12, 'Long template name').join(' '),
+          category: 'Заметки',
+        ),
+      ];
+      state.setState(() {
+        state.templates = templates;
+        state.templatesById = {for (final t in templates) t.id: t};
+      });
+      await tester.tap(find.byKey(const Key('spbTemplatesModeButton')));
+      await tester.pumpAndSettle();
+
+      final row = find.byKey(const ValueKey('spbTemplateFolder-Интернет'));
+      if (platform == TargetPlatform.android) {
+        final scrollbar = find.byKey(const Key('spbTreeHorizontalScrollbar'));
+        final notes = find.byKey(const ValueKey('spbTemplateFolder-Заметки'));
+        void expectRightAligned() {
+          final countRight = tester
+              .getTopRight(
+                find.descendant(of: row, matching: find.text('12')),
+              )
+              .dx;
+          final notesCountRight = tester
+              .getTopRight(
+                find.descendant(of: notes, matching: find.text('1')),
+              )
+              .dx;
+          expect(countRight, closeTo(tester.getRect(scrollbar).right - 8, 0.1));
+          expect(notesCountRight, closeTo(countRight, 0.1));
+        }
+
+        expectRightAligned();
+        final ScrollController controller =
+            state.spbTreeHorizontalScrollController;
+        expect(controller.position.maxScrollExtent, greaterThan(100));
+        controller.jumpTo(100);
+        await tester.pumpAndSettle();
+        expectRightAligned();
+
+        await tester.binding.setSurfaceSize(const Size(320, 800));
+        await tester.pumpAndSettle();
+        expectRightAligned();
+        await tester.tap(notes);
+        await tester.pumpAndSettle();
+        expect(find.byKey(const ValueKey('spbTemplate-long-template')),
+            findsOneWidget);
+      } else {
+        expect(
+            tester
+                .widget<ListTile>(
+                  find.descendant(of: row, matching: find.byType(ListTile)),
+                )
+                .trailing,
+            isA<Text>());
+      }
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+      debugDefaultTargetPlatformOverride = null;
+    });
+
     testWidgets('Enter is substring, blue search is exact on ${platform.name}',
         (tester) async {
       final dynamic state = await pumpShell(tester, platform);

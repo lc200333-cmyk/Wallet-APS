@@ -28,12 +28,11 @@ abstract final class WorkspaceGeometry {
 
   static const windowWidth = 1280.0;
   static const windowHeight = 769.5;
-  static const navigatorWidth = 247.0;
-  static const actionsContentWidth = 225.0;
-  static const actionsScrollbar = 19.0;
+  // The opening split measured from the wide workspace reference.
+  static const defaultNavigatorFraction = 0.266;
+  static const defaultActionsFraction = 0.194;
   // Overlay thumb: section backgrounds extend to the window's right edge.
   static const actionsOverlayScrollbar = 4.0;
-  static const actionsWidth = actionsContentWidth + actionsScrollbar;
   static const divider = 4.0;
   static const headerHeight = 25.0;
   static const toolbarHeight = 26.0;

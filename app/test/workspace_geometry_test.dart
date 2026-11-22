@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' show ImageByteFormat;
 
@@ -165,7 +166,8 @@ void main() {
             ? WorkspaceGeometry.narrowActionIcon
             : WorkspaceGeometry.actionIcon;
         final navigator = find.byKey(const Key('spbVaultTitle'));
-        expect(tester.getSize(navigator), const Size(247, 25));
+        expect(tester.getSize(navigator).width, closeTo(338.352, 0.01));
+        expect(tester.getSize(navigator).height, 25);
         final search = find.byKey(const Key('spbSearchInput'));
         expect(tester.widget<TextField>(search).style?.fontSize,
             enlargedControls ? 16.5 : 15);
@@ -181,16 +183,16 @@ void main() {
           expect(tester.getTopRight(close).dx - tester.getTopLeft(submit).dx,
               closeTo(3 * 29.7 + 8, 0.01));
         }
-        for (final key in [
-          'spbMyCardsModeButton',
-          'spbTemplatesModeButton',
-          'spbIconsModeButton',
-        ]) {
-          final mode = find.byKey(Key(key));
+        for (final entry in {
+          'spbMyCardsModeButton': 'Мои записи',
+          'spbTemplatesModeButton': 'Шаблоны',
+          'spbIconsModeButton': 'Иконки',
+        }.entries) {
+          final mode = find.byKey(Key(entry.key));
           expect(tester.getSize(mode).height,
               closeTo(enlargedControls ? 35.2 : 32, 0.01));
           final label = tester.widget<Text>(
-              find.descendant(of: mode, matching: find.byType(Text)));
+              find.descendant(of: mode, matching: find.text(entry.value)));
           expect(label.style?.fontSize,
               closeTo(enlargedControls ? 15.4 : 14, 0.01));
         }
@@ -241,7 +243,7 @@ void main() {
           of: find.byKey(const Key('spbCentralWorkspace')),
           matching: find.byType(GridView),
         );
-        expect(tester.getSize(grid).width, 781);
+        expect(tester.getSize(grid).width, closeTo(686.88, 0.01));
         if (wideAndroid) {
           expect(tester.widget<GridView>(grid).gridDelegate,
               isA<WideAndroidGridDelegate>());
@@ -313,7 +315,7 @@ void main() {
         expect(gridFolderLabel.style?.fontSize, wideAndroid ? 18 : 14);
         expect(gridFolderLabel.style?.fontWeight, FontWeight.normal);
         final actions = find.byKey(const Key('spbActionsPanelScrollbar'));
-        expect(tester.getSize(actions).width, 244);
+        expect(tester.getSize(actions).width, closeTo(246.768, 0.01));
         expect(tester.widget<Scrollbar>(actions).thickness, 4);
         final taskHeader = find.byKey(const ValueKey('spbCollapseДействие'));
         expect(
@@ -434,26 +436,28 @@ void main() {
     }
   }
 
-  testWidgets('resize retains side widths and working splitters',
+  testWidgets('wide defaults scale and manual splitter widths persist',
       (tester) async {
     await pumpWorkspace(tester);
     tester.view.physicalSize = const Size(1500, 900);
     await tester.pumpAndSettle();
-    expect(tester.getSize(find.byKey(const Key('spbVaultTitle'))).width, 247);
-    expect(
-        tester.getSize(find.byKey(const Key('spbActionsPanelScrollbar'))).width,
-        244);
+    final navigator = find.byKey(const Key('spbVaultTitle'));
+    final actions = find.byKey(const Key('spbActionsPanelScrollbar'));
+    expect(tester.getSize(navigator).width, closeTo(396.872, 0.01));
+    expect(tester.getSize(actions).width, closeTo(289.448, 0.01));
     // Include Flutter's 20 px drag recognition threshold.
     await tester.drag(
         find.byKey(const Key('spbNavigatorSplitter')), const Offset(45, 0));
     await tester.pumpAndSettle();
-    expect(tester.getSize(find.byKey(const Key('spbVaultTitle'))).width, 272);
+    expect(tester.getSize(navigator).width, closeTo(421.872, 0.01));
     await tester.drag(
         find.byKey(const Key('spbActionsPanelSplitter')), const Offset(-40, 0));
     await tester.pumpAndSettle();
-    expect(
-        tester.getSize(find.byKey(const Key('spbActionsPanelScrollbar'))).width,
-        264);
+    expect(tester.getSize(actions).width, closeTo(309.448, 0.01));
+    tester.view.physicalSize = const Size(1700, 900);
+    await tester.pumpAndSettle();
+    expect(tester.getSize(navigator).width, closeTo(421.872, 0.01));
+    expect(tester.getSize(actions).width, closeTo(309.448, 0.01));
     expect(tester.takeException(), isNull);
     debugDefaultTargetPlatformOverride = null;
   });
@@ -461,6 +465,7 @@ void main() {
   testWidgets('nested tree scrolls complete names horizontally',
       (tester) async {
     final dynamic state = await pumpWorkspace(tester);
+    expect(find.byKey(const ValueKey('spbTreeFolderCount-A')), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('spbTreeFolderIconRow-A')));
     await tester.pumpAndSettle();
     await tester
@@ -477,6 +482,207 @@ void main() {
     horizontal.jumpTo(horizontal.position.maxScrollExtent);
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('wide Retro aligns the three section and folder counters',
+      (tester) async {
+    final previousLibrary = managedIconLibraryFuture;
+    managedIconLibraryFuture = Future<void>.value();
+    addTearDown(() => managedIconLibraryFuture = previousLibrary);
+    final dynamic state = await pumpWorkspace(tester);
+
+    Finder total(String section) =>
+        find.byKey(ValueKey('spbModeTotal-$section'));
+    final recordsTotal = tester.widget<Text>(total('records'));
+    expect(recordsTotal.data, '35');
+    expect(tester.widget<Text>(total('templates')).data,
+        '${(state.templates as List).length}');
+    expect(tester.widget<Text>(total('icons')).data,
+        '${allManagedIconIds().where((id) => !hiddenManagedIconIds.contains(id)).length}');
+
+    void expectAligned(Finder count) {
+      final panel = find.byKey(const Key('spbVaultTitle'));
+      expect(tester.getTopRight(count).dx,
+          closeTo(tester.getRect(panel).right - 24, 0.1));
+      expect(tester.widget<Text>(count).style, recordsTotal.style);
+    }
+
+    for (final section in ['records', 'templates', 'icons']) {
+      expectAligned(total(section));
+    }
+    final folderCount = find.byKey(const ValueKey('spbTreeFolderCount-A'));
+    expect(tester.widget<Text>(folderCount).data, '2');
+    expectAligned(folderCount);
+    await tester.drag(
+        find.byKey(const Key('spbNavigatorSplitter')), const Offset(-55, 0));
+    await tester.pumpAndSettle();
+    expectAligned(total('records'));
+    expectAligned(folderCount);
+
+    await tester.tap(find.byKey(const Key('spbTemplatesModeButton')));
+    await tester.pumpAndSettle();
+    final templates = find.byKey(const ValueKey('spbTemplateFolder-Интернет'));
+    expectAligned(find.descendant(
+      of: templates,
+      matching: find.byWidgetPredicate(
+        (widget) => widget is Text && int.tryParse(widget.data ?? '') != null,
+      ),
+    ));
+
+    await tester.tap(find.byKey(const Key('spbIconsModeButton')));
+    await tester.pumpAndSettle();
+    final catalog = find.byKey(const ValueKey('spbIconCatalog-pictograms'));
+    expectAligned(find.descendant(
+      of: catalog,
+      matching: find.byWidgetPredicate(
+        (widget) => widget is Text && int.tryParse(widget.data ?? '') != null,
+      ),
+    ));
+    expectAligned(total('icons'));
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('narrow Retro section headers show right-aligned library totals',
+      (tester) async {
+    final previousLibraryFuture = managedIconLibraryFuture;
+    final previousHiddenIds = hiddenManagedIconIds;
+    final library = Completer<void>();
+    managedIconLibraryFuture = library.future;
+    final allIcons = allManagedIconIds();
+    hiddenManagedIconIds = {allIcons.first};
+    addTearDown(() {
+      managedIconLibraryFuture = previousLibraryFuture;
+      hiddenManagedIconIds = previousHiddenIds;
+    });
+
+    final dynamic state = await pumpWorkspace(
+      tester,
+      platform: TargetPlatform.android,
+      size: const Size(360, 800),
+    );
+    state.setState(() {
+      state.categoryPaths = <String>{
+        ...state.categoryPaths as Set<String>,
+        'A / Extra / Deep',
+      };
+      state.templates =
+          (state.templates as List<CardTemplate>).take(3).toList();
+    });
+    await tester.pumpAndSettle();
+
+    void expectTotal(String section, String headerKey, String value) {
+      final count = find.byKey(ValueKey('spbModeTotal-$section'));
+      expect(tester.widget<Text>(count).data, value);
+      expect(
+        tester.getTopRight(count).dx,
+        closeTo(tester.getRect(find.byKey(Key(headerKey))).right - 7.5, 0.1),
+      );
+    }
+
+    expectTotal('icons', 'spbIconsModeButton', '…');
+    library.complete();
+    await tester.pumpAndSettle();
+
+    void expectTotals() {
+      expectTotal('records', 'spbMyCardsModeButton', '37');
+      expectTotal('templates', 'spbTemplatesModeButton', '3');
+      expectTotal('icons', 'spbIconsModeButton', '${allIcons.length - 1}');
+    }
+
+    expectTotals();
+    tester.view.physicalSize = const Size(320, 800);
+    await tester.pumpAndSettle();
+    expectTotals();
+    await tester.enterText(find.byKey(const Key('spbSearchInput')), 'no match');
+    await tester.pumpAndSettle();
+    expect(state.filteredItems(), isEmpty);
+    state.setState(() => state.mobilePane = 0);
+    await tester.pumpAndSettle();
+    expectTotals();
+    await tester.tap(find.byKey(const Key('spbIconsModeButton')));
+    await tester.pumpAndSettle();
+    final catalog = find.byKey(const ValueKey('spbIconCatalog-pictograms'));
+    final tile = tester.widget<ListTile>(
+      find.descendant(of: catalog, matching: find.byType(ListTile)),
+    );
+    final catalogCount = tile.trailing! as Text;
+    for (final section in ['records', 'templates', 'icons']) {
+      final headerCount =
+          tester.widget<Text>(find.byKey(ValueKey('spbModeTotal-$section')));
+      expect(catalogCount.style?.fontSize, headerCount.style?.fontSize);
+    }
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
+    debugDefaultTargetPlatformOverride = null;
+  });
+
+  testWidgets('narrow Retro aligns folder totals including descendant cards',
+      (tester) async {
+    final dynamic state = await pumpWorkspace(
+      tester,
+      platform: TargetPlatform.android,
+      size: const Size(360, 800),
+    );
+    final CardTemplate template = state.templates.first as CardTemplate;
+    SecretItem folderCard(String id, String category) => SecretItem(
+          id: id,
+          templateId: template.id,
+          title: id,
+          category: category,
+          colorId: template.colorId,
+          values: const {},
+          modifiedAt: DateTime(2026),
+        );
+    state.setState(() {
+      state.items = <SecretItem>[
+        ...state.items as List<SecretItem>,
+        folderCard('Direct card', 'A'),
+        folderCard('Deep card one', 'A / Nested / Deep'),
+        folderCard('Deep card two', 'A / Nested / Deep'),
+      ];
+      state.itemsById = {
+        for (final SecretItem item in state.items) item.id: item
+      };
+    });
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('spbTreeFolderIconRow-A')));
+    await tester.pumpAndSettle();
+
+    final viewport = find.byKey(const Key('spbTreeHorizontalScrollbar'));
+    void expectCount(String folder, String count) {
+      final counter = find.byKey(ValueKey('spbTreeFolderCount-$folder'));
+      expect(tester.widget<Text>(counter).data, count);
+      expect(tester.getTopRight(counter).dx,
+          closeTo(tester.getRect(viewport).right - 8, 0.1));
+    }
+
+    void expectCounts() {
+      expectCount('A', '5');
+      expectCount('A / Nested', '4');
+      expectCount('B', '0');
+    }
+
+    expectCounts();
+    final ScrollController horizontal = state.spbTreeHorizontalScrollController;
+    expect(horizontal.position.maxScrollExtent, greaterThan(100));
+    horizontal.jumpTo(100);
+    await tester.pumpAndSettle();
+    expectCounts();
+
+    tester.view.physicalSize = const Size(320, 800);
+    await tester.pumpAndSettle();
+    expectCounts();
+    await tester
+        .tap(find.byKey(const ValueKey('spbTreeFolderIconRow-A / Nested')));
+    await tester.pumpAndSettle();
+    expectCount('A / Nested / Deep', '2');
+    expect(find.byKey(const ValueKey('spbTreeCard-nested-geometry')),
+        findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
     debugDefaultTargetPlatformOverride = null;
   });
 

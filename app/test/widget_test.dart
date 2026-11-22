@@ -2839,27 +2839,13 @@ void main() {
         () => Future<void>.delayed(const Duration(milliseconds: 10)),
       );
       await tester.pump();
-      if (managedIconCatalogFor(customId) == IconCatalogKind.spb &&
-          manifestFile.existsSync()) {
-        try {
-          final saved = jsonDecode(manifestFile.readAsStringSync())
-              as Map<String, dynamic>;
-          if ((saved['locations'] as Map<String, dynamic>)[customId] ==
-              IconCatalogKind.spb.storageKey) {
-            break;
-          }
-        } on FormatException {
-          // Continue until the preceding write has completed.
-        }
-      }
+      // The target becomes selected after the catalog write completes.
+      if (state.selectedIconCatalog == IconCatalogKind.spb) break;
     }
     await tester.pumpAndSettle();
     expect(managedIconCatalogFor(customId), IconCatalogKind.spb);
-    final manifest = jsonDecode(
-      File(
-        '${stateDirectory.path}${Platform.pathSeparator}catalog.json',
-      ).readAsStringSync(),
-    ) as Map<String, dynamic>;
+    final manifest =
+        jsonDecode(manifestFile.readAsStringSync()) as Map<String, dynamic>;
     expect(
       (manifest['locations'] as Map<String, dynamic>)[customId],
       IconCatalogKind.spb.storageKey,
@@ -2989,7 +2975,7 @@ void main() {
 
     final mainMenuLabel = tester.widget<Text>(find.descendant(
       of: find.byKey(const Key('spbMyCardsModeButton')),
-      matching: find.byType(Text),
+      matching: find.text('Мои записи'),
     ));
     expect(mainMenuLabel.style?.fontSize, closeTo(15.4, 0.01));
     expect(mainMenuLabel.style?.fontWeight, FontWeight.bold);

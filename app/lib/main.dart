@@ -659,7 +659,7 @@ Map<String, IconCatalogKind> managedIconLocations = {};
 Set<String> hiddenManagedIconIds = {};
 Future<void>? managedIconLibraryFuture;
 Directory? managedIconCatalogStateDirectoryOverride;
-Future<void> _managedIconStateWriteQueue = Future<void>.value();
+Future<void> _managedIconStateQueue = Future<void>.value();
 
 Future<Directory> managedIconCatalogStateDirectory({
   bool create = false,
@@ -710,6 +710,54 @@ List<String> managedIconIdsFor(IconCatalogKind kind) => allManagedIconIds()
           managedIconCatalogFor(iconId) == kind,
     )
     .toList(growable: false);
+
+Future<int> readManagedIconTotal() async {
+  Future<Archive> readBundle(String asset) async {
+    final data = await rootBundle.load(asset);
+    return ZipDecoder().decodeBytes(
+      data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes),
+    );
+  }
+
+  Iterable<String> pngNames(Archive archive) => archive.files
+      .where((file) => file.isFile && file.name.toLowerCase().endsWith('.png'))
+      .map((file) => file.name.replaceAll('\\', '/'));
+
+  final bundled = await Future.wait([
+    readBundle(spbIconBundleAsset),
+    readBundle(brandIconBundleAsset),
+    readBundle(thirdPartyIconBundleAsset),
+  ]);
+  final spbFiles = pngNames(bundled[0]).map((name) => 'spb://$name').toSet();
+  final manifest = bundled[0].findFile('icons_64x64.txt');
+  final userIcons = await readUserThirdPartyIcons();
+  final ids = <String>{
+    ...spbPickerManifestIds(
+      manifest == null
+          ? ''
+          : utf8.decode(manifest.content, allowMalformed: true),
+      spbFiles.contains,
+    ),
+    ...templateIcons.map((entry) => entry.id),
+    ...pngNames(bundled[1]).map((name) => 'brand://$name'),
+    ...pngNames(bundled[2]).map((name) => 'third-party://$name'),
+    ...userIcons.keys,
+  };
+  return queueManagedIconStateOperation(() async {
+    try {
+      final file = await managedIconCatalogStateFile();
+      if (await file.exists()) {
+        final state = jsonDecode(await file.readAsString());
+        if (state is Map && state['hidden'] is List) {
+          ids.removeAll((state['hidden'] as List).map((id) => id.toString()));
+        }
+      }
+    } catch (_) {
+      // Optional catalog state does not affect access to the bundled icons.
+    }
+    return ids.length;
+  });
+}
 
 Future<void> loadManagedIconLibrary() {
   return managedIconLibraryFuture ??= () async {
@@ -778,16 +826,17 @@ Future<void> loadManagedIconLibrary() {
   }();
 }
 
-Future<void> saveManagedIconLibraryState() {
-  final operation = _managedIconStateWriteQueue.then(
-    (_) => _writeManagedIconLibraryState(),
-  );
-  _managedIconStateWriteQueue = operation.then<void>(
+Future<T> queueManagedIconStateOperation<T>(Future<T> Function() action) {
+  final operation = _managedIconStateQueue.then((_) => action());
+  _managedIconStateQueue = operation.then<void>(
     (_) {},
     onError: (Object _, StackTrace __) {},
   );
   return operation;
 }
+
+Future<void> saveManagedIconLibraryState() =>
+    queueManagedIconStateOperation(_writeManagedIconLibraryState);
 
 Future<void> _writeManagedIconLibraryState() async {
   final stateFile = await managedIconCatalogStateFile(create: true);
@@ -861,6 +910,18 @@ List<String> deduplicateSpbPickerIconIds(Iterable<String> iconIds) {
   return selectedByLogicalIcon.values.toList(growable: false);
 }
 
+List<String> spbPickerManifestIds(
+  String manifest,
+  bool Function(String) containsIcon,
+) =>
+    deduplicateSpbPickerIconIds(
+      manifest
+          .split(RegExp(r'\r?\n'))
+          .map((path) => normalizeSpbPackedIconId(path.trim()))
+          .where((path) =>
+              path.toLowerCase().endsWith('.png') && containsIcon(path)),
+    );
+
 Future<List<String>> loadSpb64PngIconAssets() {
   return spb64PngIconAssetsFuture ??= () async {
     final data = await rootBundle.load(spbIconBundleAsset);
@@ -881,17 +942,8 @@ Future<List<String>> loadSpb64PngIconAssets() {
       }
     }
     spbBundledIconPngs = packedIcons;
-    final manifest = pickerManifest ?? '';
-    spb64PngIconAssets = deduplicateSpbPickerIconIds(
-      manifest
-          .split(RegExp(r'\r?\n'))
-          .map((path) => normalizeSpbPackedIconId(path.trim()))
-          .where(
-            (path) =>
-                path.toLowerCase().endsWith('.png') &&
-                packedIcons.containsKey(path),
-          ),
-    );
+    spb64PngIconAssets =
+        spbPickerManifestIds(pickerManifest ?? '', packedIcons.containsKey);
     return spb64PngIconAssets;
   }();
 }
@@ -1184,53 +1236,58 @@ Future<List<String>> loadThirdPartyIconAssets() {
         file.content,
       );
     }
-    thirdPartyComparablePngs = {};
-    try {
-      final directory = await userThirdPartyIconDirectory();
-      if (await directory.exists()) {
-        final files = await directory
-            .list(followLinks: false)
-            .where((entry) =>
-                entry is File && entry.path.toLowerCase().endsWith('.png'))
-            .cast<File>()
-            .toList();
-        files.sort(
-          (a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()),
-        );
-        for (final file in files) {
-          try {
-            final normalized = comparableThirdPartyIconPng(
-              await file.readAsBytes(),
-            );
-            if (normalized == null) continue;
-            // Stored icons were checked against the bundled ones when they
-            // were added; normalizing the whole bundle here froze the first
-            // opening of "Иконки" for tens of seconds.
-            if (matchingThirdPartyIconIdIn(
-                  thirdPartyComparablePngs,
-                  thirdPartyComparablePngs,
-                  normalized,
-                ) !=
-                null) {
-              continue;
-            }
-            final name = fileNameFromPath(file.path);
-            final iconId = '$userThirdPartyIconPrefix$name';
-            packedIcons[iconId] = normalized;
-            thirdPartyComparablePngs[iconId] = normalized;
-          } catch (_) {
-            // An unreadable file must not hide the bundled icon catalog.
-          }
-        }
-      }
-    } catch (_) {
-      // The bundled catalog remains available if app storage is inaccessible.
-    }
+    thirdPartyComparablePngs = await readUserThirdPartyIcons();
+    packedIcons.addAll(thirdPartyComparablePngs);
     thirdPartyIconPngs = packedIcons;
     thirdPartyIconAssets = packedIcons.keys.toList(growable: false)
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
     return thirdPartyIconAssets;
   }();
+}
+
+Future<Map<String, Uint8List>> readUserThirdPartyIcons() async {
+  final icons = <String, Uint8List>{};
+  try {
+    final directory = await userThirdPartyIconDirectory();
+    if (await directory.exists()) {
+      final files = await directory
+          .list(followLinks: false)
+          .where((entry) =>
+              entry is File && entry.path.toLowerCase().endsWith('.png'))
+          .cast<File>()
+          .toList();
+      files.sort(
+        (a, b) => a.path.toLowerCase().compareTo(b.path.toLowerCase()),
+      );
+      for (final file in files) {
+        try {
+          final normalized = comparableThirdPartyIconPng(
+            await file.readAsBytes(),
+          );
+          if (normalized == null) continue;
+          // Stored icons were checked against the bundled ones when they
+          // were added; normalizing the whole bundle here froze the first
+          // opening of "Иконки" for tens of seconds.
+          if (matchingThirdPartyIconIdIn(
+                icons,
+                icons,
+                normalized,
+              ) !=
+              null) {
+            continue;
+          }
+          final name = fileNameFromPath(file.path);
+          final iconId = '$userThirdPartyIconPrefix$name';
+          icons[iconId] = normalized;
+        } catch (_) {
+          // An unreadable file must not hide the bundled icon catalog.
+        }
+      }
+    }
+  } catch (_) {
+    // The bundled catalog remains available if app storage is inaccessible.
+  }
+  return icons;
 }
 
 Future<List<String>> loadBrandIconAssets() {
@@ -2149,6 +2206,11 @@ class CategoryTreeNode {
   final List<SecretItem> cards = [];
 
   bool get isEmpty => children.isEmpty && cards.isEmpty;
+
+  int get subtreeCardCount => children.values.fold(
+        cards.length,
+        (total, child) => total + child.subtreeCardCount,
+      );
 }
 
 enum SessionTrashKind { card, folder, template }
@@ -5287,6 +5349,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   bool mobileTemplatesOpen = false;
   bool iconLibraryOpen = false;
   bool iconLibraryLoading = false;
+  Future<int>? spbIconTotalFuture;
+  Future<void>? spbIconTotalLibrary;
+  List<String>? spbIconTotalThirdPartyAssets;
   Object? iconLibraryLoadError;
   IconCatalogKind selectedIconCatalog = IconCatalogKind.spb;
   String? selectedManagedIconId;
@@ -8527,13 +8592,13 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             const minimumCenterWidth = 160.0;
             const minimumRightPanelWidth = 180.0;
             final splitterHitWidth = touchSplitters ? 24.0 : 9.0;
-            const defaultRightPanelWidth = WorkspaceGeometry.actionsWidth;
+            final availablePanelWidth =
+                constraints.maxWidth - rightDividerWidth * 2;
+            final defaultRightPanelWidth =
+                availablePanelWidth * WorkspaceGeometry.defaultActionsFraction;
             final maximumRightPanelWidth = max(
               minimumRightPanelWidth,
-              constraints.maxWidth -
-                  rightDividerWidth * 2 -
-                  minimumNavigatorWidth -
-                  minimumCenterWidth,
+              availablePanelWidth - minimumNavigatorWidth - minimumCenterWidth,
             );
             final rightPanelWidth =
                 (spbActionsPanelWidth ?? defaultRightPanelWidth)
@@ -8541,12 +8606,10 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     .toDouble();
             final maximumNavigatorWidth = max(
               minimumNavigatorWidth,
-              constraints.maxWidth -
-                  rightDividerWidth * 2 -
-                  rightPanelWidth -
-                  minimumCenterWidth,
+              availablePanelWidth - rightPanelWidth - minimumCenterWidth,
             );
-            const defaultNavigatorWidth = WorkspaceGeometry.navigatorWidth;
+            final defaultNavigatorWidth = availablePanelWidth *
+                WorkspaceGeometry.defaultNavigatorFraction;
             final navigatorWidth = (spbNavigatorWidth ?? defaultNavigatorWidth)
                 .clamp(minimumNavigatorWidth, maximumNavigatorWidth)
                 .toDouble();
@@ -8564,8 +8627,9 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                         children: [
                           SizedBox(
                             width: navigatorWidth,
-                            child:
-                                spbWorkspaceScrollbarTheme(buildSpbNavigator()),
+                            child: spbWorkspaceScrollbarTheme(
+                              buildSpbNavigator(navigatorWidth),
+                            ),
                           ),
                           VerticalDivider(
                             width: WorkspaceGeometry.divider,
@@ -8741,22 +8805,40 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             ),
             buildSpbSearchBar(mobile: true),
             if (mobilePane == 0) ...[
-              buildSpbMyCardsModeButton(selected: cardsModeOpen),
+              buildSpbMyCardsModeButton(
+                  selected: cardsModeOpen, totalRightPadding: 0),
               if (cardsModeOpen)
                 Expanded(
                   child: spbWorkspaceScrollbarTheme(
-                    buildSpbTreeBody(showWalletRoot: false),
+                    buildSpbTreeBody(
+                      showWalletRoot: false,
+                      showFolderCounts: skinTokens.isRetro,
+                    ),
                   ),
                 ),
-              buildSpbTemplatesModeButton(selected: mobileTemplatesOpen),
+              buildSpbTemplatesModeButton(
+                selected: mobileTemplatesOpen,
+                totalRightPadding: 0,
+              ),
               if (mobileTemplatesOpen)
                 Expanded(
-                  child: spbWorkspaceScrollbarTheme(buildSpbTemplateTree()),
+                  child: spbWorkspaceScrollbarTheme(
+                    buildSpbPinnedFolderTree(
+                      (width) =>
+                          buildSpbTemplateTree(fixedFolderRowWidth: width),
+                    ),
+                  ),
                 ),
-              buildSpbIconsModeButton(selected: iconLibraryOpen),
+              buildSpbIconsModeButton(
+                  selected: iconLibraryOpen, totalRightPadding: 0),
               if (iconLibraryOpen)
                 Expanded(
-                  child: spbWorkspaceScrollbarTheme(buildSpbIconCatalogTree()),
+                  child: spbWorkspaceScrollbarTheme(
+                    buildSpbPinnedFolderTree(
+                      (width) =>
+                          buildSpbIconCatalogTree(fixedFolderRowWidth: width),
+                    ),
+                  ),
                 ),
             ] else
               Expanded(
@@ -8912,10 +8994,15 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     }
   }
 
-  Widget buildSpbNavigator() {
+  Widget buildSpbNavigator(double width) {
     final modified = selectedVaultModifiedText;
     final cardsModeOpen = !mobileTemplatesOpen && !iconLibraryOpen;
     final t = skinTokens;
+    final rowWidth = max(0.0, width - WorkspaceGeometry.treeScrollbar);
+    // Mode headers already have a right inset. Tree rows use 8 dp
+    // plus the scrollbar gutter.
+    final totalRightPadding =
+        WorkspaceGeometry.treeScrollbar + 8 - (t.isRetro ? 7.5 : 16);
     return Material(
       color: t.isRetro ? Colors.white : t.nav,
       child: Column(
@@ -8955,10 +9042,20 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     ),
             ),
           ),
-          buildSpbMyCardsModeButton(selected: cardsModeOpen),
+          buildSpbMyCardsModeButton(
+            selected: cardsModeOpen,
+            totalRightPadding: totalRightPadding,
+          ),
           if (!cardsModeOpen)
-            buildSpbTemplatesModeButton(selected: mobileTemplatesOpen),
-          if (iconLibraryOpen) buildSpbIconsModeButton(selected: true),
+            buildSpbTemplatesModeButton(
+              selected: mobileTemplatesOpen,
+              totalRightPadding: totalRightPadding,
+            ),
+          if (iconLibraryOpen)
+            buildSpbIconsModeButton(
+              selected: true,
+              totalRightPadding: totalRightPadding,
+            ),
           Expanded(
             child: Scrollbar(
               key: const Key('spbNavigatorScrollbar'),
@@ -8969,16 +9066,19 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
               child: iconLibraryOpen
                   ? buildSpbIconCatalogTree(
                       compactRows: true,
+                      fixedFolderRowWidth: rowWidth,
                       scrollController: spbNavigatorScrollController,
                     )
                   : mobileTemplatesOpen
                       ? buildSpbTemplateTree(
                           compactRows: true,
+                          fixedFolderRowWidth: rowWidth,
                           scrollController: spbNavigatorScrollController,
                         )
                       : buildSpbTreeBody(
                           compactRows: true,
                           showWalletRoot: false,
+                          showFolderCounts: true,
                           scrollController: spbNavigatorScrollController,
                         ),
             ),
@@ -8986,17 +9086,56 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           if (!t.isRetro && (cardsModeOpen || mobileTemplatesOpen))
             Divider(height: 1, color: t.outline),
           if (cardsModeOpen) ...[
-            buildSpbTemplatesModeButton(selected: false),
-            buildSpbIconsModeButton(selected: false),
+            buildSpbTemplatesModeButton(
+              selected: false,
+              totalRightPadding: totalRightPadding,
+            ),
+            buildSpbIconsModeButton(
+              selected: false,
+              totalRightPadding: totalRightPadding,
+            ),
           ] else if (mobileTemplatesOpen)
-            buildSpbIconsModeButton(selected: false),
+            buildSpbIconsModeButton(
+              selected: false,
+              totalRightPadding: totalRightPadding,
+            ),
           if (!t.isRetro) const SizedBox(height: 6),
         ],
       ),
     );
   }
 
-  Widget buildSpbMyCardsModeButton({required bool selected}) =>
+  int get spbRecordTotal {
+    final folders = <String>{};
+    for (final category in existingCategories()) {
+      final parts = categoryParts(category);
+      for (var depth = 1; depth <= parts.length; depth++) {
+        folders.add(parts.take(depth).join(' / '));
+      }
+    }
+    return items.length + folders.length;
+  }
+
+  TextStyle get workspaceCountStyle => TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.normal,
+        color: skinTokens.isRetro ? null : skinTokens.onSurface,
+      );
+
+  Widget buildSpbModeTotal(String section, String value, double rightPadding) =>
+      Padding(
+        padding: EdgeInsets.only(left: 5, right: rightPadding),
+        child: Text(
+          value,
+          key: ValueKey('spbModeTotal-$section'),
+          style: workspaceCountStyle,
+        ),
+      );
+
+  Widget buildSpbMyCardsModeButton({
+    required bool selected,
+    double? totalRightPadding,
+  }) =>
       buildSpbModeButton(
         key: const Key('spbMyCardsModeButton'),
         label: 'Мои записи',
@@ -9004,9 +9143,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         selected: selected,
         onTap: showSpbCardsMode,
         opensRootCreationMenu: true,
+        trailing: totalRightPadding == null
+            ? null
+            : buildSpbModeTotal(
+                'records', '$spbRecordTotal', totalRightPadding),
       );
 
-  Widget buildSpbTemplatesModeButton({required bool selected}) =>
+  Widget buildSpbTemplatesModeButton({
+    required bool selected,
+    double? totalRightPadding,
+  }) =>
       buildSpbModeButton(
         key: const Key('spbTemplatesModeButton'),
         label: 'Шаблоны',
@@ -9014,16 +9160,56 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
         selected: selected,
         onTap: showSpbTemplatesMode,
         opensTemplateCreationMenu: true,
+        trailing: totalRightPadding == null
+            ? null
+            : buildSpbModeTotal(
+                'templates', '${templates.length}', totalRightPadding),
       );
 
-  Widget buildSpbIconsModeButton({required bool selected}) =>
+  Widget buildSpbIconsModeButton({
+    required bool selected,
+    double? totalRightPadding,
+  }) =>
       buildSpbModeButton(
         key: const Key('spbIconsModeButton'),
         label: 'Иконки',
         iconWidget: buildIconsModeImage(),
         selected: selected,
         onTap: showSpbIconsMode,
+        trailing: totalRightPadding == null
+            ? null
+            : buildSpbIconsModeTotal(totalRightPadding),
       );
+
+  Widget buildSpbIconsModeTotal(double rightPadding) {
+    final library = managedIconLibraryFuture;
+    if (spbIconTotalLibrary != library ||
+        (library == null &&
+            spbIconTotalThirdPartyAssets != thirdPartyIconAssets)) {
+      spbIconTotalLibrary = library;
+      spbIconTotalThirdPartyAssets = thirdPartyIconAssets;
+      spbIconTotalFuture = null;
+    }
+    // Read the total without populating the image caches used by other views.
+    return FutureBuilder<int>(
+      future: spbIconTotalFuture ??=
+          library == null ? readManagedIconTotal() : library.then((_) => 0),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return buildSpbModeTotal('icons', '…', rightPadding);
+        }
+        if (snapshot.hasError) {
+          return buildSpbModeTotal('icons', '—', rightPadding);
+        }
+        final count = library == null
+            ? snapshot.data!
+            : allManagedIconIds()
+                .where((id) => !hiddenManagedIconIds.contains(id))
+                .length;
+        return buildSpbModeTotal('icons', '$count', rightPadding);
+      },
+    );
+  }
 
   Widget buildIconsModeImage() {
     return FutureBuilder<Uint8List>(
@@ -9052,6 +9238,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     required VoidCallback onTap,
     bool opensRootCreationMenu = false,
     bool opensTemplateCreationMenu = false,
+    Widget? trailing,
   }) {
     final t = skinTokens;
     final leadingIcon = iconWidget ??
@@ -9067,9 +9254,11 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
             label: label,
             leading: leadingIcon,
             selected: selected,
+            trailing: trailing,
           )
         : WorkspaceSectionBar(
             label: label,
+            trailing: trailing,
             selected: selected,
             showBottomBorder: true,
             alwaysHighlighted: true,
@@ -9237,7 +9426,35 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     );
   }
 
-  Widget buildSpbTreeViewport(Widget tree) {
+  Widget pinSpbTreeHeader(Widget child) => Builder(
+        builder: (context) {
+          final position =
+              Scrollable.of(context, axis: Axis.horizontal).position;
+          return AnimatedBuilder(
+            animation: position,
+            child: child,
+            builder: (context, child) => Transform.translate(
+              offset: Offset(position.pixels, 0),
+              child: child,
+            ),
+          );
+        },
+      );
+
+  Widget pinSpbTreeRow(double? width, Widget row) => width == null
+      ? row
+      : Align(
+          alignment: Alignment.centerLeft,
+          child: pinSpbTreeHeader(SizedBox(width: width, child: row)),
+        );
+
+  Widget buildSpbPinnedFolderTree(Widget Function(double) buildTree) =>
+      LayoutBuilder(
+        builder: (context, constraints) => buildTree(
+            max(0.0, constraints.maxWidth - WorkspaceGeometry.treeScrollbar)),
+      );
+
+  Widget buildSpbTreeViewport(Widget Function(double overflow) buildTree) {
     final narrowAndroid = spbNarrowAndroid;
     final wideAndroid = spbWideAndroid;
     final desktopFolderLayout =
@@ -9356,7 +9573,12 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                     constraints.maxHeight -
                         WorkspaceGeometry.treeHorizontalScrollbar,
                   ),
-                  child: tree,
+                  child: buildTree(max(
+                    0,
+                    contentWidth -
+                        (constraints.maxWidth -
+                            WorkspaceGeometry.treeScrollbar),
+                  )),
                 ),
               ),
             ),
@@ -9369,6 +9591,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
   Widget buildSpbTreeBody({
     bool compactRows = false,
     bool showWalletRoot = true,
+    bool showFolderCounts = false,
     ScrollController? scrollController,
   }) {
     final query = searchController.text.trim();
@@ -9377,73 +9600,81 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       includeAllCategories: query.isEmpty,
       additionalPaths: query.isEmpty ? const [] : spbMatchingFolderPaths(query),
     );
-    final tree = ListView(
-      controller: scrollController,
-      padding:
-          const EdgeInsets.only(top: WorkspaceGeometry.treeTop, bottom: 12),
-      children: [
-        if (showWalletRoot)
-          Theme(
-            data: Theme.of(context).copyWith(
-              dividerColor: Colors.transparent,
-              splashColor: Colors.transparent,
-            ),
-            child: ExpansionTile(
-              initiallyExpanded: true,
-              onExpansionChanged: (expanded) => setState(() {
-                rootTreeExpanded = expanded;
-                if (expanded) {
-                  selectedCategoryPath = '';
-                  selectedCategoryId = null;
-                }
-              }),
-              minTileHeight: WorkspaceGeometry.rowHeight,
-              tilePadding: const EdgeInsets.only(left: 10),
-              childrenPadding: EdgeInsets.zero,
-              trailing: const SizedBox.shrink(),
-              leading: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  spbResourceIcon(
-                      'icon_wallets_small.png', WorkspaceGeometry.smallIcon)
-                ],
-              ),
-              title: buildSpbCategoryDropTarget(
-                categoryPath: '',
-                child: GestureDetector(
-                  key: const Key('spbWalletRoot'),
-                  onTap: () => openSpbFolder(''),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 5,
-                      vertical: 3,
-                    ),
-                    decoration: selectedCategoryPath.isEmpty
-                        ? const BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Color(0xffc9e5f8), Color(0xffeef8ff)],
-                            ),
-                          )
-                        : null,
-                    child: Text(
-                      selectedVaultTitle,
-                      style: const TextStyle(
-                        fontSize: WorkspaceGeometry.fontSize,
-                        fontWeight: FontWeight.normal,
-                        fontStyle: FontStyle.italic,
-                        decoration: TextDecoration.underline,
+    Widget tree(double overflow) => ListView(
+          controller: scrollController,
+          padding:
+              const EdgeInsets.only(top: WorkspaceGeometry.treeTop, bottom: 12),
+          children: [
+            if (showWalletRoot)
+              Theme(
+                data: Theme.of(context).copyWith(
+                  dividerColor: Colors.transparent,
+                  splashColor: Colors.transparent,
+                ),
+                child: ExpansionTile(
+                  initiallyExpanded: true,
+                  onExpansionChanged: (expanded) => setState(() {
+                    rootTreeExpanded = expanded;
+                    if (expanded) {
+                      selectedCategoryPath = '';
+                      selectedCategoryId = null;
+                    }
+                  }),
+                  minTileHeight: WorkspaceGeometry.rowHeight,
+                  tilePadding: const EdgeInsets.only(left: 10),
+                  childrenPadding: EdgeInsets.zero,
+                  trailing: const SizedBox.shrink(),
+                  leading: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      spbResourceIcon(
+                          'icon_wallets_small.png', WorkspaceGeometry.smallIcon)
+                    ],
+                  ),
+                  title: buildSpbCategoryDropTarget(
+                    categoryPath: '',
+                    child: GestureDetector(
+                      key: const Key('spbWalletRoot'),
+                      onTap: () => openSpbFolder(''),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 5,
+                          vertical: 3,
+                        ),
+                        decoration: selectedCategoryPath.isEmpty
+                            ? const BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xffc9e5f8),
+                                    Color(0xffeef8ff)
+                                  ],
+                                ),
+                              )
+                            : null,
+                        child: Text(
+                          selectedVaultTitle,
+                          style: const TextStyle(
+                            fontSize: WorkspaceGeometry.fontSize,
+                            fontWeight: FontWeight.normal,
+                            fontStyle: FontStyle.italic,
+                            decoration: TextDecoration.underline,
+                          ),
+                        ),
                       ),
                     ),
                   ),
+                  children: buildSpbTreeChildren(root, 0),
                 ),
               ),
-              children: buildSpbTreeChildren(root, 0),
-            ),
-          ),
-        if (!showWalletRoot)
-          ...buildSpbTreeChildren(root, 0, compactRows: compactRows),
-      ],
-    );
+            if (!showWalletRoot)
+              ...buildSpbTreeChildren(
+                root,
+                0,
+                compactRows: compactRows,
+                folderCountOverflow: showFolderCounts ? overflow : null,
+              ),
+          ],
+        );
     return buildSpbTreeViewport(tree);
   }
 
@@ -9451,6 +9682,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     CategoryTreeNode node,
     int depth, {
     bool compactRows = false,
+    double? folderCountOverflow,
   }) {
     final narrowAndroid = spbNarrowAndroid;
     final wideAndroid = spbWideAndroid;
@@ -9471,6 +9703,32 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final itemStyle = spbEntryTreeStyle;
     final itemStrut = spbEntryTreeStrut;
     final result = <Widget>[];
+    Widget folderLeading(Widget child) =>
+        folderCountOverflow == null ? child : pinSpbTreeHeader(child);
+
+    Widget folderTitle(CategoryTreeNode folder, Widget title) {
+      if (folderCountOverflow == null) return title;
+      return LayoutBuilder(
+        builder: (context, constraints) => pinSpbTreeHeader(Align(
+          alignment: Alignment.centerLeft,
+          child: SizedBox(
+            width: max(0, constraints.maxWidth - folderCountOverflow),
+            child: Row(
+              children: [
+                Expanded(child: title),
+                const SizedBox(width: 5),
+                Text(
+                  '${folder.subtreeCardCount + folder.children.length}',
+                  key: ValueKey('spbTreeFolderCount-${folder.path}'),
+                  style: workspaceCountStyle,
+                ),
+              ],
+            ),
+          ),
+        )),
+      );
+    }
+
     final folders = node.children.values.toList()
       ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     for (final folder in folders) {
@@ -9506,10 +9764,16 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                 },
                 visualDensity: VisualDensity.standard,
                 minTileHeight: folderRowHeight,
-                tilePadding: const EdgeInsets.only(left: 10, right: 2),
+                tilePadding: EdgeInsets.only(
+                  left: 10,
+                  right: folderCountOverflow == null ? 2 : 8,
+                ),
                 childrenPadding: EdgeInsets.zero,
-                trailing: const SizedBox.shrink(),
-                leading: SizedBox(
+                showTrailingIcon: folderCountOverflow == null,
+                trailing: folderCountOverflow == null
+                    ? const SizedBox.shrink()
+                    : null,
+                leading: folderLeading(SizedBox(
                   width: androidLayout
                       ? 38.75 + WorkspaceGeometry.androidListSmallIcon * 0.15
                       : desktopFolderLayout
@@ -9543,47 +9807,53 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                       ),
                     ],
                   ),
-                ),
-                title: buildSpbCategoryDropTarget(
-                  categoryPath: folder.path,
-                  child: buildSpbFolderDraggable(
-                    folder: folder,
-                    enabled: spbWideMultiSelectEnabled,
-                    child: GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onTap: () => openSpbFolder(folder.path),
-                      child: CustomPaint(
-                        key: ValueKey('spbTreeFolderHighlight-${folder.path}'),
-                        painter: selectedCategoryPath == folder.path
-                            ? SpbFolderHighlightPainter(
-                                folderRowHeight,
-                                modernColor: skinTokens.isRetro
-                                    ? null
-                                    : skinTokens.selection,
-                              )
-                            : null,
-                        child: Text(
-                          folder.name,
-                          maxLines: 1,
-                          softWrap: false,
-                          overflow: TextOverflow.visible,
-                          strutStyle: folderStrut,
-                          style: !skinTokens.isRetro &&
-                                  selectedCategoryPath == folder.path
-                              ? folderStyle.copyWith(
-                                  color: skinTokens.onSelection,
-                                  fontWeight: FontWeight.w600,
-                                )
-                              : folderStyle,
+                )),
+                title: folderTitle(
+                    folder,
+                    buildSpbCategoryDropTarget(
+                      categoryPath: folder.path,
+                      child: buildSpbFolderDraggable(
+                        folder: folder,
+                        enabled: spbWideMultiSelectEnabled,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.opaque,
+                          onTap: () => openSpbFolder(folder.path),
+                          child: CustomPaint(
+                            key: ValueKey(
+                                'spbTreeFolderHighlight-${folder.path}'),
+                            painter: selectedCategoryPath == folder.path
+                                ? SpbFolderHighlightPainter(
+                                    folderRowHeight,
+                                    modernColor: skinTokens.isRetro
+                                        ? null
+                                        : skinTokens.selection,
+                                  )
+                                : null,
+                            child: Text(
+                              folder.name,
+                              maxLines: 1,
+                              softWrap: false,
+                              overflow: folderCountOverflow == null
+                                  ? TextOverflow.visible
+                                  : TextOverflow.ellipsis,
+                              strutStyle: folderStrut,
+                              style: !skinTokens.isRetro &&
+                                      selectedCategoryPath == folder.path
+                                  ? folderStyle.copyWith(
+                                      color: skinTokens.onSelection,
+                                      fontWeight: FontWeight.w600,
+                                    )
+                                  : folderStyle,
+                            ),
+                          ),
                         ),
                       ),
-                    ),
-                  ),
-                ),
+                    )),
                 children: buildSpbTreeChildren(
                   folder,
                   depth + 1,
                   compactRows: compactRows,
+                  folderCountOverflow: folderCountOverflow,
                 ),
               ),
             ),
@@ -10109,6 +10379,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget buildSpbIconCatalogTree({
     bool compactRows = false,
+    double? fixedFolderRowWidth,
     ScrollController? scrollController,
   }) {
     final iconSize = spbIconCatalogIconSize;
@@ -10120,78 +10391,83 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
       padding: const EdgeInsets.only(top: WorkspaceGeometry.treeTop, bottom: 8),
       children: [
         for (final kind in IconCatalogKind.values)
-          DragTarget<ManagedIconDragData>(
-            key: ValueKey('spbIconCatalog-${kind.storageKey}'),
-            onWillAcceptWithDetails: (details) =>
-                managedIconCatalogFor(details.data.iconId) != kind,
-            onAcceptWithDetails: (details) =>
-                unawaited(moveManagedIconTo(details.data.iconId, kind)),
-            builder: (context, candidates, rejected) => Material(
-              color: skinTokens.isRetro
-                  ? (candidates.isNotEmpty
-                      ? const Color(0xffcce9cf)
-                      : selectedIconCatalog == kind
-                          ? const Color(0xffdbeaf5)
-                          : Colors.transparent)
-                  : candidates.isNotEmpty
-                      ? skinTokens.primary.withValues(alpha: 0.10)
-                      : selectedIconCatalog == kind
-                          ? skinTokens.selection
-                          : Colors.transparent,
-              shape: skinTokens.isRetro
-                  ? null
-                  : RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-              child: GestureDetector(
-                  onSecondaryTapDown: kind.isCustom
-                      ? (details) =>
-                          showIconFolderMenu(kind, details.globalPosition)
-                      : null,
-                  onLongPressStart: kind.isCustom
-                      ? (details) =>
-                          showIconFolderMenu(kind, details.globalPosition)
-                      : null,
-                  child: ListTile(
-                    dense: true,
-                    minTileHeight: rowHeight,
-                    minLeadingWidth: iconSize,
-                    horizontalTitleGap: 5,
-                    contentPadding: const EdgeInsets.only(left: 25),
-                    visualDensity: VisualDensity.standard,
-                    leading: SizedBox(
-                      width: iconSize,
-                      height: rowHeight,
-                      child: Center(
-                          child: buildSpbIconCatalogIcon(kind, iconSize)),
-                    ),
-                    title: Text(
-                      kind.label,
-                      style: labelStyle,
-                      strutStyle: labelStrut,
-                      maxLines: 1,
-                      softWrap: false,
-                      overflow: TextOverflow.visible,
-                    ),
-                    trailing: iconLibraryLoading
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : Text(
-                            '${managedIconIdsFor(kind).length}',
-                            style: scaleSpbTextStyle(
-                              WorkspaceGeometry.bodyStyle,
-                              spbAppleTopScale,
+          pinSpbTreeRow(
+            fixedFolderRowWidth,
+            DragTarget<ManagedIconDragData>(
+              key: ValueKey('spbIconCatalog-${kind.storageKey}'),
+              onWillAcceptWithDetails: (details) =>
+                  managedIconCatalogFor(details.data.iconId) != kind,
+              onAcceptWithDetails: (details) =>
+                  unawaited(moveManagedIconTo(details.data.iconId, kind)),
+              builder: (context, candidates, rejected) => Material(
+                color: skinTokens.isRetro
+                    ? (candidates.isNotEmpty
+                        ? const Color(0xffcce9cf)
+                        : selectedIconCatalog == kind
+                            ? const Color(0xffdbeaf5)
+                            : Colors.transparent)
+                    : candidates.isNotEmpty
+                        ? skinTokens.primary.withValues(alpha: 0.10)
+                        : selectedIconCatalog == kind
+                            ? skinTokens.selection
+                            : Colors.transparent,
+                shape: skinTokens.isRetro
+                    ? null
+                    : RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                child: GestureDetector(
+                    onSecondaryTapDown: kind.isCustom
+                        ? (details) =>
+                            showIconFolderMenu(kind, details.globalPosition)
+                        : null,
+                    onLongPressStart: kind.isCustom
+                        ? (details) =>
+                            showIconFolderMenu(kind, details.globalPosition)
+                        : null,
+                    child: ListTile(
+                      dense: true,
+                      minTileHeight: rowHeight,
+                      minLeadingWidth: iconSize,
+                      horizontalTitleGap: 5,
+                      contentPadding: EdgeInsets.only(
+                        left: 25,
+                        right: fixedFolderRowWidth == null ? 0 : 8,
+                      ),
+                      visualDensity: VisualDensity.standard,
+                      leading: SizedBox(
+                        width: iconSize,
+                        height: rowHeight,
+                        child: Center(
+                            child: buildSpbIconCatalogIcon(kind, iconSize)),
+                      ),
+                      title: Text(
+                        kind.label,
+                        style: labelStyle,
+                        strutStyle: labelStrut,
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: fixedFolderRowWidth == null
+                            ? TextOverflow.visible
+                            : TextOverflow.ellipsis,
+                      ),
+                      trailing: iconLibraryLoading
+                          ? const SizedBox.square(
+                              dimension: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : Text(
+                              '${managedIconIdsFor(kind).length}',
+                              style: workspaceCountStyle,
                             ),
-                          ),
-                    onTap: () => selectManagedIconCatalog(kind),
-                  )),
+                      onTap: () => selectManagedIconCatalog(kind),
+                    )),
+              ),
             ),
           ),
       ],
     );
-    return buildSpbTreeViewport(tree);
+    return buildSpbTreeViewport((_) => tree);
   }
 
   Widget buildSpbIconCatalogIcon(IconCatalogKind kind, double size) {
@@ -10830,6 +11106,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
 
   Widget buildSpbTemplateTree({
     bool compactRows = false,
+    double? fixedFolderRowWidth,
     ScrollController? scrollController,
   }) {
     final iconSize = spbTemplateTreeIconSize;
@@ -10839,6 +11116,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
     final folderStyle = spbTemplateFolderLabelStyle;
     final folderStrut = spbTemplateFolderLabelStrut;
     final query = searchController.text.trim().toLowerCase();
+
     final tree = ListView(
       controller: scrollController,
       padding:
@@ -10854,70 +11132,78 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
                   spbTemplateFolderFor(details.data) != folder,
               onAcceptWithDetails: (details) =>
                   unawaited(moveSpbTemplatesToFolder(details.data, folder)),
-              builder: (context, candidates, rejected) => Material(
-                color: candidates.isEmpty
-                    ? Colors.transparent
-                    : skinTokens.isRetro
-                        ? const Color(0xffcce9cf)
-                        : skinTokens.primary.withValues(alpha: 0.10),
-                child: GestureDetector(
-                  key: ValueKey('spbTemplateFolder-$folder'),
-                  onSecondaryTapDown: (details) =>
-                      showSpbTemplateFolderMenu(folder, details.globalPosition),
-                  onLongPressStart: (details) =>
-                      showSpbTemplateFolderMenu(folder, details.globalPosition),
-                  child: ListTile(
-                    dense: true,
-                    minTileHeight: rowHeight,
-                    minLeadingWidth: iconSize,
-                    horizontalTitleGap: 5,
-                    minVerticalPadding: 0,
-                    contentPadding: const EdgeInsets.only(left: 6, right: 8),
-                    selected: selectedTemplateFolder == folder,
-                    selectedTileColor: skinTokens.isRetro
-                        ? const Color(0xffcfe9fb)
-                        : skinTokens.selection,
-                    selectedColor:
-                        skinTokens.isRetro ? null : skinTokens.onSelection,
-                    leading: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        spbExpansionMark(
-                          query.isNotEmpty ||
-                              expandedTemplateFolders.contains(folder),
-                        ),
-                        const SizedBox(width: 6),
-                        spbSizedDataIcon(
-                          templateFolderSettings
-                                  .where((entry) =>
-                                      entry.name == folder && !entry.hidden)
-                                  .firstOrNull
-                                  ?.iconId ??
-                              defaultIconForCategoryPath(folder),
-                          iconSize,
-                          fallbackColor: categoryPictogramColor(
+              builder: (context, candidates, rejected) => pinSpbTreeRow(
+                  fixedFolderRowWidth,
+                  Material(
+                    color: candidates.isEmpty
+                        ? Colors.transparent
+                        : skinTokens.isRetro
+                            ? const Color(0xffcce9cf)
+                            : skinTokens.primary.withValues(alpha: 0.10),
+                    child: GestureDetector(
+                      key: ValueKey('spbTemplateFolder-$folder'),
+                      onSecondaryTapDown: (details) =>
+                          showSpbTemplateFolderMenu(
+                              folder, details.globalPosition),
+                      onLongPressStart: (details) => showSpbTemplateFolderMenu(
+                          folder, details.globalPosition),
+                      child: ListTile(
+                        dense: true,
+                        minTileHeight: rowHeight,
+                        minLeadingWidth: iconSize,
+                        horizontalTitleGap: 5,
+                        minVerticalPadding: 0,
+                        contentPadding:
+                            const EdgeInsets.only(left: 6, right: 8),
+                        selected: selectedTemplateFolder == folder,
+                        selectedTileColor: skinTokens.isRetro
+                            ? const Color(0xffcfe9fb)
+                            : skinTokens.selection,
+                        selectedColor:
+                            skinTokens.isRetro ? null : skinTokens.onSelection,
+                        leading: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            spbExpansionMark(
+                              query.isNotEmpty ||
+                                  expandedTemplateFolders.contains(folder),
+                            ),
+                            const SizedBox(width: 6),
+                            spbSizedDataIcon(
                               templateFolderSettings
-                                  .where((entry) =>
-                                      entry.name == folder && !entry.hidden)
-                                  .firstOrNull
-                                  ?.colorId),
+                                      .where((entry) =>
+                                          entry.name == folder && !entry.hidden)
+                                      .firstOrNull
+                                      ?.iconId ??
+                                  defaultIconForCategoryPath(folder),
+                              iconSize,
+                              fallbackColor: categoryPictogramColor(
+                                  templateFolderSettings
+                                      .where((entry) =>
+                                          entry.name == folder && !entry.hidden)
+                                      .firstOrNull
+                                      ?.colorId),
+                            ),
+                          ],
                         ),
-                      ],
+                        title: Text(
+                          folder,
+                          style: folderStyle,
+                          strutStyle: folderStrut,
+                          maxLines: 1,
+                          softWrap: false,
+                          overflow: fixedFolderRowWidth == null
+                              ? TextOverflow.visible
+                              : TextOverflow.ellipsis,
+                        ),
+                        trailing: Text(
+                          '${spbTemplatesInFolder(folder, query).length}',
+                          style: workspaceCountStyle,
+                        ),
+                        onTap: () => openSpbTemplateFolder(folder),
+                      ),
                     ),
-                    title: Text(folder,
-                        style: folderStyle,
-                        strutStyle: folderStrut,
-                        maxLines: 1,
-                        softWrap: false,
-                        overflow: TextOverflow.visible),
-                    trailing: Text(
-                      '${spbTemplatesInFolder(folder, query).length}',
-                      style: labelStyle,
-                    ),
-                    onTap: () => openSpbTemplateFolder(folder),
-                  ),
-                ),
-              ),
+                  )),
             ),
             if (query.isNotEmpty || expandedTemplateFolders.contains(folder))
               for (final template in spbTemplatesInFolder(folder, query))
@@ -10971,7 +11257,7 @@ class _VaultShellState extends State<VaultShell> with WidgetsBindingObserver {
           ],
       ],
     );
-    return buildSpbTreeViewport(tree);
+    return buildSpbTreeViewport((_) => tree);
   }
 
   String spbTemplateFolderFor(CardTemplate template) =>

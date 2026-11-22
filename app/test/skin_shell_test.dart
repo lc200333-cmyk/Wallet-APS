@@ -174,6 +174,60 @@ void main() {
     }
   }
   for (final skin in AppSkin.values) {
+    if (skin != AppSkin.retro) {
+      for (final layout in [_Layout.narrow, _Layout.wide]) {
+        _skinTest('${skin.name} ${layout.name}: section and folder counters',
+            (tester) async {
+          final previousLibrary = managedIconLibraryFuture;
+          managedIconLibraryFuture = Future<void>.value();
+          addTearDown(() {
+            managedIconLibraryFuture = previousLibrary;
+          });
+          final dynamic state = await _pumpShell(tester, skin, layout);
+
+          double? headerRight;
+          void expectCounter(Finder count, {String? value}) {
+            final text = tester.widget<Text>(count);
+            if (value != null) expect(text.data, value);
+            expect(text.style?.fontSize, 16);
+            if (!layout.isNarrow) {
+              headerRight ??= tester.getTopRight(count).dx;
+              expect(tester.getTopRight(count).dx, closeTo(headerRight!, 0.1));
+            }
+          }
+
+          Finder total(String name) =>
+              find.byKey(ValueKey('spbModeTotal-$name'));
+          Finder rowCounter(Finder row) => find.descendant(
+                of: row,
+                matching: find.byWidgetPredicate(
+                  (widget) =>
+                      widget is Text && int.tryParse(widget.data ?? '') != null,
+                ),
+              );
+
+          expectCounter(total('records'), value: '6');
+          expectCounter(
+            find.byKey(const ValueKey('spbTreeFolderCount-Finance')),
+            value: '3',
+          );
+          state.showSpbTemplatesMode();
+          await tester.pumpAndSettle();
+          expectCounter(total('templates'),
+              value: '${(state.templates as List).length}');
+          expectCounter(rowCounter(
+            find.byKey(const ValueKey('spbTemplateFolder-Интернет')),
+          ));
+          state.showSpbIconsMode();
+          await tester.pumpAndSettle();
+          expectCounter(total('icons'));
+          expectCounter(rowCounter(
+            find.byKey(const ValueKey('spbIconCatalog-pictograms')),
+          ));
+          expect(tester.takeException(), isNull);
+        });
+      }
+    }
     for (final layout in _Layout.values) {
       _skinTest('${skin.name} ${layout.name}: central icon creation menus',
           (tester) async {
@@ -782,6 +836,22 @@ void main() {
           ]) {
             expect(find.byKey(Key(key)), findsOneWidget, reason: key);
           }
+          expect(
+            tester.getSize(find.byKey(const Key('spbVaultTitle'))).width,
+            closeTo(338.352, 0.01),
+          );
+          expect(
+            tester
+                .getSize(find.byKey(const Key('spbCentralWorkspaceFocus')))
+                .width,
+            closeTo(686.88, 0.01),
+          );
+          expect(
+            tester
+                .getSize(find.byKey(const Key('spbActionsPanelScrollbar')))
+                .width,
+            closeTo(246.768, 0.01),
+          );
         }
         if (modernNarrow) {
           for (final key in [

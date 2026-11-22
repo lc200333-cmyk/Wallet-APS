@@ -568,7 +568,10 @@ extension _ModernMobileShell on _VaultShellState {
               padding: const EdgeInsets.only(top: 2),
               child: buildModernVaultStatus(small: true),
             ),
-            actions: buildModernHeaderButtons(dimension: 48),
+            actions: [
+              buildSpbModeTotal('records', '$spbRecordTotal', 8),
+              ...buildModernHeaderButtons(dimension: 48),
+            ],
           )
         : buildModernScreenHeader(
             height: 56,
@@ -625,7 +628,7 @@ extension _ModernMobileShell on _VaultShellState {
                 : _modernMobileFrequentToFoldersTopPadding,
             trailing: Text(
               '${folders.length} ${russianPlural(folders.length, 'папка', 'папки', 'папок')}',
-              style: TextStyle(fontSize: 12, color: t.onSurfaceVariant),
+              style: workspaceCountStyle,
             ),
           ))
           ..add(buildModernGroup([
@@ -638,7 +641,7 @@ extension _ModernMobileShell on _VaultShellState {
             'Карточки',
             trailing: Text(
               '${cards.length}',
-              style: TextStyle(fontSize: 12, color: t.onSurfaceVariant),
+              style: workspaceCountStyle,
             ),
           ))
           ..add(buildModernGroup([
@@ -837,14 +840,6 @@ extension _ModernMobileShell on _VaultShellState {
 
   Widget buildModernFolderRow(CategoryTreeNode folder) {
     final pair = skinTileForFolder(folder.colorId);
-    final folderCount = folder.children.length;
-    final cardCount = folder.cards.length;
-    final parts = [
-      if (folderCount > 0)
-        '$folderCount ${russianPlural(folderCount, 'папка', 'папки', 'папок')}',
-      if (cardCount > 0 || folderCount == 0)
-        '$cardCount ${russianPlural(cardCount, 'карточка', 'карточки', 'карточек')}',
-    ];
     return buildModernListRow(
       key: ValueKey('spbCentralFolder-${folder.path}'),
       leading: skinIconTile(
@@ -857,7 +852,12 @@ extension _ModernMobileShell on _VaultShellState {
       ),
       title: folder.name,
       titleFontSize: 17,
-      subtitle: parts.join(' · '),
+      minHeight: 64,
+      trailing: Text(
+        '${folder.subtreeCardCount + folder.children.length}',
+        key: ValueKey('spbTreeFolderCount-${folder.path}'),
+        style: workspaceCountStyle,
+      ),
       chevron: true,
       onTap: () => openSpbFolder(folder.path),
       onLongPressStart: (details) =>
@@ -959,7 +959,11 @@ extension _ModernMobileShell on _VaultShellState {
     );
   }
 
-  Widget buildModernTabHeader(String title, {required Key menuKey}) {
+  Widget buildModernTabHeader(
+    String title, {
+    required Key menuKey,
+    required Widget total,
+  }) {
     final t = skinTokens;
     return buildModernScreenHeader(
       title: Text(
@@ -971,6 +975,7 @@ extension _ModernMobileShell on _VaultShellState {
         ),
       ),
       actions: [
+        total,
         IconButton(
           key: menuKey,
           tooltip: 'Действие',
@@ -1015,8 +1020,11 @@ extension _ModernMobileShell on _VaultShellState {
         header: buildModernTabHeader(
           'Шаблоны',
           menuKey: const Key('modernTemplateTasksMenu'),
+          total: buildSpbModeTotal('templates', '${templates.length}', 8),
         ),
-        top: buildSpbTemplateTree(),
+        top: buildSpbPinnedFolderTree(
+          (width) => buildSpbTemplateTree(fixedFolderRowWidth: width),
+        ),
         bottom: buildSpbTemplateWorkspace(showPersistentScrollbar: true),
       );
 
@@ -1024,8 +1032,11 @@ extension _ModernMobileShell on _VaultShellState {
         header: buildModernTabHeader(
           'Иконки',
           menuKey: const Key('modernIconTasksMenu'),
+          total: buildSpbIconsModeTotal(8),
         ),
-        top: buildSpbIconCatalogTree(),
+        top: buildSpbPinnedFolderTree(
+          (width) => buildSpbIconCatalogTree(fixedFolderRowWidth: width),
+        ),
         bottom: buildSpbIconWorkspace(showPersistentScrollbar: true),
       );
 

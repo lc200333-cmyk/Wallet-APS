@@ -34,7 +34,13 @@ void main() {
       managedIconLocations = {};
       temp.deleteSync(recursive: true);
     });
+    final previousBrandIcons = brandIconPngs;
+    final previousThirdPartyIcons = thirdPartyIconPngs;
+    final previewTotal = await tester.runAsync(readManagedIconTotal);
+    expect(brandIconPngs, same(previousBrandIcons));
+    expect(thirdPartyIconPngs, same(previousThirdPartyIcons));
     await tester.runAsync(loadManagedIconLibrary);
+    expect(previewTotal, allManagedIconIds().length);
     final bytes =
         Uint8List.fromList(image.encodePng(image.Image(width: 16, height: 16)));
     final iconId = registerEmbeddedIcon(bytes);
